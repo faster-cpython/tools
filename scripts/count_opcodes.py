@@ -1,10 +1,17 @@
+import glob
 import opcode
 import os
 import sys
+import tarfile
 import tokenize
 from collections import Counter
 
-TOTAL = "__total__"  # Counter key for total count
+# Special (non-opcode) counter keys
+TOTAL = "__total__"  # Total count
+NFILES = "__nfiles__"  # Number of analyzed files
+NERRORS = "__nerrors__"  # Number of files with errors
+
+# TODO: Make this list an option
 OF_INTEREST_NAMES = ["BINARY_ADD", "BINARY_SUBTRACT",
                      "INPLACE_ADD", "INPLACE_SUBTRACT"]
 
@@ -27,48 +34,76 @@ def report(code, filename, counter):
             op = co_code[i]
             if op in of_interest:
                 counter[op] += 1
+                local[op] += 1
+    if local:
+        print(f"{filename}: {local}")
 
 
-def get_code(filename):
+def file_report(filename, counter):
     try:
         with open(filename, "rb") as f:
             source = f.read()
         code = compile(source, filename, "exec")
-        return code
+        report(code, filename, counter)
+        counter[NFILES] += 1
     except Exception as err:
         print(filename + ":", err, file=sys.stderr)
-        return None
+        counter[NERRORS] += 1
 
 
-def main(filename):
-    print("Looking for:", ", ".join(OF_INTEREST_NAMES))
-    counter = Counter()
-    nfiles = 0
-    nerrors = 0
-    if not os.path.isdir(filename):
-        code = get_code(filename)
-        if code is not None:
-            report(code, filename, counter)
-            nfiles += 1
+def tarball_report(filename, counter):
+    print("\nExamining tarball", filename)
+    with tarfile.open(filename, "r") as tar:
+        members = tar.getmembers()
+        for m in members:
+            info = m.get_info()
+            name = info["name"]
+            if name.endswith(".py"):
+                try:
+                    source = tar.extractfile(m).read()
+                    code = compile(source, name, "exec")
+                except Exception as err:
+                    print(f"{name}: {err}", file=sys.stderr)
+                    counter[NERRORS] += 1
+                else:
+                    counter[NFILES] += 1
+                    report(code, name, counter)
+
+
+def expand_globs(filenames):
+    for filename in filenames:
+        if "*" in filename and sys.platform == "win32":
+            for fn in glob.glob(filename):
+                yield fn
         else:
-            nerrors += 1
-    else:
-        for root, dirs, files in os.walk(filename):
-            for file in files:
-                if file.endswith(".py"):
-                    full = os.path.join(root, file)
-                    code = get_code(full)
-                    if code is not None:
-                        report(code, full, counter)
-                        nfiles += 1
-                    else:
-                        nerrors += 1
+            yield filename
 
+
+def main(filenames):
+    print("Looking for:", ", ".join(OF_INTEREST_NAMES))
+    print("In", filenames)
+    counter = Counter()
+    for filename in expand_globs(filenames):
+        if os.path.isfile(filename):
+            if filename.endswith(".tar.gz"):
+                tarball_report(filename, counter)
+            else:
+                file_report(filename, counter)
+        else:
+            for root, dirs, files in os.walk(filename):
+                for file in files:
+                    if file.endswith(".py"):
+                        full = os.path.join(root, file)
+                        file_report(full, counter)
+
+    nerrors = counter[NERRORS]
+    nfiles = counter[NFILES]
     if nerrors:
         print(f"Errors reading or compiling {nerrors} files")
     if nfiles:
-        print(f"Compiled {nfiles} files")
+        print(f"Analyzed {nfiles} files")
     else:
+        print("No files analyzed")
         return
     
     if not counter:
@@ -88,4 +123,4 @@ def main(filename):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1:])
