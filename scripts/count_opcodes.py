@@ -1,22 +1,23 @@
-# Count interesting opcodes in a collection of source code files
+# Count opcode statistics in a collection of source code files
 
 # TODO:
-# - Support counting special occurrences like
-#   LOAD_CONST <small int> followed by BINARY_ADD
-# - Command-line parsing
+# - Count cases like LOAD_CONST <small int>, BINARY_ADD
 
+import argparse
 import glob
 import opcode
 import os
 import sys
 import tarfile
-import tokenize
+import warnings
 from collections import Counter
 
 # Special (non-opcode) counter keys
-TOTAL = "__total__"  # Total count
-NFILES = "__nfiles__"  # Number of analyzed files
-NLINES = "__nlines__"  # Number of analyzed lines
+NOPCODES = "__nopcodes__"  # Number of opcodes
+NPAIRS = "__npairs__"  # Number of opcode pairs
+NFILES = "__nfiles__"  # Number of files
+NLINES = "__nlines__"  # Number of lines
+NCODEOBJS = "__ncodeobjs__"  # Number of code objects
 NERRORS = "__nerrors__"  # Number of files with errors
 
 # TODO: Make this list an option
@@ -34,44 +35,55 @@ def all_code_objects(code):
             yield x
 
 
-def report(source, filename):
+def showstats(counter):
+    return (f"{counter[NCODEOBJS]} code objects, " +
+            f"{counter[NLINES]} lines, {counter[NOPCODES]} opcodes, " +
+            f"{counter[NPAIRS]} opcode pairs")
+
+
+def report(source, filename, verbose):
     counter = Counter()
     try:
         code = compile(source, filename, "exec")
     except Exception as err:
-        printf(f"{filename}: {err}")
+        if verbose > 0:
+            print(f"{filename}: {err}")
         counter[NERRORS] += 1
         return counter
     for co in all_code_objects(code):
+        counter[NCODEOBJS] += 1
         co_code = co.co_code
         for i in range(0, len(co_code), 2):
-            counter[TOTAL] += 1
+            counter[NOPCODES] += 1
             op = co_code[i]
             counter[op] += 1
             if i > 0:
                 lastop = co_code[i-2]
+                counter[NPAIRS] += 1
                 counter[(lastop, op)] += 1
     counter[NFILES] += 1
     counter[NLINES] += len(source.splitlines())
-    if counter[TOTAL]:
-        print(f"{filename}: {counter[NLINES]} lines, {counter[TOTAL]} opcodes")
+    if verbose > 0:
+        print(f"{filename}: {showstats(counter)}")
     return counter
 
 
-def file_report(filename):
+def file_report(filename, verbose):
     try:
         with open(filename, "rb") as f:
             source = f.read()
-        counter = report(source, filename)
+        counter = report(source, filename, verbose)
     except Exception as err:
-        print(filename + ":", err)
+        if verbose > 0:
+            print(filename + ":", err)
         counter = Counter()
         counter[NERRORS] += 1
     return counter
 
 
-def tarball_report(filename):
-    print("\nExamining tarball", filename)
+def tarball_report(filename, verbose):
+    if verbose > 1:
+        print(f"\nExamining tarball {filename}")
     counter = Counter()
     with tarfile.open(filename, "r") as tar:
         members = tar.getmembers()
@@ -82,10 +94,13 @@ def tarball_report(filename):
                 try:
                     source = tar.extractfile(m).read()
                 except Exception as err:
-                    print(f"{name}: {err}")
+                    if verbose > 0:
+                        print(f"{name}: {err}")
                     counter[NERRORS] += 1
                 else:
-                    counter.update(report(source, name))
+                    counter.update(report(source, name, verbose-1))
+    if verbose > 0:
+        print(f"{filename}: {showstats(counter)}")
     return counter
 
 
@@ -98,62 +113,76 @@ def expand_globs(filenames):
             yield filename
 
 
-def main(filenames):
-    # print("Looking for:", ", ".join(OF_INTEREST_NAMES))
-    print("In", filenames)
+argparser = argparse.ArgumentParser()
+argparser.add_argument("-q", "--quiet", action="store_true",
+                       help="less verbose output")
+argparser.add_argument("-v", "--verbose", action="store_true",
+                       help="more verbose output")
+argparser.add_argument("filenames", nargs="*", metavar="FILE",
+                       help="files, directories or tarballs to count")
+
+
+def main():
+    args = argparser.parse_args()
+    filenames = args.filenames
+    verbose = 1 + args.verbose - args.quiet
+    if not filenames:
+        if verbose > 0:
+            print("No files!")
+        sys.exit(1)
+    if verbose < 2:
+        warnings.filterwarnings("ignore", "", SyntaxWarning)
+    if verbose >= 2:
+        print("Looking for", ", ".join(OF_INTEREST_NAMES))
+        print("In", filenames)
     counter = Counter()
     for filename in expand_globs(filenames):
         if os.path.isfile(filename):
             if filename.endswith(".tar.gz"):
-                ctr = tarball_report(filename)
+                ctr = tarball_report(filename, verbose)
             else:
-                ctr = file_report(filename)
+                ctr = file_report(filename, verbose)
             counter.update(ctr)
-        else:
+        elif os.path.isdir(filename):
             for root, dirs, files in os.walk(filename):
                 for file in files:
                     if file.endswith(".py"):
                         full = os.path.join(root, file)
-                        counter.update(file_report(full))
+                        counter.update(file_report(full, verbose))
+            if not counter[NFILES]:
+                print(f"{filename}: No .py files")
+        else:
+            print(f"{filename}: Cannot open")
+            counter[NERRORS] += 1
 
     nerrors = counter[NERRORS]
     nfiles = counter[NFILES]
-    if nerrors:
-        print(f"Errors reading or compiling {nerrors} files")
-    if nfiles:
-        print(f"Analyzed {nfiles} files")
-    else:
-        print("No files analyzed")
-        return
-    
-    if not counter:
-        print("No opcodes!")
-    elif TOTAL not in counter:
-        print("No total?!")
-    elif not counter[TOTAL]:
-        print("Zero total?!")
-    else:
-        total = counter[TOTAL]
-        print(f"Total opcodes: {total}; total lines: {counter[NLINES]}")
-        for name in OF_INTEREST_NAMES:
-            key = opcode.opmap[name]
-            if key in counter:
-                print(f"{opcode.opname[key]}: {counter[key]}",
-                      f"({100.0*counter[key]/total:.2f}%)")
-        pop_pairs = []
-        for key in counter:
-            match key:
-                case (lastop, nextop):
-                    count = counter[key]
-                    fraction = count/total
-                    pop_pairs.append((count, fraction, lastop, nextop))
-        pop_pairs.sort(key=lambda a: -a[0])
-        for count, fraction, lastop, nextop in pop_pairs[:10]:
-            lastname = opcode.opname[lastop]
-            nextname = opcode.opname[nextop]
-            print(f"{lastname} => {nextname}: {count}",
-                  f"({100.0*fraction:.2f}%)")
+    if not nfiles:
+        sys.exit(bool(nerrors))
+    nlines = counter[NLINES]
+    nopcodes = counter[NOPCODES]
+    npairs = counter[NPAIRS]
+    print(f"Total: {nerrors} errors, {nfiles} files, {showstats(counter)}")
+    for name in OF_INTEREST_NAMES:
+        key = opcode.opmap[name]
+        if key in counter:
+            print(f"{opcode.opname[key]}: {counter[key]}",
+                    f"({100.0*counter[key]/nopcodes:.2f}%)")
+    print()
+    pop_pairs = []
+    for key in counter:
+        match key:
+            case (lastop, nextop):
+                count = counter[key]
+                fraction = count/npairs
+                pop_pairs.append((count, fraction, lastop, nextop))
+    pop_pairs.sort(key=lambda a: -a[0])
+    for count, fraction, lastop, nextop in pop_pairs[:10]:
+        lastname = opcode.opname[lastop]
+        nextname = opcode.opname[nextop]
+        print(f"{lastname} => {nextname}: {count}",
+                f"({100.0*fraction:.2f}%)")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()
