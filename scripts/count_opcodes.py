@@ -35,10 +35,20 @@ def all_code_objects(code):
             yield x
 
 
+SHOW_ITEMS = [
+    (NERRORS, "errors"),
+    (NFILES, "files"),
+    (NCODEOBJS, "code objects"),
+    (NLINES, "lines"),
+    (NOPCODES, "opcodes"),
+    (NPAIRS, "opcode pairs"),
+]
 def showstats(counter):
-    return (f"{counter[NCODEOBJS]} code objects, " +
-            f"{counter[NLINES]} lines, {counter[NOPCODES]} opcodes, " +
-            f"{counter[NPAIRS]} opcode pairs")
+    res = []
+    for key, name in SHOW_ITEMS:
+        if key in counter:
+            res.append(f"{counter[key]:>1,} {name}")
+    return "; ".join(res)
 
 
 def report(source, filename, verbose):
@@ -50,6 +60,7 @@ def report(source, filename, verbose):
             print(f"{filename}: {err}")
         counter[NERRORS] += 1
         return counter
+
     for co in all_code_objects(code):
         counter[NCODEOBJS] += 1
         co_code = co.co_code
@@ -61,10 +72,11 @@ def report(source, filename, verbose):
                 lastop = co_code[i-2]
                 counter[NPAIRS] += 1
                 counter[(lastop, op)] += 1
-    counter[NFILES] += 1
+
     counter[NLINES] += len(source.splitlines())
     if verbose > 0:
         print(f"{filename}: {showstats(counter)}")
+    counter[NFILES] += 1
     return counter
 
 
@@ -134,9 +146,8 @@ def main():
 
     filenames = args.filenames
     if not filenames:
-        if verbose > 0:
-            print("No files!")
-        sys.exit(1)
+        argparser.print_usage()
+        sys.exit(0)
 
     if verbose < 2:
         warnings.filterwarnings("ignore", "", SyntaxWarning)
@@ -146,7 +157,9 @@ def main():
         print("In", filenames)
 
     counter = Counter()
+    hits = 0
     for filename in expand_globs(filenames):
+        hits += 1
         if os.path.isfile(filename):
             if filename.endswith(".tar.gz"):
                 ctr = tarball_report(filename, verbose)
@@ -164,6 +177,9 @@ def main():
         else:
             print(f"{filename}: Cannot open")
             counter[NERRORS] += 1
+    if not hits:
+        print("No files after expansion")
+        sys.exit(1)
 
     nerrors = counter[NERRORS]
     nfiles = counter[NFILES]
@@ -173,7 +189,7 @@ def main():
     nlines = counter[NLINES]
     nopcodes = counter[NOPCODES]
     npairs = counter[NPAIRS]
-    print(f"Total: {nerrors} errors, {nfiles} files, {showstats(counter)}")
+    print(f"Total: {showstats(counter)}")
 
     if args.singles:
         singles = []
@@ -187,7 +203,7 @@ def main():
         print(f"\nTop {args.singles} single opcodes:")
         for count, fraction, op in singles[:args.singles]:
             opname = opcode.opname[op]
-            print(f"{opname}: {count} ({100.0*fraction:.2f}%)")
+            print(f"{opname}: {count:>1,} ({100.0*fraction:.2f}%)")
 
     if args.pairs:
         pairs = []
@@ -202,7 +218,7 @@ def main():
         for count, fraction, lastop, nextop in pairs[:args.pairs]:
             lastname = opcode.opname[lastop]
             nextname = opcode.opname[nextop]
-            print(f"{lastname} => {nextname}: {count} ({100.0*fraction:.2f}%)")
+            print(f"{lastname} => {nextname}: {count:>1,} ({100.0*fraction:.2f}%)")
 
 
 if __name__ == "__main__":
