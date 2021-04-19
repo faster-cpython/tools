@@ -17,6 +17,7 @@ $ PYTHONPATH=$PYTHONPATH:<python_srcdir>/Tools/scripts \
 > open('/tmp/some_file', 'w').write(s)
 """
 
+import glob
 import json
 import opcode
 import operator
@@ -150,6 +151,9 @@ def _summarize(profile):
         },
         # XXX mean?
         # XXX distribution?
+        'top40': {
+            'pairs': sorted(pairs, key=lambda v: v[1], reverse=True)[:40],
+        },
         'top10': {
             'pairs': sorted(pairs, key=lambda v: v[1], reverse=True)[:10],
             'op1_pairs': sorted(((o[0], o[1][0]) for o in op1_pairs.items()),
@@ -219,6 +223,15 @@ def _render_profile(profile, *, fmt='summary', sort='count', flip=False):
         yield 'Top 10 op2:'
         for op, count in summary['top10']['op2_pairs']:
             yield f'  {op:20} {count:>3,}'
+    elif fmt == 'singles':
+        total = sum(count for _, _, count in common_instructions(profile))
+        for op, opname, count in common_instructions(profile):
+            print(f"{opname:20} {count:10,} {100*count/total:6.2f}%")
+    elif fmt == 'pairs':
+        summary = _summarize(profile)
+        for pair, count in summary['top40']['pairs']:
+            op1, op2 = pair
+            yield f'  {op1:20} --> {op2:20} {count:>10,}'
     elif fmt == 'flat':
         # XXX sort?
         for op1, op1profile in enumerate(profile):
@@ -259,7 +272,7 @@ def _render_profile(profile, *, fmt='summary', sort='count', flip=False):
 def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
     parser = argparse.ArgumentParser()
-    formats = ['summary', 'simple', 'flat', 'json', 'raw']
+    formats = ['summary', 'pairs', 'singles', 'simple', 'flat', 'json', 'raw']
     parser.add_argument('--format', dest='fmt', choices=formats,
                         default='summary')
     for fmt in formats:
@@ -276,10 +289,21 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return vars(args)
 
 
+def expand_globs(filenames):
+    for filename in filenames:
+        if "*" in filename and sys.platform == "win32":
+            for fn in glob.glob(filename):
+                yield fn
+        else:
+            yield filename
+
+
 def main(filename=None, **kwargs):
-    profile = load_profile(filename)
-    for line in _render_profile(profile, **kwargs):
-        print(line)
+    for filename in expand_globs([filename]):
+        print("\nProcessing ", filename)
+        profile = load_profile(filename)
+        for line in _render_profile(profile, **kwargs):
+            print(line)
 
 
 if __name__ == '__main__':
