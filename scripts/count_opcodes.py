@@ -2,6 +2,7 @@
 
 # TODO:
 # - Return a Counter from report(), add that to the global counter
+# - Count files and lines processed
 # - Support counting opcode pairs
 # - Support counting special occurrences like
 #   LOAD_CONST <small int> followed by BINARY_ADD
