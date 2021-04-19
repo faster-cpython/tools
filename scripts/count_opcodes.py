@@ -1,7 +1,6 @@
 # Count interesting opcodes in a collection of source code files
 
 # TODO:
-# - Support counting opcode pairs
 # - Support counting special occurrences like
 #   LOAD_CONST <small int> followed by BINARY_ADD
 # - Command-line parsing
@@ -22,8 +21,8 @@ NERRORS = "__nerrors__"  # Number of files with errors
 
 # TODO: Make this list an option
 OF_INTEREST_NAMES = [x for x in opcode.opname if not x.startswith("<")]
-# OF_INTEREST_NAMES = ["BINARY_ADD", "BINARY_SUBTRACT",
-#                      "INPLACE_ADD", "INPLACE_SUBTRACT"]
+OF_INTEREST_NAMES = ["BINARY_ADD", "BINARY_SUBTRACT",
+                     "INPLACE_ADD", "INPLACE_SUBTRACT"]
 
 of_interest = set(opcode.opmap[x] for x in OF_INTEREST_NAMES)
 
@@ -48,9 +47,10 @@ def report(source, filename):
         for i in range(0, len(co_code), 2):
             counter[TOTAL] += 1
             op = co_code[i]
-            if op in of_interest:
-                counter[op] += 1
-                counter[op] += 1
+            counter[op] += 1
+            if i > 0:
+                lastop = co_code[i-2]
+                counter[(lastop, op)] += 1
     counter[NFILES] += 1
     counter[NLINES] += len(source.splitlines())
     if counter[TOTAL]:
@@ -140,6 +140,19 @@ def main(filenames):
             if key in counter:
                 print(f"{opcode.opname[key]}: {counter[key]}",
                       f"({100.0*counter[key]/total:.2f}%)")
+        pop_pairs = []
+        for key in counter:
+            match key:
+                case (lastop, nextop):
+                    count = counter[key]
+                    fraction = count/total
+                    pop_pairs.append((count, fraction, lastop, nextop))
+        pop_pairs.sort(key=lambda a: -a[0])
+        for count, fraction, lastop, nextop in pop_pairs[:10]:
+            lastname = opcode.opname[lastop]
+            nextname = opcode.opname[nextop]
+            print(f"{lastname} => {nextname}: {count}",
+                  f"({100.0*fraction:.2f}%)")
 
 
 if __name__ == "__main__":
