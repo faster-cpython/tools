@@ -107,7 +107,7 @@ def run_bm(name):
     dxp = sys.getdxp()
     data = json.dumps(dxp)
     os.makedirs("data", exist_ok=True)
-    datafile = os.path.join("data", name[3:] + ".json")
+    datafile = os.path.join("data", name + ".json")
     with open(datafile, "w") as f:
         f.write(data + "\n")
     print("JSON data written to", datafile)
