@@ -118,23 +118,33 @@ argparser.add_argument("-q", "--quiet", action="store_true",
                        help="less verbose output")
 argparser.add_argument("-v", "--verbose", action="store_true",
                        help="more verbose output")
+argparser.add_argument("--singles", type=int,
+                      help="show N most common opcodes")
+argparser.add_argument("--pairs", type=int,
+                      help="show N most common opcode pairs")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
 
 def main():
     args = argparser.parse_args()
-    filenames = args.filenames
     verbose = 1 + args.verbose - args.quiet
+    if not args.pairs and not args.singles:
+        args.pairs = 20
+
+    filenames = args.filenames
     if not filenames:
         if verbose > 0:
             print("No files!")
         sys.exit(1)
+
     if verbose < 2:
         warnings.filterwarnings("ignore", "", SyntaxWarning)
+
     if verbose >= 2:
         print("Looking for", ", ".join(OF_INTEREST_NAMES))
         print("In", filenames)
+
     counter = Counter()
     for filename in expand_globs(filenames):
         if os.path.isfile(filename):
@@ -159,29 +169,40 @@ def main():
     nfiles = counter[NFILES]
     if not nfiles:
         sys.exit(bool(nerrors))
+
     nlines = counter[NLINES]
     nopcodes = counter[NOPCODES]
     npairs = counter[NPAIRS]
     print(f"Total: {nerrors} errors, {nfiles} files, {showstats(counter)}")
-    for name in OF_INTEREST_NAMES:
-        key = opcode.opmap[name]
-        if key in counter:
-            print(f"{opcode.opname[key]}: {counter[key]}",
-                    f"({100.0*counter[key]/nopcodes:.2f}%)")
-    print()
-    pop_pairs = []
-    for key in counter:
-        match key:
-            case (lastop, nextop):
-                count = counter[key]
-                fraction = count/npairs
-                pop_pairs.append((count, fraction, lastop, nextop))
-    pop_pairs.sort(key=lambda a: -a[0])
-    for count, fraction, lastop, nextop in pop_pairs[:10]:
-        lastname = opcode.opname[lastop]
-        nextname = opcode.opname[nextop]
-        print(f"{lastname} => {nextname}: {count}",
-                f"({100.0*fraction:.2f}%)")
+
+    if args.singles:
+        singles = []
+        for key in counter:
+            match key:
+                case int():
+                    count = counter[key]
+                    fraction = count / nopcodes
+                    singles.append((count, fraction, key))
+        singles.sort(key=lambda a: -a[0])
+        print(f"\nTop {args.singles} single opcodes:")
+        for count, fraction, op in singles[:args.singles]:
+            opname = opcode.opname[op]
+            print(f"{opname}: {count} ({100.0*fraction:.2f}%)")
+
+    if args.pairs:
+        pairs = []
+        for key in counter:
+            match key:
+                case (lastop, nextop):
+                    count = counter[key]
+                    fraction = count/npairs
+                    pairs.append((count, fraction, lastop, nextop))
+        pairs.sort(key=lambda a: -a[0])
+        print(f"\nTop {args.pairs} opcode pairs:")
+        for count, fraction, lastop, nextop in pairs[:args.pairs]:
+            lastname = opcode.opname[lastop]
+            nextname = opcode.opname[nextop]
+            print(f"{lastname} => {nextname}: {count} ({100.0*fraction:.2f}%)")
 
 
 if __name__ == "__main__":
