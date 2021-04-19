@@ -1,3 +1,12 @@
+# Count interesting opcodes in a collection of source code files
+
+# TODO:
+# - Return a Counter from report(), add that to the global counter
+# - Support counting opcode pairs
+# - Support counting special occurrences like
+#   LOAD_CONST <small int> followed by BINARY_ADD
+# - Command-line parsing
+
 import glob
 import opcode
 import os
