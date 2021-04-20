@@ -199,7 +199,7 @@ def main():
                     count = counter[key]
                     fraction = count / nopcodes
                     singles.append((count, fraction, key))
-        singles.sort(key=lambda a: -a[0])
+        singles.sort(reverse=True)
         print(f"\nTop {args.singles} single opcodes:")
         for count, fraction, op in singles[:args.singles]:
             opname = opcode.opname[op]
@@ -213,7 +213,7 @@ def main():
                     count = counter[key]
                     fraction = count/npairs
                     pairs.append((count, fraction, lastop, nextop))
-        pairs.sort(key=lambda a: -a[0])
+        pairs.sort(reverse=True)
         print(f"\nTop {args.pairs} opcode pairs:")
         for count, fraction, lastop, nextop in pairs[:args.pairs]:
             lastname = opcode.opname[lastop]
