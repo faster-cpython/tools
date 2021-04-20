@@ -126,7 +126,8 @@ def _common_pairs(profile):
 
 
 def _summarize(profile):
-    pairs = [(p, c) for _, p, c in _common_pairs(profile) if c > 0]
+    pairs = [(p, c) for _, p, c in _common_pairs(profile)
+                    if c > 0 and not p[0].startswith('<')]
 
     op1_pairs = {}
     op2_pairs = {}
@@ -153,6 +154,13 @@ def _summarize(profile):
         # XXX distribution?
         'top40': {
             'pairs': sorted(pairs, key=lambda v: v[1], reverse=True)[:40],
+            'singles': sorted(((o[0], o[1][1]) for o in op1_pairs.items()),
+                              key=lambda v: v[1], reverse=True)[:40],
+        },
+        'top20': {
+            'pairs': sorted(pairs, key=lambda v: v[1], reverse=True)[:20],
+            'singles': sorted(((o[0], o[1][1]) for o in op1_pairs.items()),
+                              key=lambda v: v[1], reverse=True)[:20],
         },
         'top10': {
             'pairs': sorted(pairs, key=lambda v: v[1], reverse=True)[:10],
@@ -225,13 +233,15 @@ def _render_profile(profile, *, fmt='summary', sort='count', flip=False):
             yield f'  {op:20} {count:>3,}'
     elif fmt == 'singles':
         total = sum(count for _, _, count in common_instructions(profile))
-        for op, opname, count in common_instructions(profile):
+        for op, opname, count in common_instructions(profile)[:20]:
             print(f"{opname:20} {count:10,} {100*count/total:6.2f}%")
     elif fmt == 'pairs':
         summary = _summarize(profile)
-        for pair, count in summary['top40']['pairs']:
+        total = summary['totals']['used']
+        for pair, count in summary['top20']['pairs']:
             op1, op2 = pair
-            yield f'  {op1:20} --> {op2:20} {count:>10,}'
+            fraction = count/total
+            yield f'  {op1:20} --> {op2:20} {count:>10,} {100*fraction:6.2f}%'
     elif fmt == 'flat':
         # XXX sort?
         for op1, op1profile in enumerate(profile):
