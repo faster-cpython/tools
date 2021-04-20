@@ -15,8 +15,8 @@ def main():
                     pass
                 case ["Processing", filename]:
                     count += 1  # Save 'filename'
-                case [prevop, "-->", nextop, _, percent]:
-                    key = prevop, nextop
+                case [lastop, "-->", nextop, _, percent]:
+                    key = lastop, nextop
                     fraction = float(percent.rstrip("%")) / 100
                     stats[key] += fraction
                 case _:
@@ -24,9 +24,9 @@ def main():
     table = [(stats[key] / count, key) for key in stats]
     table.sort(reverse=True)
     total = 0
-    for avg, (prevop, nextop) in table[:20]:
+    for avg, (lastop, nextop) in table[:20]:
         total += avg
-        print(f"{prevop:<20s} --> {nextop:<20s} {100*avg:6.2f}%")
+        print(f"{lastop:<20s} --> {nextop:<20s} {100*avg:6.2f}%")
     print(f"Total: {100*total:.2f}%")
 
 

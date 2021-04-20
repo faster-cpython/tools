@@ -203,7 +203,7 @@ def main():
         print(f"\nTop {args.singles} single opcodes:")
         for count, fraction, op in singles[:args.singles]:
             opname = opcode.opname[op]
-            print(f"{opname}: {count:>1,} ({100.0*fraction:.2f}%)")
+            print(f"{opname:<20s} {count:>10,} {100.0*fraction:6.2f}%")
 
     if args.pairs:
         pairs = []
@@ -218,7 +218,8 @@ def main():
         for count, fraction, lastop, nextop in pairs[:args.pairs]:
             lastname = opcode.opname[lastop]
             nextname = opcode.opname[nextop]
-            print(f"{lastname} => {nextname}: {count:>1,} ({100.0*fraction:.2f}%)")
+            print(f"{lastname:<20s} --> {nextname:<20s}",
+                  f"{count:>10,} {100.0*fraction:6.2f}%")
 
 
 if __name__ == "__main__":
