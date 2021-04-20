@@ -222,10 +222,6 @@ class PortalRequestFS(types.SimpleNamespace):
         return f'{self.data_root}/results-data.json.gz'
 
     @property
-    def results_data_orig(self):
-        return f'{self.data_root}/*.json.gz'
-
-    @property
     def results_log(self):
         return f'{self.data_root}/run.log'
 
@@ -506,12 +502,16 @@ def _build_compile_script(cfg, req):
         )
         exitcode=$?
 
+        results=$(2>/dev/null ls {bfiles.results_data})
+        results_name=$(basename $results)
+
         echo "saving results..."
         if [ $exitcode -eq 0 ]; then
             cat > {pfiles.results_meta} << EOF
         {{
             "reqid": "{req.id}",
-            "status": "success"
+            "status": "success",
+            "orig_data_file": "$results_name"
         }}
         EOF
         else
@@ -523,13 +523,12 @@ def _build_compile_script(cfg, req):
         EOF
         fi
 
-        orig=$(ls {bfiles.results_data})
-        results={pfiles.data_root}/$(basename $orig)
-        (
-        set -x
-        ln -s $orig $results
-        ln -s $results {pfiles.results_data}
-        )
+        if [ -e $results ]; then
+            (
+            set -x
+            ln -s $results {pfiles.results_data}
+            )
+        fi
         echo "...done!"
     '''[1:-1])
 
@@ -575,8 +574,6 @@ def _build_send_script(cfg, req):
         
         # Finish up.
         scp -p -P $port $conn:{pfiles.results_meta} $reqdir
-        scp -rp -P $port $conn:{bfiles.results_data} $reqdir
-        # XXX Copy the link instead of the file.
         scp -rp -P $port $conn:{pfiles.results_data} $reqdir
         scp -rp -P $port $conn:{pfiles.results_log} $reqdir
     '''[1:-1])
