@@ -256,20 +256,16 @@ class BenchRequestFS(types.SimpleNamespace):
     reqdir = data_root
 
     @property
-    def run_root(self):
-        return f'{self.data_root}/.run'
-
-    @property
     def venv(self):
-        return f'{self.run_root}/venv'
+        return f'{self.data_root}/pyperformance-venv'
 
     @property
     def scratch_dir(self):
-        return f'{self.run_root}/scratch'
+        return f'{self.data_root}/pyperformance-scratch'
 
     @property
     def results_dir(self):
-        return f'{self.run_root}/results'
+        return self.data_root
 
     @property
     def results_data(self):
