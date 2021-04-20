@@ -536,7 +536,7 @@ def _build_compile_script(cfg, req):
         results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
-        if [ $exitcode -eq 0 ]; then
+        if [ $exitcode -eq 0 -a -n "$results" ]; then
             cat > {pfiles.results_meta} << EOF
         {{
             "reqid": "{req.id}",
