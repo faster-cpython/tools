@@ -79,4 +79,29 @@ LOAD_CONST => CALL_FUNCTION_KW: 44,033 (1.07%)
 Dynamic stats
 -------------
 
-See [dxpstats.txt](./dxpstats.txt)
+For the full data, see [dxpstats.txt](./dxpstats.txt).
+The average of the percentages comes down to this:
+```
+LOAD_FAST            --> LOAD_FAST              6.25%
+LOAD_FAST            --> LOAD_ATTR              5.80%
+LOAD_CONST           --> DUP_TOP_TWO            5.58%
+POP_JUMP_IF_FALSE    --> JUMP_ABSOLUTE          5.35%
+LOAD_ATTR            --> BINARY_MULTIPLY        5.18%
+LOAD_CONST           --> BINARY_AND             4.98%
+LOAD_FAST            --> BINARY_MULTIPLY        4.81%
+BINARY_ADD           --> LOAD_CONST             4.68%
+STORE_FAST           --> LOAD_FAST              4.60%
+BINARY_AND           --> BINARY_SUBSCR          4.53%
+LOAD_CONST           --> BINARY_MULTIPLY        4.32%
+BINARY_MODULO        --> STORE_FAST             4.32%
+LOAD_FAST            --> BINARY_TRUE_DIVIDE     4.30%
+CALL_FUNCTION        --> BINARY_SUBSCR          4.30%
+BINARY_TRUE_DIVIDE   --> CALL_FUNCTION          4.30%
+BINARY_SUBSCR        --> BINARY_XOR             4.19%
+LOAD_FAST            --> BINARY_ADD             4.13%
+STORE_SUBSCR         --> JUMP_ABSOLUTE          4.06%
+LOAD_DEREF           --> LOAD_ATTR              4.02%
+LOAD_FAST            --> LOAD_CONST             3.96%
+```
+(But note that this is the average of the top-20 entries,
+which causes some unwanted rounding.)
