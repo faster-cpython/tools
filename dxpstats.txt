@@ -812,3 +812,25 @@ Processing  .\data\bm_xml_etree.json
   FOR_ITER             --> STORE_FAST            1,423,186   1.78%
   LOAD_METHOD          --> CALL_METHOD           1,416,577   1.77%
   POP_JUMP_IF_FALSE    --> LOAD_CONST            1,416,483   1.77%
+
+Processing  .\data\mypy.json
+  LOAD_FAST            --> LOAD_ATTR            70,462,411   6.59%
+  LOAD_GLOBAL          --> LOAD_FAST            57,535,645   5.39%
+  LOAD_FAST            --> LOAD_FAST            55,657,816   5.21%
+  LOAD_FAST            --> STORE_ATTR           38,708,027   3.62%
+  LOAD_GLOBAL          --> CALL_FUNCTION        36,128,749   3.38%
+  LOAD_FAST            --> LOAD_GLOBAL          33,777,746   3.16%
+  POP_JUMP_IF_FALSE    --> LOAD_GLOBAL          26,175,630   2.45%
+  POP_JUMP_IF_FALSE    --> LOAD_FAST            26,162,961   2.45%
+  STORE_FAST           --> LOAD_FAST            24,900,384   2.33%
+  LOAD_METHOD          --> LOAD_FAST            23,510,177   2.20%
+  LOAD_FAST            --> LOAD_METHOD          22,707,737   2.13%
+  LOAD_ATTR            --> LOAD_FAST            21,081,218   1.97%
+  LOAD_CONST           --> RETURN_VALUE         20,841,959   1.95%
+  LOAD_FAST            --> CALL_METHOD          20,479,517   1.92%
+  LOAD_FAST            --> LOAD_CONST           20,352,945   1.90%
+  CALL_FUNCTION        --> POP_JUMP_IF_FALSE    20,156,596   1.89%
+  STORE_ATTR           --> LOAD_FAST            19,752,762   1.85%
+  IS_OP                --> POP_JUMP_IF_FALSE    14,695,200   1.38%
+  STORE_ATTR           --> LOAD_CONST           14,674,471   1.37%
+  LOAD_FAST            --> CALL_FUNCTION        14,332,061   1.34%
