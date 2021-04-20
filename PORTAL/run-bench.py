@@ -178,7 +178,7 @@ STAGING = f'{REQUESTS}/CURRENT'
 
 
 def ensure_dirs():
-    for dirname in (DATA_ROOT, REQUESTS, STAGING):
+    for dirname in (DATA_ROOT, REQUESTS):
         os.makedirs(DATA_ROOT, exist_ok=True)
 
 
@@ -328,6 +328,25 @@ class StagedRequestError(Exception):
     pass
 
 
+class RequestAlreadyStagedError(StagedRequestError):
+
+    def __init__(self, reqid, curid):
+        super().__init__(f'could not stage {reqid} ({curid} already staged)')
+        self.reqid = reqid
+        self.curid = curid
+
+
+class RequestNotStagedError(StagedRequestError):
+
+    def __init__(self, reqid, curid=None):
+        msg = f'{reqid} is not currently staged'
+        if curid:
+            msg = f'{msg} ({curid} is)'
+        super().__init__(msg)
+        self.reqid = reqid
+        self.curid = curid
+
+
 class StagedRequestResolveError(Exception):
     def __init__(self, reqid, reqdir, reason, msg):
         super().__init__(f'{raeson} ({msg} - {reqdir})')
@@ -362,15 +381,15 @@ def stage_request(reqid):
     except FileExistsError:
         curid = _get_staged_request() or '???'
         # XXX Delete the existing one if bogus?
-        raise StagedRequestError(f'could not stage {reqid} ({curid} already staged)')
+        raise RequestAlreadyStagedError(reqid, curid)
 
 
 def unstage_request(reqid):
     curid = _get_staged_request()
     if not curid or not isinstance(curid, str):
-        raise StagedRequestError(f'{reqid} is not currently staged')
+        raise RequestStagedRequestError(reqid)
     elif curid != reqid:
-        raise StagedRequestError(f'{reqid} is not currently staged ({curid} is)')
+        raise RequestStagedRequestError(reqid, curid)
     os.unlink(STAGING)
 
 
@@ -558,8 +577,8 @@ def _build_send_script(cfg, req):
             >&2 echo "{req.id} was already sent"
             exit 1
         fi
-        #reqdir='{pfiles.reqdir}'
-        reqdir='{STAGING}'
+        #reqdir='{STAGING}'
+        reqdir='{pfiles.reqdir}'
 
         set -x
 
@@ -647,6 +666,9 @@ def send_bench_compile_request(remote, revision, branch=None, *,
     print('staging...')
     try:
         stage_request(reqid)
+    except RequestAlreadyStagedError as exc:
+        # XXX Offer to clear CURRENT?
+        sys.exit(f'ERROR: {exc}')
     except Exception:
         shutil.rmtree(pfiles.reqdir)
         raise  # re-raise
