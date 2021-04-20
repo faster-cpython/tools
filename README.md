@@ -79,4 +79,4 @@ LOAD_CONST => CALL_FUNCTION_KW: 44,033 (1.07%)
 Dynamic stats
 -------------
 
-Coming soon.
+See [dxpstats.txt](./dxpstats.txt)
