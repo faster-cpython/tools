@@ -219,8 +219,11 @@ class PortalRequestFS(types.SimpleNamespace):
 
     @property
     def results_data(self):
-        # XXX
-        return f'{self.data_root}/results-*.json.gz'
+        return f'{self.data_root}/results-data.json.gz'
+
+    @property
+    def results_data_orig(self):
+        return f'{self.data_root}/*.json.gz'
 
     @property
     def results_log(self):
@@ -248,12 +251,13 @@ class BenchRequestFS(types.SimpleNamespace):
         return f'{self.REPOS}/pyperformance'
 
     @property
-    def reqdir(self):
+    def data_root(self):
         return f'{REQUESTS}/{self.reqid}'
+    reqdir = data_root
 
     @property
     def run_root(self):
-        return f'{self.reqdir}/.run'
+        return f'{self.data_root}/.run'
 
     @property
     def venv(self):
@@ -266,6 +270,10 @@ class BenchRequestFS(types.SimpleNamespace):
     @property
     def results_dir(self):
         return f'{self.run_root}/results'
+
+    @property
+    def results_data(self):
+        return f'{self.results_dir}/*.json.gz'
 
 
 ##################################
@@ -518,7 +526,14 @@ def _build_compile_script(cfg, req):
         }}
         EOF
         fi
-        ( set -x; cp {bfiles.results_dir}/*.json.gz {pfiles.reqdir}; )
+
+        orig=$(ls {bfiles.results_data})
+        results={pfiles.data_root}/$(basename $orig)
+        (
+        set -x
+        ln -s $orig $results
+        ln -s $results {pfiles.results_data}
+        )
         echo "...done!"
     '''[1:-1])
 
@@ -564,6 +579,8 @@ def _build_send_script(cfg, req):
         
         # Finish up.
         scp -p -P $port $conn:{pfiles.results_meta} $reqdir
+        scp -rp -P $port $conn:{bfiles.results_data} $reqdir
+        # XXX Copy the link instead of the file.
         scp -rp -P $port $conn:{pfiles.results_data} $reqdir
         scp -rp -P $port $conn:{pfiles.results_log} $reqdir
     '''[1:-1])
