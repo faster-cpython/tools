@@ -504,6 +504,8 @@ def _build_compile_script(cfg, req):
         ( set -x
         2>/dev/null git remote add $remote {req.remote_url}
         git fetch --tags {remote};
+        # Get the upstream tags, just in case.
+        git fetch --tags origin;
         )
         branch="{branch}"
         if [ -n "$branch" ]; then
@@ -531,7 +533,7 @@ def _build_compile_script(cfg, req):
         exitcode=$?
 
         results=$(2>/dev/null ls {bfiles.results_data})
-        results_name=$(basename $results)
+        results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
         if [ $exitcode -eq 0 ]; then
