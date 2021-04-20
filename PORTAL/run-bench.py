@@ -172,7 +172,7 @@ def _read_file(filename):
 ##################################
 # files
 
-DATA_ROOT = os.path.expanduser(f'{HOME}/.bench')
+DATA_ROOT = os.path.expanduser(f'{HOME}/BENCH')
 REQUESTS = f'{DATA_ROOT}/REQUESTS'
 STAGING = f'{REQUESTS}/CURRENT'
 
@@ -346,7 +346,7 @@ def _get_staged_request():
     if not parse_req_id(reqid)[0]:
         return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not a request ID')
     if os.path.dirname(reqdir) != REQUESTS:
-        return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not in ~/.bench/REQUESTS/')
+        return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequsetResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
