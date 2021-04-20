@@ -12,6 +12,7 @@ bytecode frequencey and the like.
   Because gathering this data is pretty tedious,
   the repo contains the raw JSON data for many of the "pyperformance"
   benchmarks, gathered using `scripts/dxp_pyperformance.py`.
+  In addition, stats for a representative mypy run are also given.
 
 - Static statistics are easier to collect, since no execution of the
   code is required, and the runtime dependencies are not needed.
@@ -26,8 +27,9 @@ bytecode frequencey and the like.
 Popular stats
 =============
 
-Most common opcodes and pairs over 100 most popular PyPI packages
------------------------------------------------------------------
+Most common opcodes and pairs for 100 most popular PyPI packages
+----------------------------------------------------------------
+
 ```
 Total: 119 errors; 9,219 files; 67,289 code objects; 3,163,537 lines; 4,187,645 opcodes; 4,120,356 opcode pairs
 
@@ -76,8 +78,61 @@ STORE_FAST           --> LOAD_GLOBAL              44,870   1.09%
 LOAD_CONST           --> CALL_FUNCTION_KW         44,033   1.07%
 ```
 
-Dynamic stats
--------------
+Most common opcodes and pairs for mypy
+--------------------------------------
+
+This is useful for comparison, since mypy is a very different code base.
+
+```
+Total: 160 files; 1,396 code objects; 74,668 lines; 108,133 opcodes; 106,737 opcode pairs
+
+Top 20 single opcodes:
+LOAD_CONST               26,507  24.51%
+LOAD_FAST                11,412  10.55%
+STORE_NAME               11,359  10.50%
+LOAD_GLOBAL               5,589   5.17%
+MAKE_FUNCTION             5,162   4.77%
+CALL_FUNCTION             4,515   4.18%
+LOAD_ATTR                 4,431   4.10%
+IMPORT_FROM               3,955   3.66%
+STORE_FAST                3,294   3.05%
+POP_TOP                   3,122   2.89%
+EXTENDED_ARG              2,668   2.47%
+POP_JUMP_IF_FALSE         2,418   2.24%
+CALL_METHOD               2,379   2.20%
+LOAD_METHOD               2,374   2.20%
+RETURN_VALUE              2,351   2.17%
+LOAD_NAME                 2,098   1.94%
+IMPORT_NAME               1,368   1.27%
+BUILD_TUPLE                 917   0.85%
+BINARY_SUBSCR               874   0.81%
+LOAD_DEREF                  733   0.68%
+
+Top 20 opcode pairs:
+LOAD_CONST           --> LOAD_CONST               11,265  10.55%
+LOAD_CONST           --> MAKE_FUNCTION             5,162   4.84%
+STORE_NAME           --> LOAD_CONST                4,886   4.58%
+MAKE_FUNCTION        --> STORE_NAME                4,040   3.79%
+IMPORT_FROM          --> STORE_NAME                3,930   3.68%
+STORE_NAME           --> IMPORT_FROM               2,898   2.72%
+LOAD_FAST            --> LOAD_ATTR                 2,753   2.58%
+LOAD_GLOBAL          --> LOAD_FAST                 2,534   2.37%
+EXTENDED_ARG         --> LOAD_CONST                2,267   2.12%
+LOAD_FAST            --> LOAD_FAST                 1,683   1.58%
+STORE_FAST           --> LOAD_FAST                 1,426   1.34%
+LOAD_CONST           --> STORE_NAME                1,395   1.31%
+LOAD_CONST           --> IMPORT_NAME               1,368   1.28%
+POP_TOP              --> LOAD_CONST                1,203   1.13%
+LOAD_FAST            --> CALL_FUNCTION             1,097   1.03%
+POP_JUMP_IF_FALSE    --> LOAD_FAST                 1,074   1.01%
+LOAD_CONST           --> EXTENDED_ARG              1,061   0.99%
+IMPORT_NAME          --> IMPORT_FROM               1,054   0.99%
+LOAD_FAST            --> LOAD_CONST                1,045   0.98%
+LOAD_FAST            --> LOAD_METHOD               1,040   0.97%
+```
+
+Dynamic stats for pyperformance benchmarks
+------------------------------------------
 
 For the full data, see [dxpstats.txt](./dxpstats.txt).
 The average of the percentages there comes down to this:
