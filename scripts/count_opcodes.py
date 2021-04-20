@@ -11,6 +11,9 @@ import sys
 import tarfile
 import warnings
 from collections import Counter
+from importlib.util import MAGIC_NUMBER
+
+FOR_ITER = opcode.opmap["FOR_ITER"]
 
 # Special (non-opcode) counter keys
 NOPCODES = "__nopcodes__"  # Number of opcodes
@@ -51,7 +54,25 @@ def showstats(counter):
     return "; ".join(res)
 
 
-def report(source, filename, verbose):
+def find_loops(co):
+    loops = []
+    extra = 0
+    for i in range(0, len(co), 2):
+        op = co[i]
+        oparg = extra*256 + co[i+1]
+        if op == opcode.EXTENDED_ARG:
+            extra = oparg
+            continue
+        extra = 0
+        if op == FOR_ITER:
+            # Jumps used to count bytes, now they count opcodes
+            if MAGIC_NUMBER >= 3435:
+                oparg *= 2
+            loops.append(range(i, i + 2 + oparg))  # Count from *next* opcode
+    return loops
+
+
+def report(source, filename, verbose, bias):
     counter = Counter()
     try:
         code = compile(source, filename, "exec")
@@ -64,14 +85,17 @@ def report(source, filename, verbose):
     for co in all_code_objects(code):
         counter[NCODEOBJS] += 1
         co_code = co.co_code
+        loops = find_loops(co_code)
         for i in range(0, len(co_code), 2):
-            counter[NOPCODES] += 1
+            inloops = sum(i in loop for loop in loops)
+            count = 1 + bias*inloops  # Opcodes in loops are counted more
+            counter[NOPCODES] += count
             op = co_code[i]
-            counter[op] += 1
+            counter[op] += count
             if i > 0:
                 lastop = co_code[i-2]
-                counter[NPAIRS] += 1
-                counter[(lastop, op)] += 1
+                counter[NPAIRS] += count
+                counter[(lastop, op)] += count
 
     counter[NLINES] += len(source.splitlines())
     if verbose > 0:
@@ -80,11 +104,11 @@ def report(source, filename, verbose):
     return counter
 
 
-def file_report(filename, verbose):
+def file_report(filename, verbose, bias):
     try:
         with open(filename, "rb") as f:
             source = f.read()
-        counter = report(source, filename, verbose)
+        counter = report(source, filename, verbose, bias)
     except Exception as err:
         if verbose > 0:
             print(filename + ":", err)
@@ -93,7 +117,7 @@ def file_report(filename, verbose):
     return counter
 
 
-def tarball_report(filename, verbose):
+def tarball_report(filename, verbose, bias):
     if verbose > 1:
         print(f"\nExamining tarball {filename}")
     counter = Counter()
@@ -110,7 +134,7 @@ def tarball_report(filename, verbose):
                         print(f"{name}: {err}")
                     counter[NERRORS] += 1
                 else:
-                    counter.update(report(source, name, verbose-1))
+                    counter.update(report(source, name, verbose-1, bias))
     if verbose > 0:
         print(f"{filename}: {showstats(counter)}")
     return counter
@@ -134,6 +158,8 @@ argparser.add_argument("--singles", type=int,
                       help="show N most common opcodes")
 argparser.add_argument("--pairs", type=int,
                       help="show N most common opcode pairs")
+argparser.add_argument("--bias", type=int,
+                       help="Add bias for opcodes inside for-loops")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
@@ -141,6 +167,7 @@ argparser.add_argument("filenames", nargs="*", metavar="FILE",
 def main():
     args = argparser.parse_args()
     verbose = 1 + args.verbose - args.quiet
+    bias = args.bias or 0
     if not args.pairs and not args.singles:
         args.pairs = 20
 
@@ -162,16 +189,16 @@ def main():
         hits += 1
         if os.path.isfile(filename):
             if filename.endswith(".tar.gz"):
-                ctr = tarball_report(filename, verbose)
+                ctr = tarball_report(filename, verbose, bias)
             else:
-                ctr = file_report(filename, verbose)
+                ctr = file_report(filename, verbose, bias)
             counter.update(ctr)
         elif os.path.isdir(filename):
             for root, dirs, files in os.walk(filename):
                 for file in files:
                     if file.endswith(".py"):
                         full = os.path.join(root, file)
-                        counter.update(file_report(full, verbose))
+                        counter.update(file_report(full, verbose, bias))
             if not counter[NFILES]:
                 print(f"{filename}: No .py files")
         else:
