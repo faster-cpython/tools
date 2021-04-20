@@ -486,6 +486,10 @@ def _build_compile_script(cfg, req):
     pfiles = PortalRequestFS(req.id)
     bfiles = BenchRequestFS(req.id)
 
+    remote = req.remote_name or ""
+    revision = req.revision or ""
+    branch = req.branch or ""
+
     # On the bench host:
     python = 'python3.9'
     numjobs = 20
@@ -493,18 +497,24 @@ def _build_compile_script(cfg, req):
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
-        remote="{req.remote_name}"
-        branch="{req.branch or ""}"
-        revision="{req.revision or ""}"
+        # The commands in this script are deliberately explicit
+        # so you can copy-and-paste them selectively.
 
         pushd {bfiles.cpython}
-        ( set -x; 2>/dev/null git remote add $remote {req.remote_url}; )
-        ( set -x; git fetch --tags $remote; )
+        ( set -x
+        2>/dev/null git remote add $remote {req.remote_url}
+        git fetch --tags {remote};
+        )
+        branch="{branch}"
         if [ -n "$branch" ]; then
-            if ! ( set -x; git checkout -b $branch --track $remote/$branch; ); then
+            if ! ( set -x
+                git checkout -b {branch} --track {remote}/{branch}
+            ); then
                 echo "It already exists; resetting to the right target."
-                ( set -x; git checout $branch; )
-                ( set -x; git reset --hard $remote/$branch; )
+                ( set -x
+                git checout {branch}
+                git reset --hard {remote}/{branch}
+                )
             fi
         fi
         popd
@@ -514,10 +524,9 @@ def _build_compile_script(cfg, req):
             {python} -m pyperformance compile \\
             --venv {bfiles.venv} \\
             {pfiles.compile_config} \\
-            $revision \\
-            $branch \\
+            {revision} \\
+            {branch} \\
             2>&1 | tee {pfiles.results_log}
-            #&> {pfiles.results_log}
         )
         exitcode=$?
 
@@ -542,7 +551,7 @@ def _build_compile_script(cfg, req):
         EOF
         fi
 
-        if [ -e $results ]; then
+        if [ -n "$results" -a -e $results ]; then
             (
             set -x
             ln -s $results {pfiles.results_data}
@@ -552,49 +561,64 @@ def _build_compile_script(cfg, req):
     '''[1:-1])
 
 
-def _build_send_script(cfg, req):
+def _build_send_script(cfg, req, *, hidecfg=False):
     pfiles = PortalRequestFS(req.id)
     bfiles = BenchRequestFS(req.id)
+
+    if hidecfg:
+        benchuser = '$benchuser'
+        user = '$user'
+        host = '$host'
+        port = '$port'
+    else:
+        benchuser = cfg.bench_user
+        user = cfg.send_user
+        host = cfg.send_host
+        port = cfg.send_port
+    conn = f'{user}@{host}'
+
+    #reqdir = STAGING
+    reqdir = pfiles.reqdir
 
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
+        # The commands in this script are deliberately explicit
+        # so you can copy-and-paste them selectively.
+
         cfgfile='{cfg.CONFIG}'
 
         benchuser="$(jq -r '.bench_user' $cfgfile)"
-        if [ "$USER" != "$benchuser" ]; then
-            setfacl -m $benchuser:x $(dirname "$SSH_AUTH_SOCK")
-            setfacl -m $benchuser:rwx "$SSH_AUTH_SOCK"
-            exec sudo --login --user --preserve-env SSH_AUTH_SOCK $benchuser $@
+        if [ "$USER" != "{benchuser}" ]; then
+            setfacl -m {benchuser}:x $(dirname "$SSH_AUTH_SOCK")
+            setfacl -m {benchuser}:rwx "$SSH_AUTH_SOCK"
+            exec sudo --login --user --preserve-env SSH_AUTH_SOCK {benchuser} $@
         fi
 
         user="$(jq -r '.send_user' $cfgfile)"
         host="$(jq -r '.send_host' $cfgfile)"
-        conn="$user@$host"
         port="$(jq -r '.send_port' $cfgfile)"
 
-        if ssh -p $port $conn test -e {pfiles.reqdir}; then
+        if ssh -p {port} "{conn}" test -e {reqdir}; then
             >&2 echo "{req.id} was already sent"
             exit 1
         fi
-        #reqdir='{STAGING}'
-        reqdir='{pfiles.reqdir}'
 
         set -x
 
         # Set up before running.
-        ssh -p $port $conn mkdir -p {REQUESTS}
-        scp -rp -P $port $reqdir $conn:{pfiles.reqdir}
-        ssh -p $port $conn mkdir -p {bfiles.scratch_dir}
-        ssh -p $port $conn mkdir -p {bfiles.results_dir}
+        ssh -p {port} "{conn}" mkdir -p {REQUESTS}
+        scp -rp -P {port} {reqdir} "{conn}":{reqdir}
+        ssh -p {port} "{conn}" mkdir -p {bfiles.scratch_dir}
+        ssh -p {port} "{conn}" mkdir -p {bfiles.results_dir}
 
         # Run the request.
-        ssh -p $port $conn {pfiles.bench_script}
+        ssh -p {port} "{conn}" {pfiles.bench_script}
         
         # Finish up.
-        scp -p -P $port $conn:{pfiles.results_meta} $reqdir
-        scp -rp -P $port $conn:{pfiles.results_data} $reqdir
-        scp -rp -P $port $conn:{pfiles.results_log} $reqdir
+        scp -p -P {port} "{conn}":{pfiles.results_meta} {reqdir}
+        scp -rp -P {port} "{conn}":{pfiles.results_data} {reqdir}
+        scp -rp -P {port} "{conn}":{pfiles.results_log} {reqdir}
     '''[1:-1])
 
 
