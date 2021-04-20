@@ -607,6 +607,8 @@ def create_bench_compile_request(remote, revision, branch=None, *,
     if not cfg:
         cfg = PortalConfig.load()
 
+    ensure_dirs()
+
     reqid, req = _resolve_bench_compile_request(
         cfg, remote, revision, branch, benchmarks,
         optimize=optimize,
@@ -650,8 +652,6 @@ def send_bench_compile_request(remote, revision, branch=None, *,
     if not cfg:
         cfg = PortalConfig.load()
 
-    ensure_dirs()
-
     reqid = create_bench_compile_request(
         remote=remote,
         revision=revision,
@@ -686,8 +686,30 @@ def send_bench_compile_request(remote, revision, branch=None, *,
 
         print()
         print('Results:')
-        # XXX Show something better?
-        print(_read_file(pfiles.results_meta))
+        for line in render_results(reqid, pfiles):
+            print(line)
+
+
+def render_request(reqid, pfiles=None):
+    if not pfiles:
+        pfiles = PortalRequestFS(reqid)
+
+    yield f'(in {pfiles.reqdir})'
+    yield ''
+    # XXX Show something better?
+    text = _read_file(pfiles.request)
+    yield from text.splitlines()
+
+
+def render_results(reqid, pfiles=None):
+    if not pfiles:
+        pfiles = PortalRequestFS(reqid)
+
+    yield f'(in {pfiles.reqdir})'
+    yield ''
+    # XXX Show something better?
+    text = _read_file(pfiles.results_meta)
+    yield from text.splitlines()
 
 
 ##################################
@@ -697,6 +719,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
     parser = argparse.ArgumentParser(prog=prog)
 
+    parser.add_argument('--create-only', dest='createonly',
+                        action='store_true')
     parser.add_argument('--optimize', action='store_true')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--benchmarks')
@@ -709,13 +733,22 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return vars(args)
 
 
-def main(**kwargs):
-    #cfg = PortalConfig.load()
+def main(*, createonly=False, **kwargs):
+    cfg = PortalConfig.load()
+
     #if USER != cfg.bench_user:
     #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
 
+    if createonly:
+        reqid = create_bench_compile_request(cfg=cfg, **kwargs)
+        print(f'Created request {reqid}:')
+        print()
+        for line in render_request(reqid):
+            print(line)
+        return
+
     # XXX
-    send_bench_compile_request(**kwargs)
+    send_bench_compile_request(cfg=cfg, **kwargs)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
