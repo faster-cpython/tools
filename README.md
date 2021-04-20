@@ -80,7 +80,7 @@ Dynamic stats
 -------------
 
 For the full data, see [dxpstats.txt](./dxpstats.txt).
-The average of the percentages comes down to this:
+The average of the percentages there comes down to this:
 ```
 LOAD_FAST            --> LOAD_FAST              6.08%
 STORE_FAST           --> LOAD_FAST              4.47%
@@ -103,5 +103,11 @@ IS_OP                --> POP_JUMP_IF_FALSE      0.84%
 LOAD_CONST           --> LOAD_FAST              0.75%
 LOAD_FAST            --> CALL_METHOD            0.74%
 ```
-(But note that this is the average of the top-20 entries,
-which causes some unwanted rounding.)
+
+Note that this is the average of the top 20 entries per program,
+which causes some rounding down (I didn't have the full data set handy).
+
+Also note that this averages the *percentages*, not the total counts.
+This is because different benchmarks have a different overall opcode count;
+it would seem wrong if a benchmark that happens to run more loops
+contributes proportionally more to these statistics.
