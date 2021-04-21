@@ -21,7 +21,7 @@ if [ -n "$USER" -a "$USER" = "$LOCAL_BENCH_USER" ]; then
 fi
 homedir=
 scriptfile=
-    
+
 
 function bench-fix-ssh-agent() {
     if [ -z "$SSH_AUTH_SOCK" ]; then
@@ -30,7 +30,7 @@ function bench-fix-ssh-agent() {
         >&2 echo "(be sure to run 'bench-fix-ssh-agent' after starting an SSH agent)"
     else
         echo "fixing permissions on \$SSH_AUTH_SOCK so it can be used by the '$LOCAL_BENCH_USER' user..."
-        
+
         local agent_dir=$(dirname "$SSH_AUTH_SOCK")
         ( set -x; setfacl -m $LOCAL_BENCH_USER:x $agent_dir; )
         ( set -x; setfacl -m $LOCAL_BENCH_USER:rwx "$SSH_AUTH_SOCK"; )
@@ -49,7 +49,15 @@ echo '==================================='
 
 echo
 set -x
-alias bench="sudo --login --user $LOCAL_BENCH_USER SSH_AUTH_SOCK=\$SSH_AUTH_SOCK"
+alias bench='sudo --login --user $LOCAL_BENCH_USER \
+    SUDO_PWD="$(pwd)" \
+    SSH_AUTH_SOCK="$SSH_AUTH_SOCK" \
+'
+# Use of $PWD_INIT assumes the following code in ~$LOCAL_BENCH_USER/.profile:
+#  if [ -n "$PWD_INIT" ]; then
+#      cd $PWD_INIT
+#  fi
+alias bench-cwd='bench PWD_INIT="$(pwd)"'
 
 {
 portal_config="$LOCAL_BENCH_DIR/portal.json"
