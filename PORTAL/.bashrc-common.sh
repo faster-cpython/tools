@@ -22,6 +22,11 @@ fi
 homedir=
 scriptfile=
 
+GIT_AUTHOR_NAME="$(git config --global --get 'user.name')"
+GIT_AUTHOR_EMAIL="$(git config --global --get 'user.email')"
+GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
 
 function bench-fix-ssh-agent() {
     if [ -z "$SSH_AUTH_SOCK" ]; then
@@ -52,12 +57,17 @@ set -x
 alias bench='sudo --login --user $LOCAL_BENCH_USER \
     SUDO_PWD="$(pwd)" \
     SSH_AUTH_SOCK="$SSH_AUTH_SOCK" \
+    GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
+    GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
+    GIT_COMMITTER_NAME="$GIT_COMMITTER_NAME" \
+    GIT_COMMITTER_EMAIL="$GIT_COMMITTER_EMAIL" \
 '
 # Use of $PWD_INIT assumes the following code in ~$LOCAL_BENCH_USER/.profile:
 #  if [ -n "$PWD_INIT" ]; then
 #      cd $PWD_INIT
 #  fi
 alias bench-cwd='bench PWD_INIT="$(pwd)"'
+alias bench-git='bench-cwd git'
 
 {
 portal_config="$LOCAL_BENCH_DIR/portal.json"
