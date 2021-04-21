@@ -20,17 +20,20 @@ Directory structure:
 As well, each user has the following set up (via BENCH/.bashrc-common.sh):
 
 env vars:
-   * LOCAL_BENCH_USER
-   * LOCAL_BENCH_DIR
+   * LOCAL_BENCH_USER - the local user where requests are centralized
+   * LOCAL_BENCH_DIR  - the directory where benchmarking-related tools & data are located
    * BENCH_USER       - the username for the bench host tunnel
    * BENCH_HOST       - the hostname for the bench host tunnel
    * BENCH_PORT       - the port for the bench host tunnel
    * BENCH_CONN       - a convenience for SCP commands ($BENCH_USER@$BENCH_HOST)
 aliases:
-   * run on portal host:        bench COMMAND ...
-   * run on bench host:         bench-ssh COMMAND ...
-   * copy portal -> bench:      bench-scp localfile $BENCH_CONN:target
-   * copy bench -> portal:      bench-scp $BENCH_CONN:source localfile
+   * run on portal host:                bench COMMAND ...
+   * run on portal host (same CWD):     bench-cwd COMMAND ...
+   * run on bench host:                 bench-ssh COMMAND ...
+   * copy portal -> bench:              bench-scp localfile $BENCH_CONN:target
+   * copy bench -> portal:              bench-scp $BENCH_CONN:source localfile
+
+Note that those aliases all preserve $SSH_AUTH_SOCK and set $SUDO_PWD.
 
 
 To run the benchmark suite:
