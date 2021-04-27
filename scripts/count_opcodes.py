@@ -13,6 +13,10 @@ import warnings
 from collections import Counter
 from importlib.util import MAGIC_NUMBER
 
+# Magic number at which point jump targets start
+# counting in (2-byte) instructions instead of bytes
+JUMP_TARGETS_IN_INSTRS = (3435).to_bytes(2, 'little') + b'\r\n'
+
 FOR_ITER = opcode.opmap["FOR_ITER"]
 
 # Special (non-opcode) counter keys
@@ -22,6 +26,15 @@ NFILES = "__nfiles__"  # Number of files
 NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
 NERRORS = "__nerrors__"  # Number of files with errors
+
+SHOW_ITEMS = [
+    (NERRORS, "errors"),
+    (NFILES, "files"),
+    (NCODEOBJS, "code objects"),
+    (NLINES, "lines"),
+    (NOPCODES, "opcodes"),
+    (NPAIRS, "opcode pairs"),
+]
 
 # TODO: Make this list an option
 OF_INTEREST_NAMES = [x for x in opcode.opname if not x.startswith("<")]
@@ -38,14 +51,6 @@ def all_code_objects(code):
             yield x
 
 
-SHOW_ITEMS = [
-    (NERRORS, "errors"),
-    (NFILES, "files"),
-    (NCODEOBJS, "code objects"),
-    (NLINES, "lines"),
-    (NOPCODES, "opcodes"),
-    (NPAIRS, "opcode pairs"),
-]
 def showstats(counter):
     res = []
     for key, name in SHOW_ITEMS:
@@ -66,7 +71,7 @@ def find_loops(co):
         extra = 0
         if op == FOR_ITER:
             # Jumps used to count bytes, now they count opcodes
-            if MAGIC_NUMBER >= 3435:
+            if MAGIC_NUMBER >= JUMP_TARGETS_IN_INSTRS:
                 oparg *= 2
             loops.append(range(i, i + 2 + oparg))  # Count from *next* opcode
     return loops
