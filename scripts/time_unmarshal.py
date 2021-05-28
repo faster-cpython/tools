@@ -1,5 +1,6 @@
 """Time the cost of unmarshalling many objects vs. the bytecode interpreter."""
 
+import array
 import marshal
 import time
 
@@ -30,6 +31,16 @@ def main():
     t1 = time.time()
     dt = t1 - t0
     print(f"Code: total {dt:.3f} sec; {1e9*dt/n/k:.3f} nsec per value")
+
+    # And do it with arrays
+    a = array.array("L", t)
+    assert tuple(a) == t
+    t0 = time.time()
+    for i in range(k):
+        marshal.loads(s)
+    t1 = time.time()
+    dt = t1 - t0
+    print(f"Array: total {dt:.3f} sec; {1e9*dt/n/k:.3f} nsec per value")
 
 
 main()
