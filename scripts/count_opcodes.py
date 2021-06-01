@@ -37,11 +37,18 @@ SHOW_ITEMS = [
 ]
 
 # TODO: Make this list an option
-OF_INTEREST_NAMES = [x for x in opcode.opname if not x.startswith("<")]
-OF_INTEREST_NAMES = ["BINARY_ADD", "BINARY_SUBTRACT",
-                     "INPLACE_ADD", "INPLACE_SUBTRACT"]
+CACHE_ENTRIES = {
+    "LOAD_GLOBAL": 2,
+    "LOAD_ATTR": 2,
+    "CALL_FUNCTION": 2,
+    "CALL_FUNCTION_KW": 2,
+    "CALL_FUNCTION_EX": 2,  # Unsure
+    "CALL_METHOD": 2,
+    "CALL_METHOD_KW": 2,
+}
+OF_INTEREST_NAMES = CACHE_ENTRIES.keys()
 
-of_interest = set(opcode.opmap[x] for x in OF_INTEREST_NAMES)
+of_interest = set(opcode.opmap[x] for x in OF_INTEREST_NAMES if x in opcode.opmap)
 
 
 def all_code_objects(code):
@@ -165,6 +172,8 @@ argparser.add_argument("--pairs", type=int,
                       help="show N most common opcode pairs")
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
+argparser.add_argument("--cache-needs", action="store_true",
+                       help="Show fraction of cache entries needed per opcode ")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
@@ -222,6 +231,21 @@ def main():
     nopcodes = counter[NOPCODES]
     npairs = counter[NPAIRS]
     print(f"Total: {showstats(counter)}")
+
+    if args.cache_needs:
+        print()
+        print("Future cache needs")
+        ncache = 0
+        for key in counter:
+            if key in of_interest:
+                name = opcode.opname[key]
+                need = CACHE_ENTRIES[name] * counter[key]
+                ncache += need
+                print(name, need)
+        nops = counter[NOPCODES]
+        print(f"{nops} opcodes, {2*nops} bytes,",
+              f"{ncache} cache entries, {8*ncache} bytes,",
+              f"{ncache/nops:.2f} ncache/nops")
 
     if args.singles:
         singles = []
