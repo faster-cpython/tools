@@ -26,6 +26,10 @@ NFILES = "__nfiles__"  # Number of files
 NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
 NERRORS = "__nerrors__"  # Number of files with errors
+CACHE_SIZE = "__cache_size__" # quickening cache size
+CACHE_WASTED = "__cache_wasted__" # Number of bytes wasted in cache
+OPS_QUICKENED = "__ops_quickened__" # Number of ops that were quickened
+SKIP_QUICKEN = "__skip_quicken__" # ops not quickened for lack of cache space
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -34,6 +38,10 @@ SHOW_ITEMS = [
     (NLINES, "lines"),
     (NOPCODES, "opcodes"),
     (NPAIRS, "opcode pairs"),
+    (CACHE_SIZE, "cache_size"),
+    (CACHE_WASTED, "cache wasted"),
+    (OPS_QUICKENED, "ops quickened"),
+    (SKIP_QUICKEN, "skip quicken"),
 ]
 
 # TODO: Make this list an option
@@ -84,8 +92,38 @@ def find_loops(co):
     return loops
 
 
+class CacheCounter:
+    def __init__(self, counter):
+        self.counter = counter
+        self.offset = 0
+        self.index = 0
+        self.prev_is_extended_arg = False
+
+    def update_offset(self, op):
+        self.index += 1
+        need = CACHE_ENTRIES.get(opcode.opname[op], 0)
+        if need == 0:
+            return
+        oparg = self.offset - self.index // 2
+        if oparg < 0:
+            self.counter[CACHE_WASTED] += 0 - oparg
+            oparg == 0
+            self.offset = self.index // 2
+        elif oparg > 255:
+            self.counter[SKIP_QUICKEN] += 1
+            return
+        self.counter[OPS_QUICKENED] += 1
+        self.offset += need
+
+    def next_op(self, op):
+        if not self.prev_is_extended_arg:
+            self.update_offset(op)
+        self.prev_is_extended_arg =  opcode.opname[op] == "EXTENDED_ARG"
+
+
 def report(source, filename, verbose, bias):
     counter = Counter()
+    cache_counter = CacheCounter(counter)
     try:
         code = compile(source, filename, "exec")
     except Exception as err:
@@ -104,11 +142,13 @@ def report(source, filename, verbose, bias):
             counter[NOPCODES] += count
             op = co_code[i]
             counter[op] += count
+            cache_counter.next_op(op)
             if i > 0:
                 lastop = co_code[i-2]
                 counter[NPAIRS] += count
                 counter[(lastop, op)] += count
 
+    counter[CACHE_SIZE] += cache_counter.offset
     counter[NLINES] += len(source.splitlines())
     if verbose > 0:
         print(f"{filename}: {showstats(counter)}")
