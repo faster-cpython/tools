@@ -27,9 +27,10 @@ NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
 NERRORS = "__nerrors__"  # Number of files with errors
 CACHE_SIZE = "__cache_size__" # quickening cache size
-CACHE_WASTED = "__cache_wasted__" # Number of bytes wasted in cache
+CACHE_WASTED = "__cache_wasted__" # Number of wasted cache entries
 OPS_QUICKENED = "__ops_quickened__" # Number of ops that were quickened
 SKIP_QUICKEN = "__skip_quicken__" # ops not quickened for lack of cache space
+PREV_EXTENDED = "__prev_extended__" # skipped quickening as prev is extended
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -42,6 +43,7 @@ SHOW_ITEMS = [
     (CACHE_WASTED, "cache wasted"),
     (OPS_QUICKENED, "ops quickened"),
     (SKIP_QUICKEN, "skip quicken"),
+    (PREV_EXTENDED, "prev extended args")
 ]
 
 # TODO: Make this list an option
@@ -96,34 +98,36 @@ class CacheCounter:
     def __init__(self, counter):
         self.counter = counter
         self.offset = 0
-        self.index = 0
         self.prev_is_extended_arg = False
 
-    def update_offset(self, op):
-        self.index += 1
+    def update_offset(self, op, index):
         need = CACHE_ENTRIES.get(opcode.opname[op], 0)
         if need == 0:
             return
-        oparg = self.offset - self.index // 2
+        oparg = self.offset - index // 2
         if oparg < 0:
             self.counter[CACHE_WASTED] += 0 - oparg
             oparg == 0
-            self.offset = self.index // 2
+            self.offset = index // 2
         elif oparg > 255:
             self.counter[SKIP_QUICKEN] += 1
             return
         self.counter[OPS_QUICKENED] += 1
         self.offset += need
 
-    def next_op(self, op):
+    def next_op(self, op, index):
         if not self.prev_is_extended_arg:
-            self.update_offset(op)
-        self.prev_is_extended_arg =  opcode.opname[op] == "EXTENDED_ARG"
+            self.update_offset(op, index)
+        else:
+            self.counter[PREV_EXTENDED] += 1
+        self.prev_is_extended_arg = opcode.opname[op] == "EXTENDED_ARG"
+
+    def end_code_block(self):
+        self.counter[CACHE_SIZE] += self.offset
 
 
 def report(source, filename, verbose, bias):
     counter = Counter()
-    cache_counter = CacheCounter(counter)
     try:
         code = compile(source, filename, "exec")
     except Exception as err:
@@ -133,6 +137,7 @@ def report(source, filename, verbose, bias):
         return counter
 
     for co in all_code_objects(code):
+        cache_counter = CacheCounter(counter)
         counter[NCODEOBJS] += 1
         co_code = co.co_code
         loops = find_loops(co_code)
@@ -142,13 +147,13 @@ def report(source, filename, verbose, bias):
             counter[NOPCODES] += count
             op = co_code[i]
             counter[op] += count
-            cache_counter.next_op(op)
+            cache_counter.next_op(op, i/2)
             if i > 0:
                 lastop = co_code[i-2]
                 counter[NPAIRS] += count
                 counter[(lastop, op)] += count
+        cache_counter.end_code_block()
 
-    counter[CACHE_SIZE] += cache_counter.offset
     counter[NLINES] += len(source.splitlines())
     if verbose > 0:
         print(f"{filename}: {showstats(counter)}")
