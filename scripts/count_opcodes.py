@@ -65,7 +65,7 @@ def all_code_objects(code):
     yield code
     for x in code.co_consts:
         if hasattr(x, 'co_code'):
-            yield x
+            yield from all_code_objects(x)
 
 
 def showstats(counter):
