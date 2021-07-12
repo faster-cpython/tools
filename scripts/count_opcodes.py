@@ -126,75 +126,77 @@ class CacheCounter:
         self.counter[CACHE_SIZE] += self.offset
 
 
-def report(source, filename, verbose, bias):
-    counter = Counter()
-    try:
-        code = compile(source, filename, "exec")
-    except Exception as err:
+class Reporter:
+
+    def report(self, source, filename, verbose, bias):
+        counter = Counter()
+        try:
+            code = compile(source, filename, "exec")
+        except Exception as err:
+            if verbose > 0:
+                print(f"{filename}: {err}")
+            counter[NERRORS] += 1
+            return counter
+
+        for co in all_code_objects(code):
+            cache_counter = CacheCounter(counter)
+            counter[NCODEOBJS] += 1
+            co_code = co.co_code
+            loops = find_loops(co_code)
+            for i in range(0, len(co_code), 2):
+                inloops = sum(i in loop for loop in loops)
+                count = 1 + bias*inloops  # Opcodes in loops are counted more
+                counter[NOPCODES] += count
+                op = co_code[i]
+                counter[op] += count
+                cache_counter.next_op(op, i/2)
+                if i > 0:
+                    lastop = co_code[i-2]
+                    counter[NPAIRS] += count
+                    counter[(lastop, op)] += count
+            cache_counter.end_code_block()
+
+        counter[NLINES] += len(source.splitlines())
         if verbose > 0:
-            print(f"{filename}: {err}")
-        counter[NERRORS] += 1
+            print(f"{filename}: {showstats(counter)}")
+        counter[NFILES] += 1
         return counter
 
-    for co in all_code_objects(code):
-        cache_counter = CacheCounter(counter)
-        counter[NCODEOBJS] += 1
-        co_code = co.co_code
-        loops = find_loops(co_code)
-        for i in range(0, len(co_code), 2):
-            inloops = sum(i in loop for loop in loops)
-            count = 1 + bias*inloops  # Opcodes in loops are counted more
-            counter[NOPCODES] += count
-            op = co_code[i]
-            counter[op] += count
-            cache_counter.next_op(op, i/2)
-            if i > 0:
-                lastop = co_code[i-2]
-                counter[NPAIRS] += count
-                counter[(lastop, op)] += count
-        cache_counter.end_code_block()
 
-    counter[NLINES] += len(source.splitlines())
-    if verbose > 0:
-        print(f"{filename}: {showstats(counter)}")
-    counter[NFILES] += 1
-    return counter
+    def file_report(self, filename, verbose, bias):
+        try:
+            with open(filename, "rb") as f:
+                source = f.read()
+            counter = self.report(source, filename, verbose, bias)
+        except Exception as err:
+            if verbose > 0:
+                print(filename + ":", err)
+            counter = Counter()
+            counter[NERRORS] += 1
+        return counter
 
 
-def file_report(filename, verbose, bias):
-    try:
-        with open(filename, "rb") as f:
-            source = f.read()
-        counter = report(source, filename, verbose, bias)
-    except Exception as err:
-        if verbose > 0:
-            print(filename + ":", err)
+    def tarball_report(self, filename, verbose, bias):
+        if verbose > 1:
+            print(f"\nExamining tarball {filename}")
         counter = Counter()
-        counter[NERRORS] += 1
-    return counter
-
-
-def tarball_report(filename, verbose, bias):
-    if verbose > 1:
-        print(f"\nExamining tarball {filename}")
-    counter = Counter()
-    with tarfile.open(filename, "r") as tar:
-        members = tar.getmembers()
-        for m in members:
-            info = m.get_info()
-            name = info["name"]
-            if name.endswith(".py"):
-                try:
-                    source = tar.extractfile(m).read()
-                except Exception as err:
-                    if verbose > 0:
-                        print(f"{name}: {err}")
-                    counter[NERRORS] += 1
-                else:
-                    counter.update(report(source, name, verbose-1, bias))
-    if verbose > 0:
-        print(f"{filename}: {showstats(counter)}")
-    return counter
+        with tarfile.open(filename, "r") as tar:
+            members = tar.getmembers()
+            for m in members:
+                info = m.get_info()
+                name = info["name"]
+                if name.endswith(".py"):
+                    try:
+                        source = tar.extractfile(m).read()
+                    except Exception as err:
+                        if verbose > 0:
+                            print(f"{name}: {err}")
+                        counter[NERRORS] += 1
+                    else:
+                        counter.update(self.report(source, name, verbose-1, bias))
+        if verbose > 0:
+            print(f"{filename}: {showstats(counter)}")
+        return counter
 
 
 def expand_globs(filenames):
@@ -243,21 +245,22 @@ def main():
         print("In", filenames)
 
     counter = Counter()
+    reporter = Reporter()
     hits = 0
     for filename in expand_globs(filenames):
         hits += 1
         if os.path.isfile(filename):
             if filename.endswith(".tar.gz"):
-                ctr = tarball_report(filename, verbose, bias)
+                ctr = reporter.tarball_report(filename, verbose, bias)
             else:
-                ctr = file_report(filename, verbose, bias)
+                ctr = reporter.file_report(filename, verbose, bias)
             counter.update(ctr)
         elif os.path.isdir(filename):
             for root, dirs, files in os.walk(filename):
                 for file in files:
                     if file.endswith(".py"):
                         full = os.path.join(root, file)
-                        counter.update(file_report(full, verbose, bias))
+                        counter.update(reporter.file_report(full, verbose, bias))
             if not counter[NFILES]:
                 print(f"{filename}: No .py files")
         else:
