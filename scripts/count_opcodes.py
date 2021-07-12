@@ -22,6 +22,7 @@ FOR_ITER = opcode.opmap["FOR_ITER"]
 # Special (non-opcode) counter keys
 NOPCODES = "__nopcodes__"  # Number of opcodes
 NPAIRS = "__npairs__"  # Number of opcode pairs
+NCONSTANTS = "__nconstants__"  # Number of constants
 NFILES = "__nfiles__"  # Number of files
 NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
@@ -39,6 +40,7 @@ SHOW_ITEMS = [
     (NLINES, "lines"),
     (NOPCODES, "opcodes"),
     (NPAIRS, "opcode pairs"),
+    (NCONSTANTS, "constants"),
     (CACHE_SIZE, "cache_size"),
     (CACHE_WASTED, "cache wasted"),
     (OPS_QUICKENED, "ops quickened"),
@@ -130,7 +132,6 @@ class Reporter:
 
     def reporting_guts(self, counter, co, bias):
         cache_counter = CacheCounter(counter)
-        counter[NCODEOBJS] += 1
         co_code = co.co_code
         loops = find_loops(co_code)
         for i in range(0, len(co_code), 2):
@@ -157,6 +158,7 @@ class Reporter:
             return counter
 
         for co in all_code_objects(code):
+            counter[NCODEOBJS] += 1
             self.reporting_guts(counter, co, bias)
 
         counter[NLINES] += len(source.splitlines())
@@ -206,6 +208,7 @@ class ConstantsReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
         for const in co.co_consts:
+            counter[NCONSTANTS] += 1
             key = f"!{const!r}"
             counter[key] += 1
 
@@ -224,16 +227,16 @@ argparser.add_argument("-q", "--quiet", action="store_true",
                        help="less verbose output")
 argparser.add_argument("-v", "--verbose", action="store_true",
                        help="more verbose output")
-argparser.add_argument("--singles", type=int,
+argparser.add_argument("--singles", type=int, metavar="N",
                       help="show N most common opcodes")
-argparser.add_argument("--pairs", type=int,
+argparser.add_argument("--pairs", type=int, metavar="N",
                       help="show N most common opcode pairs")
+argparser.add_argument("--constants", type=int, metavar="N",
+                       help="Show N most common constants")
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
                        help="Show fraction of cache entries needed per opcode ")
-argparser.add_argument("--constants", type=int,
-                       help="Show N most common constants")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
@@ -242,7 +245,7 @@ def main():
     args = argparser.parse_args()
     verbose = 1 + args.verbose - args.quiet
     bias = args.bias or 0
-    if not args.pairs and not args.singles:
+    if not args.pairs and not args.singles and not args.constants:
         args.pairs = 20
 
     filenames = args.filenames
@@ -298,12 +301,14 @@ def main():
 
     if args.constants:
         print()
+        nconstants = counter[NCONSTANTS]
         print(f"Top {args.constants} constants:")
         pairs = [(key[1:], value) for key, value in counter.items()
                                    if key.startswith("!")]
         pairs.sort(reverse=True, key=lambda a: a[1])
         for key, value in pairs[:args.constants]:
-            print(f"{key:>40s} : {value:10d}")
+            fraction = value / nconstants
+            print(f"{key:>40s} : {value:10d} ({100.0*fraction:.2f}%)")
 
     if args.cache_needs:
         print()
