@@ -128,6 +128,24 @@ class CacheCounter:
 
 class Reporter:
 
+    def reporting_guts(self, counter, co, bias):
+        cache_counter = CacheCounter(counter)
+        counter[NCODEOBJS] += 1
+        co_code = co.co_code
+        loops = find_loops(co_code)
+        for i in range(0, len(co_code), 2):
+            inloops = sum(i in loop for loop in loops)
+            count = 1 + bias*inloops  # Opcodes in loops are counted more
+            counter[NOPCODES] += count
+            op = co_code[i]
+            counter[op] += count
+            cache_counter.next_op(op, i/2)
+            if i > 0:
+                lastop = co_code[i-2]
+                counter[NPAIRS] += count
+                counter[(lastop, op)] += count
+        cache_counter.end_code_block()
+
     def report(self, source, filename, verbose, bias):
         counter = Counter()
         try:
@@ -139,22 +157,7 @@ class Reporter:
             return counter
 
         for co in all_code_objects(code):
-            cache_counter = CacheCounter(counter)
-            counter[NCODEOBJS] += 1
-            co_code = co.co_code
-            loops = find_loops(co_code)
-            for i in range(0, len(co_code), 2):
-                inloops = sum(i in loop for loop in loops)
-                count = 1 + bias*inloops  # Opcodes in loops are counted more
-                counter[NOPCODES] += count
-                op = co_code[i]
-                counter[op] += count
-                cache_counter.next_op(op, i/2)
-                if i > 0:
-                    lastop = co_code[i-2]
-                    counter[NPAIRS] += count
-                    counter[(lastop, op)] += count
-            cache_counter.end_code_block()
+            self.reporting_guts(counter, co, bias)
 
         counter[NLINES] += len(source.splitlines())
         if verbose > 0:
@@ -199,6 +202,14 @@ class Reporter:
         return counter
 
 
+class ConstantsReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        for const in co.co_consts:
+            key = f"!{const!r}"
+            counter[key] += 1
+
+
 def expand_globs(filenames):
     for filename in filenames:
         if "*" in filename and sys.platform == "win32":
@@ -221,6 +232,8 @@ argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
                        help="Show fraction of cache entries needed per opcode ")
+argparser.add_argument("--constants", type=int,
+                       help="Show N most common constants")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
@@ -245,7 +258,10 @@ def main():
         print("In", filenames)
 
     counter = Counter()
-    reporter = Reporter()
+    if args.constants:
+        reporter = ConstantsReporter()
+    else:
+        reporter = Reporter()
     hits = 0
     for filename in expand_globs(filenames):
         hits += 1
@@ -279,6 +295,15 @@ def main():
     nopcodes = counter[NOPCODES]
     npairs = counter[NPAIRS]
     print(f"Total: {showstats(counter)}")
+
+    if args.constants:
+        print()
+        print(f"Top {args.constants} constants:")
+        pairs = [(key[1:], value) for key, value in counter.items()
+                                   if key.startswith("!")]
+        pairs.sort(reverse=True, key=lambda a: a[1])
+        for key, value in pairs[:args.constants]:
+            print(f"{key:>40s} : {value:10d}")
 
     if args.cache_needs:
         print()
