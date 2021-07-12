@@ -22,7 +22,7 @@ FOR_ITER = opcode.opmap["FOR_ITER"]
 # Special (non-opcode) counter keys
 NOPCODES = "__nopcodes__"  # Number of opcodes
 NPAIRS = "__npairs__"  # Number of opcode pairs
-NCONSTANTS = "__nconstants__"  # Number of constants
+NITEMS = "__nitems__"  # Number of constants/names
 NFILES = "__nfiles__"  # Number of files
 NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
@@ -40,7 +40,7 @@ SHOW_ITEMS = [
     (NLINES, "lines"),
     (NOPCODES, "opcodes"),
     (NPAIRS, "opcode pairs"),
-    (NCONSTANTS, "constants"),
+    (NITEMS, "constants"),
     (CACHE_SIZE, "cache_size"),
     (CACHE_WASTED, "cache wasted"),
     (OPS_QUICKENED, "ops quickened"),
@@ -208,9 +208,18 @@ class ConstantsReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
         for const in co.co_consts:
-            counter[NCONSTANTS] += 1
+            counter[NITEMS] += 1
             key = f"!{const!r}"
             counter[key] += 1
+
+class NamesReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        for attr in [co.co_names, co.co_varnames, co.co_cellvars, co.co_freevars]:
+            for name in attr:
+                counter[NITEMS] += 1
+                key = f"!{name}"
+                counter[key] += 1
 
 
 def expand_globs(filenames):
@@ -233,6 +242,8 @@ argparser.add_argument("--pairs", type=int, metavar="N",
                       help="show N most common opcode pairs")
 argparser.add_argument("--constants", type=int, metavar="N",
                        help="Show N most common constants")
+argparser.add_argument("--names", type=int, metavar="N",
+                       help="Show N most common names")
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
@@ -245,7 +256,7 @@ def main():
     args = argparser.parse_args()
     verbose = 1 + args.verbose - args.quiet
     bias = args.bias or 0
-    if not args.pairs and not args.singles and not args.constants:
+    if not (args.pairs or args.singles or args.constants or args.names):
         args.pairs = 20
 
     filenames = args.filenames
@@ -263,6 +274,8 @@ def main():
     counter = Counter()
     if args.constants:
         reporter = ConstantsReporter()
+    elif args.names:
+        reporter = NamesReporter()
     else:
         reporter = Reporter()
     hits = 0
@@ -299,15 +312,17 @@ def main():
     npairs = counter[NPAIRS]
     print(f"Total: {showstats(counter)}")
 
-    if args.constants:
+    if args.constants or args.names:
+        num = args.constants or args.names
+        label = "constants" if args.constants else "names"
         print()
-        nconstants = counter[NCONSTANTS]
-        print(f"Top {args.constants} constants:")
+        nitems = counter[NITEMS]
+        print(f"Top {num} {label}:")
         pairs = [(key[1:], value) for key, value in counter.items()
                                    if key.startswith("!")]
         pairs.sort(reverse=True, key=lambda a: a[1])
-        for key, value in pairs[:args.constants]:
-            fraction = value / nconstants
+        for key, value in pairs[:num]:
+            fraction = value / nitems
             print(f"{key:>40s} : {value:10d} ({100.0*fraction:.2f}%)")
 
     if args.cache_needs:
