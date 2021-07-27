@@ -23,8 +23,7 @@ DEBUG_OPTS=" \
 "
 
 PYTHON_PLAIN="$PYTHON -c 'pass'"
-PYTHON_NO_SITE="$PYTHON -c -S 'pass'"
-PYTHON_COMMAND=$PYTHON_PLAIN
+PYTHON_NO_SITE="$PYTHON -S -c 'pass'"
 
 MAX_STACK=1000
 FREQUENCY=10000
@@ -44,6 +43,7 @@ flamegraph="no"
 report="no"
 upload=
 frequency=$FREQUENCY
+site="yes"
 rebuild="yes"
 debug="no"
 verbose="yes"
@@ -53,11 +53,11 @@ while test $# -gt 0 ; do
   case $arg in
     --help|-h)
       cat << EOF
-$0 [-qv] [--rebuild] [--debug|--release] [--frequency NUM] [OP_OPTIONS] [OP]
+$0 [COMMON_OPTIONS] [OP_OPTIONS] [OP]
 
 Operations:
   flamegraph (default)
-    --upload
+    --upload, --no-upload
     --report
   report
   interactive
@@ -66,8 +66,9 @@ Common Options:
   -h, --help
   -q, --quiet
   -v, --verbose
-  --debug
-  --release
+  --rebuild, --no-rebuild
+  --debug | --release
+  --site, --no-site
   --frequency HERTZ
 EOF
       exit 0
@@ -83,6 +84,12 @@ EOF
       ;;
     --release)
       debug="no"
+      ;;
+    --site)
+      site="yes"
+      ;;
+    --no-site)
+      site="no"
       ;;
     --freq|--frequency)
         frequency="$1"
@@ -155,7 +162,11 @@ if [ $debug == "yes" ]; then
 else
     config_opts="$RELEASE_OPTS"
 fi
-python_command=$PYTHON_COMMAND
+if [ $site == "yes" ]; then
+    python_command=$PYTHON_PLAIN
+else
+    python_command=$PYTHON_NO_SITE
+fi
 
 case $op in
   flamegraph|report)
@@ -192,14 +203,18 @@ case $op in
 esac
 
 perfid="$op-$frequency"
-perf_data_file="$PERF_DIR/perf-$perfid.data"
-perf_script_file="$PERF_DIR/out-$perfid.perf"
+tags=""
+if [ $site == "no" ]; then
+    tags="$tags-nosite"
+fi
+perf_data_file="$PERF_DIR/perf-$perfid$tags.data"
+perf_script_file="$PERF_DIR/out-$perfid$tags.perf"
 if [ $flamegraph == "yes" ]; then
-    perf_folded_file="$PERF_DIR/out-$perfid.folded"
-    flamegraph_file="$PERF_DIR/$perfid.svg"
+    perf_folded_file="$PERF_DIR/out-$perfid$tags.folded"
+    flamegraph_file="$PERF_DIR/$perfid$tags.svg"
     if [ $upload == "yes" ]; then
-        #upstream_file="flamegraph-$TIMESTAMP.svg"
-        upstream_file="flamegraphs/freq$frequency.svg"
+        #upstream_file="flamegraph-$TIMESTAMP$tags.svg"
+        upstream_file="flamegraphs/freq$frequency$tags.svg"
     fi
 fi
 
