@@ -44,6 +44,7 @@ report="no"
 upload=
 frequency=$FREQUENCY
 site="yes"
+record="yes"
 rebuild="yes"
 debug="no"
 verbose="yes"
@@ -60,7 +61,11 @@ Operations:
     --upload, --no-upload
     --report
   report
-  interactive
+  symbols
+  python-symbols
+  tree
+  tree-comm
+  shared-objects
 
 Common Options:
   -h, --help
@@ -70,8 +75,12 @@ Common Options:
   --debug | --release
   --site, --no-site
   --frequency HERTZ
+  --reuse
 EOF
       exit 0
+      ;;
+    --reuse)
+      record="no"
       ;;
     --rebuild)
       rebuild="yes"
@@ -121,10 +130,7 @@ EOF
           flamegraph)
             flamegraph="yes"
             ;;
-          report)
-            report="yes"
-            ;;
-          interactive)
+          report|symbols|python-symbols|tree|tree-comm|shared-objects)
             report="yes"
             ;;
           *)
@@ -151,12 +157,6 @@ elif [ "$upload" == "yes" -a $flamegraph == "no" ]; then
     exit 1
 fi
 
-if [ $rebuild == "no" ]; then
-    if [ ! -e $PYTHON ]; then
-        rebuild="yes"
-    fi
-fi
-
 if [ $debug == "yes" ]; then
     config_opts="$DEBUG_OPTS"
 else
@@ -169,36 +169,79 @@ else
 fi
 
 case $op in
-  flamegraph|report)
+  flamegraph)
     record_opts=" \
         --call-graph fp \
     "
-        #-g
-        #-call-graph
         #-call-graph fp
         #-call-graph dwarf
         #--call-graph lbr
         #--all-kernel
         #--all-user
-    if [ $op == "report" ]; then
-        report="yes"
-    fi
     report_opts=" \
         --header \
     "
     ;;
-  interactive)
+  report)
     record_opts=" \
-        --call-graph lbr \
+        --call-graph fp \
     "
     report="yes"
     report_opts=" \
-        --call-graph \
+        --header \
     "
-        #--max-stack 10 \
-        #-call-graph fp
-        #-call-graph dwarf
-        #--call-graph lbr
+    ;;
+  symbols)
+    record_opts=" \
+        --call-graph fp \
+    "
+    report="yes"
+    report_opts=" \
+        --sort symbol \
+        --fields overhead_children,overhead,sample,overhead_sys,overhead_us,comm,symbol \
+        --sort sample \
+    "
+    ;;
+  python-symbols)
+    record_opts=" \
+        --call-graph fp \
+    "
+    report="yes"
+    report_opts=" \
+        --sort symbol \
+        --fields overhead_children,overhead,sample,overhead_sys,overhead_us,comm,symbol \
+        --sort sample \
+        --comm python \
+    "
+    ;;
+  tree)
+    record_opts=" \
+        --call-graph fp \
+    "
+    report="yes"
+    report_opts=" \
+        --sort sample
+    "
+    ;;
+  tree-comm)
+    record_opts=" \
+        --call-graph fp \
+    "
+    report="yes"
+    report_opts=" \
+        --fields overhead_children,overhead,sample,comm
+        --sort sample
+    "
+    ;;
+  shared-objects)
+    record_opts=" \
+        --call-graph fp \
+    "
+    report="yes"
+    report_opts=" \
+        --fields overhead_children,overhead,sample,dso \
+        --sort sample \
+    "
     ;;
 esac
 
@@ -215,6 +258,19 @@ if [ $flamegraph == "yes" ]; then
     if [ $upload == "yes" ]; then
         #upstream_file="flamegraph-$TIMESTAMP$tags.svg"
         upstream_file="flamegraphs/freq$frequency$tags.svg"
+    fi
+fi
+
+if [ $record == "no" ]; then
+    if [ ! -e $perf_data_file ]; then
+        record="yes"
+    fi
+fi
+if [ $record== "yes" ]; then
+    rebuild="no"
+elif [ $rebuild == "no" ]; then
+    if [ ! -e $PYTHON ]; then
+        rebuild="yes"
     fi
 fi
 
@@ -315,48 +371,55 @@ for i in {1..4}; do
     )
 done
 
-echo
-echo "==== generating the profile data ===="
-echo
-sample_rate_orig=$(cat /proc/sys/kernel/perf_event_max_sample_rate)
-max_stack_orig=$(cat /proc/sys/kernel/perf_event_max_stack)
-sysctl kernel.perf_event_max_sample_rate
-sysctl kernel.perf_event_max_stack
-(
-set -x
-sudo sysctl -w kernel.perf_event_max_sample_rate=$frequency
-sudo sysctl -w kernel.perf_event_max_stack=$MAX_STACK
-sudo perf record \
-    $record_opts \
-    --all-cpus \
-    -F max \
-    --output $perf_data_file \
-    -- $python_command
-    #--exclude-perf
-)
-if [ $flamegraph == "yes" ]; then
+if [ $record == "yes" ]; then
+    echo
+    echo "==== generating the profile data ===="
+    echo
+
+    if [ $flamegraph == "no" -a $report != "yes" ]; then
+        >2 echo "not finished"; exit 1  # XXX
+    fi
+
+    sample_rate_orig=$(cat /proc/sys/kernel/perf_event_max_sample_rate)
+    max_stack_orig=$(cat /proc/sys/kernel/perf_event_max_stack)
+    sysctl kernel.perf_event_max_sample_rate
+    sysctl kernel.perf_event_max_stack
     (
     set -x
-    sudo perf script \
-        --max-stack $MAX_STACK \
-        --input $perf_data_file > $perf_script_file
+    sudo sysctl -w kernel.perf_event_max_sample_rate=$frequency
+    sudo sysctl -w kernel.perf_event_max_stack=$MAX_STACK
+    sudo perf record \
+        $record_opts \
+        --all-cpus \
+        -F max \
+        --output $perf_data_file \
+        -- $python_command
+        #--exclude-perf
     )
-elif [ $report != "yes" ]; then
-    >2 echo "not finished"; exit 1  # XXX
+    (
+    set -x
+    sudo sysctl -w kernel.perf_event_max_sample_rate=$sample_rate_orig
+    sudo sysctl -w kernel.perf_event_max_stack=$max_stack_orig
+    )
 fi
-(
-set -x
-sudo sysctl -w kernel.perf_event_max_sample_rate=$sample_rate_orig
-sudo sysctl -w kernel.perf_event_max_stack=$max_stack_orig
-)
-#sudo echo $KERNEL_SAMPLE_RATE_ORIG > /proc/sys/kernel/perf_event_max_sample_rate
 
 if [ $flamegraph == "yes" ]; then
     echo
     echo "==== generating the flame graph ===="
     echo
+
+    sample_rate_orig=$(cat /proc/sys/kernel/perf_event_max_sample_rate)
+    max_stack_orig=$(cat /proc/sys/kernel/perf_event_max_stack)
     (
     set -x
+    sudo sysctl -w kernel.perf_event_max_sample_rate=$frequency
+    sudo sysctl -w kernel.perf_event_max_stack=$MAX_STACK
+    sudo perf script \
+        --max-stack $MAX_STACK \
+        --input $perf_data_file > $perf_script_file
+    sudo sysctl -w kernel.perf_event_max_sample_rate=$sample_rate_orig
+    sudo sysctl -w kernel.perf_event_max_stack=$max_stack_orig
+
     $FLAMEGRAPH_REPO/stackcollapse-perf.pl $perf_script_file > $perf_folded_file
     $FLAMEGRAPH_REPO/flamegraph.pl $perf_folded_file > $flamegraph_file
     )
