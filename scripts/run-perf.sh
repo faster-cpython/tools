@@ -266,7 +266,7 @@ if [ $record == "no" ]; then
         record="yes"
     fi
 fi
-if [ $record== "yes" ]; then
+if [ $record == "yes" ]; then
     rebuild="no"
 elif [ $rebuild == "no" ]; then
     if [ ! -e $PYTHON ]; then
@@ -279,7 +279,9 @@ fi
 # run the script
 
 echo
-echo "*** building flamegraph in $PERF_DIR ***"
+echo "*** profiling $python_command ***"
+echo
+echo "# data files in $PERF_DIR"
 echo
 mkdir -p $PERF_DIR
 
@@ -360,18 +362,18 @@ if [ $rebuild == "yes" ]; then
     &>/dev/null popd
 fi
 
-# Warm up the disk cache.
-echo
-echo "==== warming up the disk cache ===="
-echo
-for i in {1..4}; do
-    (
-    set -x
-    $python_command
-    )
-done
-
 if [ $record == "yes" ]; then
+    # Warm up the disk cache.
+    echo
+    echo "==== warming up the disk cache ===="
+    echo
+    for i in {1..4}; do
+        (
+        set -x
+        $python_command
+        )
+    done
+
     echo
     echo "==== generating the profile data ===="
     echo
