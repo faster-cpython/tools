@@ -10,9 +10,6 @@ source $SCRIPTS_DIR/upload.sh
 source $SCRIPTS_DIR/run-profiler.sh
 
 
-FLAMEGRAPH_URL=https://github.com/brendangregg/FlameGraph
-
-
 function ensure-perf-deps() {
     if ! &>/dev/null which perf; then
         echo "# install system dependencies"
@@ -49,15 +46,8 @@ function ensure-strace-deps() {
 }
 
 function ensure-flamegraph-deps() {
-    local datadir=$1
-    local repodir=$(resolve-flamegraph-repo $datadir)  # from run-profiler.sh
-    if [ ! -e $repodir ]; then
-        echo "# get flamegraph tools"
-        (
-        set -x
-        git clone $FLAMEGRAPH_URL $repodir
-        )
-    fi
+    local repodir=$(resolve-flamegraph-repo $1)  # from run-profiler.sh
+    ensure-flamegraph-repo $repodir  # from run-profiler.sh
 }
 
 
@@ -65,7 +55,7 @@ function ensure-flamegraph-deps() {
 # the script
 
 if [ "$0" == "$BASH_SOURCE" ]; then
-    local datadir=$PERF_DIR
+    local datadir='-'
     while test $# -gt 0 ; do
         arg=$1
         shift
@@ -73,8 +63,8 @@ if [ "$0" == "$BASH_SOURCE" ]; then
           --datadir)
             datadir=$1
             shift
-            if [ -z "$datadir" -o "$datadir" == '-' ]; then
-                datadir=$PERF_DIR
+            if [ -z "$datadir" ]; then
+                datadir='-'
             fi
             ;;
           *)
@@ -82,12 +72,13 @@ if [ "$0" == "$BASH_SOURCE" ]; then
             ;;
         esac
     done
+    datadir=$(resolve-data-dir $datadir)
+    ensure-dir $datadir
 
-    cpython-ensure-deps  # from cpython.sh
-    cpython-ensure-repo $datadir  # from cpython.sh
+    cpython-ensure-deps $datadir  # from cpython.sh
     ensure-perf-deps
     ensure-uftrace-deps
     ensure-strace-deps
     ensure-flamegraph-deps $datadir
-    ensure-uploads-deps $datadir  # from upload.sh
+    uploads-ensure-deps $datadir  # from upload.sh
 fi

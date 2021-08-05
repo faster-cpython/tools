@@ -102,6 +102,7 @@ def cmd_flamegraph(tool, pycmd, pytags, *,
         # We could call shlex.split() and then argv.extend() but this is fine.
         argv.append(pycmd)
 
+        print()
         print(f'*** profiling {pycmd} (using {tool}) ***')
 
     #print(f'# {" ".join(argv)}')
@@ -130,7 +131,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     datacommon = argparse.ArgumentParser(add_help=False)
     datacommon.add_argument('--datadir')
 
-    pycommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
+    pycommon = argparse.ArgumentParser(add_help=False)
+    #pycommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
     pycommon.add_argument('--rebuild', dest='pyrebuild',
                           action='store_true')
     pycommon.add_argument('--no-rebuild', dest='pyrebuild',
@@ -145,11 +147,13 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     pycommon.add_argument('--no-site', dest='nosite', action='store_true')
     pycommon.set_defaults(nosite=False)
 
-    profcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
+    profcommon = argparse.ArgumentParser(add_help=False)
+    #profcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
     profcommon.add_argument('--datafile-only', dest='datafileonly',
                             action='store_true')
 
-    uploadcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
+    uploadcommon = argparse.ArgumentParser(add_help=False)
+    #uploadcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
     uploadcommon.add_argument('--upload', action='store_true')
     uploadcommon.add_argument('--no-upload', dest='upload', action='store_false')
     uploadcommon.set_defaults(upload=False)
@@ -163,19 +167,19 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = subs.add_parser(
         'flamegraph',
-        parents=[common, pycommon, profcommon, uploadcommon],
+        parents=[common, datacommon, pycommon, profcommon, uploadcommon],
     )
     fgsubs = sub.add_subparsers(dest='tool')
 
     fgsub = fgsubs.add_parser(
         'perf',
-        parents=[common, pycommon, profcommon, uploadcommon],
+        parents=[common, datacommon, pycommon, profcommon, uploadcommon],
     )
     fgsub.add_argument('--frequency', type=int)
 
     fgsub = fgsubs.add_parser(
         'uftrace',
-        parents=[common, pycommon, profcommon, uploadcommon],
+        parents=[common, datacommon, pycommon, profcommon, uploadcommon],
     )
 
     args = parser.parse_args(argv)

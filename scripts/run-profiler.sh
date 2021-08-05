@@ -99,6 +99,8 @@ source $SCRIPTS_DIR/utils.sh
 source $SCRIPTS_DIR/uploads.sh
 
 
+FLAMEGRAPH_URL=https://github.com/brendangregg/FlameGraph
+
 # CPython's C stacks can get pretty deep.
 MAX_STACK=1000
 PERF_FREQUENCY=99999  # ~100 khz
@@ -138,15 +140,11 @@ function get-fullid() {
     echo "${tool}${tags}"
 }
 
-function get-data-loc() {
-    local datadir=$1
+function resolve-data-loc() {
+    local datadir=$(resolve-data-dir $1)
     local tool=$2
     local tags=$3
     local frequency=$4
-
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
 
     local fullid=$(get-fullid "$tool" "$tags" "$frequency")
     echo "$datadir/${fullid}$DATAFILE_SUFFIX"
@@ -172,14 +170,10 @@ function extract-datafile-fullid() {
     return $EC_TRUE
 }
 
-function get-flamegraph-file() {
-    local datadir=$1
+function resolve-flamegraph-file() {
+    local datadir=$(resolve-data-dir $1)
     local fullid=$2
     local timestamp=$3
-
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
 
     if [[ "$fullid" == *"$DATAFILE_SUFFIX" ]]; then
         fullid=$(extract-datafile-fullid $fullid)
@@ -205,7 +199,7 @@ function get-flamegraph-file() {
 # the tools
 
 function run-perf() {
-    local datadir=$1
+    local datadir=$(resolve-data-dir $1)
     local datafile=$2
     local frequency=$3
     local cmd=$4
@@ -214,14 +208,16 @@ function run-perf() {
         frequency=$PERF_FREQUENCY
     fi
     if [ -z "$datafile" ]; then
-        datafile=$(get-data-loc "$datadir" 'perf' '-' "$frequency")
+        datafile=$(resolve-data-loc "$datadir" 'perf' '-' "$frequency")
     elif [[ $datafile == "-"* ]]; then
         local tags=$datafile
         if [[ $tags == *".data" ]]; then
             tags="${tags:0:-5}"
         fi
-        datafile=$(get-data-loc "$datadir" 'perf' "$tags" "$frequency")
+        datafile=$(resolve-data-loc "$datadir" 'perf' "$tags" "$frequency")
     fi
+
+    ensure-dir $datadir
 
     # We use globals since the trap execute in the context of the caller.
     __frequency_orig__=$(cat /proc/sys/kernel/perf_event_max_sample_rate)
@@ -260,19 +256,21 @@ function run-perf() {
 }
 
 function run-uftrace() {
-    local datadir=$1
+    local datadir=$(resolve-data-dir $1)
     local uftrace_data=$2
     local cmd=$3
 
     if [ -z "$uftrace_data" -o "$uftrace_data" == '-' ]; then
-        uftrace_data=$(get-data-loc "$datadir" 'uftrace' '-' $NO_FREQUENCY)
+        uftrace_data=$(resolve-data-loc "$datadir" 'uftrace' '-' $NO_FREQUENCY)
     elif [[ $uftrace_data == "-"* ]]; then
         local tags=$uftrace_data
         if [[ $tags == *".data" ]]; then
             tags="${tags:0:-5}"
         fi
-        uftrace_data=$(get-data-loc "$datadir" 'uftrace' "$tags" $NO_FREQUENCY)
+        uftrace_data=$(resolve-data-loc "$datadir" 'uftrace' "$tags" $NO_FREQUENCY)
     fi
+
+    ensure-dir $datadir
 
     (
     set -x
@@ -289,15 +287,20 @@ function run-uftrace() {
 }
 
 function resolve-flamegraph-repo() {
-    local datadir=$1
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
+    local datadir=$(resolve-data-dir $1)
     echo $datadir/FlameGraph
 }
 
+function ensure-flamegraph-repo() {
+    local repodir=$1
+    if [ -z "$repodir" -o "$repodir" == '-' ]; then
+        repodir=$(resolve-flamegraph-repo $repodir)
+    fi
+    ensure-repo $FLAMEGRAPH_URL $repodir
+}
+
 function create-flamegraph() {
-    local datadir=$1
+    local datadir=$(resolve-data-dir $1)
     local datafile=$2
     local outfile=$3
 
@@ -307,11 +310,14 @@ function create-flamegraph() {
     fi
 
     if [ -z "$outfile" ]; then
-        outfile=$(get-flamegraph-file "$datadir" "$fullid")
+        outfile=$(resolve-flamegraph-file "$datadir" "$fullid")
     fi
+
+    ensure-dir $datadir
 
     local tool=${fullid%%-*}
     local flamegraphrepo=$(resolve-flamegraph-repo $datadir)
+    ensure-flamegraph-repo $flamegraphrepo
     if [ "$tool" == 'perf' ]; then
         local scriptfile="$datadir/$fullid.script"
         local foldedfile="$datadir/$fullid.folded"
@@ -383,7 +389,7 @@ function do-flamegraph-command() {
     echo
     echo "==== generating profile data with $tool ===="
     echo
-    local datafile=$(get-data-loc "$datadir" "$tool" "$tags" "$frequency")
+    local datafile=$(resolve-data-loc "$datadir" "$tool" "$tags" "$frequency")
     if [ "$tool" == 'perf' ]; then
         if [ "$frequency" == $NO_FREQUENCY ]; then
             frequency=$PERF_FREQUENCY
@@ -404,7 +410,7 @@ function do-flamegraph-command() {
     echo
     echo "==== generating the flamegraph ===="
     echo
-    flamegraphfile=$(get-flamegraph-file "$datadir" "$datafile")
+    flamegraphfile=$(resolve-flamegraph-file "$datadir" "$datafile")
     if ! create-flamegraph "$datadir" "$datafile" "$flamegraphfile"; then
         fail "could not create flamegraph at $flamegraphfile"
     fi
@@ -415,7 +421,7 @@ function do-flamegraph-command() {
         echo
         echo "==== uploading the flamegraph SVG file ===="
         echo
-        #remotefile=$(basename $(get-flamegraph-file "$datadir" "$datafile" 'yes'))
+        #remotefile=$(basename $(resolve-flamegraph-file "$datadir" "$datafile" 'yes'))
         uploadname=$(basename $flamegraphfile)
         # XXX Leave the "flamegraph-" prefix?
         uploadfile="flamegraphs/${remotename#*-}"  # Drop the "flamegraph-" prefix.
@@ -424,7 +430,7 @@ function do-flamegraph-command() {
             return $EC_FALSE
         fi
         echo
-        echo "# uploaded to $(get-upload-url $uploadfile)"
+        echo "# uploaded to $(uploads-resolve-url $uploadfile)"
     fi
 
     return $EC_TRUE
@@ -518,7 +524,7 @@ if [ "$0" == "$BASH_SOURCE" ]; then
     fi
 
     if [ $datafileonly == 'yes' ]; then
-        get-data-loc "$datadir" "$tool" "$tags" "$frequency"
+        resolve-data-loc "$datadir" "$tool" "$tags" "$frequency"
         exit 0
     fi
 

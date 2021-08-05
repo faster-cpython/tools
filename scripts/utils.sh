@@ -11,8 +11,6 @@ EC_FALSE=1
 
 DEVNULL='/dev/null'
 
-PERF_DIR=$HOME/perf-data
-
 
 function print-err() {
     >&2 echo "ERROR: $1"
@@ -35,8 +33,50 @@ function popd-quiet() {
     &>$DEVNULL popd
 }
 
+function ensure-dir() {
+    local targetdir=$1
+    if [ -z "$targetdir" ]; then
+        fail "missing targetdir"
+    fi
+    (
+    set -x
+    mkdir -p "$targetdir"
+    )
+}
 
+
+#############################
+# data dir
+
+PERF_DIR=$HOME/perf-data
+
+function resolve-data-dir() {
+    local datadir=$1
+    if [ -z "$datadir" -o "$datadir" == '-' ]; then
+        datadir=$PERF_DIR
+    fi
+    echo $datadir
+}
+
+
+#############################
 # git
+
+function ensure-repo() {
+    local remote=$1
+    local localdir=$2
+
+    if [ -e $localdir ]; then
+        # XXX Check it?
+        :
+    else
+        ensure-dir $(dirname "$localdir")
+        (
+        set -x
+        git clone "$remote" "$localdir"
+        )
+    fi
+}
 
 function is-repo-clean() {
     pushd-quiet $1

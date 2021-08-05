@@ -11,23 +11,18 @@ UPLOADS_REMOTE=git@github.com:faster-cpython/ideas.git
 UPLOADS_BLOB_URL=https://github.com/faster-cpython/ideas/blob/main
 
 
-function resolve-uploads-repo() {
-    local datadir=$1
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
+function uploads-resolve-repo() {
+    local datadir=$(resolve-data-dir $1)
     echo "$datadir/faster-cpython-ideas"
 }
 
-function ensure-uploads-deps() {
-    local datadir=$1
-    local repodir=$(resolve-uploads-repo $datadir)
-    if [ ! -e $repodir ]; then
-        (
-        set -x
-        git clone $UPLOADS_REMOTE $repodir
-        )
+function uploads-ensure-repo() {
+    local repodir=$1
+    if [ -z "$repodir" -o "$repodir" == '-' ]; then
+        repodir=$(uploads-resolve-repo $repodir)
     fi
+    ensure-repo $UPLOADS_REMOTE $repodir
+
     echo "# make sure faster-cpython-ideas is clean and on the latest main"
     pushd-quiet $repodir
     (
@@ -36,6 +31,11 @@ function ensure-uploads-deps() {
     git pull
     )
     popd-quiet
+}
+
+function uploads-ensure-deps() {
+    local repodir=$(uploads-resolve-repo $1)
+    uploads-ensure-repo $repodir
 }
 
 function upload-file() {
@@ -52,7 +52,8 @@ function upload-file() {
         msg='Add a data file.'
     fi
 
-    local repodir=$(resolve-uploads-repo $datadir)
+    local repodir=$(uploads-resolve-repo $datadir)
+    uploads-ensure-repo $repodir
     pushd-quiet $repodir
     set -e
     (
@@ -66,7 +67,7 @@ function upload-file() {
     popd-quiet
 }
 
-function get-upload-url() {
+function uploads-resolve-url() {
     local remotefile=$1
     echo "$UPLOADS_BLOB_URL/$remotefile"
 }
@@ -76,9 +77,10 @@ function get-upload-url() {
 # the script
 
 if [ "$0" == "$BASH_SOURCE" ]; then
-    localfile=$1
-    remotefile=$2
-    msg=$3
+    datadir=$1
+    localfile=$2
+    remotefile=$3
+    msg=$4
 
     if [ -z "$remotefile" ]; then
         remotefile=$(basename "$localfile")
@@ -86,9 +88,9 @@ if [ "$0" == "$BASH_SOURCE" ]; then
 
     echo "### uploading $localfile ###"
     echo
-    if ! upload-file "$localfile" "$remotefile" "$msg"; then
+    if ! upload-file "$datadir" "$localfile" "$remotefile" "$msg"; then
         fail "upload failed!"
     fi
     echo
-    echo "# uploaded to $(get-upload-url $remotefile)"
+    echo "# uploaded to $(uploads-resolve-url $remotefile)"
 fi

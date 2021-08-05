@@ -12,36 +12,9 @@ CPYTHON_URL='https://github.com/python/cpython'
 PYTHON_PREFIX=/opt/python-perf-tools-cpython-build
 
 
-function cpython-resolve-repo() {
-    local datadir=$1
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
-    echo "$datadir/cpython"
-}
-
-function cpython-resolve-exe() {
-    local repodir=$(cpython-resolve-repo $1)
-    echo "$repodir/python"
-}
-
-function cpython-resolve-config-cache() {
-    local datadir=$1
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
-    echo "$datadir/python-config.cache"
-}
-
-function cpython-resolve-build-info() {
-    local datadir=$1
-    if [ -z "$datadir" -o "$datadir" == '-' ]; then
-        datadir=$PERF_DIR
-    fi
-    echo "$datadir/python-build-info"
-}
-
 function cpython-ensure-deps() {
+    local repodir=$(cpython-resolve-repo $1)
+
     sudo apt install -y \
       build-essential \
       zlib1g-dev \
@@ -60,19 +33,23 @@ function cpython-ensure-deps() {
       libgdbm-compat-dev \
       libffi-dev \
 
+    cpython-ensure-repo $repodir
 }
 
 
 # repo
 
+function cpython-resolve-repo() {
+    local datadir=$(resolve-data-dir $1)
+    echo "$datadir/cpython"
+}
+
 function cpython-ensure-repo() {
-    local repodir=$(cpython-resolve-repo $1)
-    if [ ! -e $repodir ]; then
-        (
-        set -x
-        &>$DEVNULL git clone $CPYTHON_URL $repodir
-        )
+    local repodir=$1
+    if [ -z "$repodir" -o "$repodir" == '-' ]; then
+        repodir=$(cpython-resolve-repo $repodir)
     fi
+    ensure-repo $CPYTHON_URL $repodir
 }
 
 #function cpython-ensure-revision() {
@@ -102,6 +79,21 @@ function cpython-ensure-repo() {
 
 
 # build info
+
+function cpython-resolve-exe() {
+    local repodir=$(cpython-resolve-repo $1)
+    echo "$repodir/python"
+}
+
+function cpython-resolve-config-cache() {
+    local datadir=$(resolve-data-dir $1)
+    echo "$datadir/python-config.cache"
+}
+
+function cpython-resolve-build-info() {
+    local datadir=$(resolve-data-dir $1)
+    echo "$datadir/python-build-info"
+}
 
 function cpython-get-config-opts() {
     local datadir=$1
@@ -160,6 +152,7 @@ function cpython-get-build-id() {
 
     if [ -z "$revision" -o "$revision" == '-' ]; then
         local repodir=$(cpython-resolve-repo $datadir)
+        cpython-ensure-repo $repodir
         pushd-quiet $repodir
         local revision=$(git rev-parse --short HEAD)
         popd-quiet
@@ -183,7 +176,7 @@ function cpython-read-build-id() {
 }
 
 function cpython-ensure-build-info() {
-    local datadir=$1
+    local datadir=$(resolve-data-dir $1)
     local buildid=$2
     local build=$3
     local optlevel=$4
@@ -191,7 +184,10 @@ function cpython-ensure-build-info() {
     local revision=$6
     local configopts=$7
 
+    ensure-dir $datadir
+
     local repodir=$(cpython-resolve-repo $datadir)
+    cpython-ensure-repo $repodir
     local branch=
     if [ -z "$revision" -o "$revision" == '-' ]; then
         local repoinfo=$(get-repo-info $repodir)
@@ -235,10 +231,12 @@ EOF
 # building
 
 function cpython-config-opts-changed() {
-    local datadir=$1
+    local datadir=$(resolve-data-dir $1)
     local build=$2
     local optlevel=$3
     local prefix=$4
+
+    ensure-dir $datadir
 
     # XXX
 
@@ -254,6 +252,7 @@ function cpython-build() {
     local verbose=$6
 
     local repodir=$(cpython-resolve-repo $datadir)
+    cpython-ensure-repo $repodir
     pushd-quiet $repodir
     local revision=$(git rev-parse --short HEAD)
     popd-quiet
@@ -380,8 +379,7 @@ if [ "$0" == "$BASH_SOURCE" ]; then
     done
 
     if [ "$prep" == 'yes' ]; then
-        cpython-ensure-deps
-        cpython-ensure-repo $datadir
+        cpython-ensure-deps $datadir
     fi
     cpython-build "$datadir" "$build" "$optlevel" "$prefix" "$force" "$verbose"
 fi
