@@ -72,6 +72,7 @@ def build_python(build, *,
 
 def cmd_flamegraph(tool, pycmd, pytags, *,
                    datadir=None,
+                   stamp=False,
                    datafileonly=False,
                    upload=False,
                    **tool_kwargs):
@@ -79,7 +80,9 @@ def cmd_flamegraph(tool, pycmd, pytags, *,
         PROFILER_SCRIPT,
         tool,
         '--datadir', datadir or '-',
+        '--stamp' if stamp else '--no-stamp',
         '--tags', pytags or '-',
+        '--upload' if upload else '--no-upload',
     ]
 
     if tool == 'perf':
@@ -97,8 +100,6 @@ def cmd_flamegraph(tool, pycmd, pytags, *,
             *'/dev/null this will not get run'.split(),
         ])
     else:
-        if upload:
-            argv.append('--upload')
         # We could call shlex.split() and then argv.extend() but this is fine.
         argv.append(pycmd)
 
@@ -130,6 +131,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     datacommon = argparse.ArgumentParser(add_help=False)
     datacommon.add_argument('--datadir')
+    datacommon.add_argument('--stamp', action='store_true')
+    datacommon.add_argument('--no-stamp', dest='stamp', action='store_false')
+    datacommon.set_defaults(stamp=False)
 
     pycommon = argparse.ArgumentParser(add_help=False)
     #pycommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)

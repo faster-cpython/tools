@@ -22,7 +22,7 @@ function fail() {
 }
 
 function get-timestamp() {
-    date --utc +"%Y%m%d-%H%M"
+    date --utc +"%Y%m%d_%H%M%S"
 }
 
 function pushd-quiet() {
