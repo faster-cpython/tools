@@ -258,13 +258,13 @@ function cpython-build() {
         (
         set -x
         ./configure $configopts
-        make -j8 CFLAGS=-fno-omit-frame-pointer
+        make -j8 'CFLAGS=-fno-omit-frame-pointer -pg'
         )
     else
         (
         set -x
         &>$DEVNULL ./configure $configopts
-        &>$DEVNULL make -j8 CFLAGS=-fno-omit-frame-pointer
+        &>$DEVNULL make -j8 'CFLAGS=-fno-omit-frame-pointer -pg'
         )
     fi
     popd-quiet

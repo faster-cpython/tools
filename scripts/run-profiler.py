@@ -155,6 +155,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     )
     fgsub.add_argument('--frequency', type=int)
 
+    fgsub = fgsubs.add_parser(
+        'uftrace',
+        parents=[common, pycommon, profcommon, fgcommon],
+    )
+
     args = parser.parse_args(argv)
     ns = vars(args)
 

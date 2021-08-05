@@ -65,6 +65,15 @@ perf report --input $DATAFILE --max-stack 10000 \
             --sort sample \
 
 
+### uftrace ###
+
+# show where time was spent
+uftrace report --data $DATADIR
+
+# show the call graph
+uftrace graph --data $DATADIR
+
+
 ### strace ###
 
 # generate a summary after profiling full Python startup
@@ -94,7 +103,7 @@ source $SCRIPTS_DIR/uploads.sh
 FLAMEGRAPH_REPO=$PERF_DIR/FlameGraph
 
 # CPython's C stacks can get pretty deep.
-PERF_MAX_STACK=1000
+MAX_STACK=1000
 PERF_FREQUENCY=99999  # ~100 khz
 
 
@@ -106,7 +115,7 @@ DATAFILE_SUFFIX='.data'
 NO_FREQUENCY='-'
 
 
-function get-data-file() {
+function get-data-loc() {
     local tool=$1
     local tags=$2
 
@@ -124,6 +133,8 @@ function get-data-file() {
             fi
             tags="-freq$frequency$tags"
         fi
+    elif [ "$tool" == 'uftrace' ]; then
+        :
     else
         fail "unsupported tool '$tool'"
     fi
@@ -132,13 +143,21 @@ function get-data-file() {
 
 function extract-datafile-fullid() {
     local datafile=$1
+
     local name=$(basename "$datafile")
-    #if ! [[ $name =~ '^[^-][^-]*-.*'"\\$DATAFILE_SUFFIX"'$' ]]; then
-    if [[ $name != *"-"*"$DATAFILE_SUFFIX" ]]; then
+    if [[ $name != *"$DATAFILE_SUFFIX" ]]; then
+        print-err "does not look like a datafile: $datafile"
         return $EC_FALSE
     fi
+
     # XXX For now we just hard-code the known length of $DATAFILE_SUFFIX.
-    echo ${name:0:-5}
+    local fullid=${name:0:-5}
+    if [[ $fullid == "" || $fullid == "-"* || $fullid == *"-" ]]; then
+        print-err "does not look like a datafile: $datafile"
+        return $EC_FALSE
+    fi
+
+    echo $fullid
     return $EC_TRUE
 }
 
@@ -201,13 +220,13 @@ function run-perf() {
         frequency=$PERF_FREQUENCY
     fi
     if [ -z "$datafile" ]; then
-        datafile=$(get-data-file 'perf' '' "$frequency")
+        datafile=$(get-data-loc 'perf' '' "$frequency")
     elif [[ $datafile == "-"* ]]; then
         local tags=$datafile
         if [[ $tags == *".data" ]]; then
             tags="${tags:0:-5}"
         fi
-        datafile=$(get-data-file 'perf' "$tags" "$frequency")
+        datafile=$(get-data-loc 'perf' "$tags" "$frequency")
     fi
 
     # We use globals since the trap execute in the context of the caller.
@@ -227,7 +246,7 @@ function run-perf() {
     (
     set -x
     sudo sysctl -w kernel.perf_event_max_sample_rate=$frequency
-    sudo sysctl -w kernel.perf_event_max_stack=$PERF_MAX_STACK
+    sudo sysctl -w kernel.perf_event_max_stack=$MAX_STACK
     sudo perf record \
         --all-cpus \
         -F max \
@@ -238,13 +257,42 @@ function run-perf() {
         #--exclude-perf
     )
     local rc=$?
-    if [ "$rc" -ne $EC_TRUE ]; then
-        return $rc
+    if [ $? -ne $EC_TRUE ]; then
+        return $EC_FALSE
     fi
     (
     set -x
     sudo chown $USER:$USER "$datafile"
     )
+    return $EC_TRUE
+}
+
+function run-uftrace() {
+    local datadir=$1
+    local cmd=$2
+
+    if [ -z "$datadir" ]; then
+        datadir=$(get-data-loc 'uftrace' '' "$frequency")
+    elif [[ $datadir == "-"* ]]; then
+        local tags=$datadir
+        if [[ $tags == *".data" ]]; then
+            tags="${tags:0:-5}"
+        fi
+        datadir=$(get-data-loc 'uftrace' "$tags" "$frequency")
+    fi
+
+    (
+    set -x
+    uftrace record \
+        --data $datadir \
+        --max-stack $MAX_STACK \
+        $cmd
+        #--nest-libcall
+    )
+    if [ $? -ne $EC_TRUE ]; then
+        return $EC_FALSE
+    fi
+    return $EC_TRUE
 }
 
 function create-flamegraph() {
@@ -260,24 +308,43 @@ function create-flamegraph() {
         outfile=$(get-flamegraph-file $fullid)
     fi
 
-    local scriptfile="$PERF_DIR/$fullid.script"
-    local foldedfile="$PERF_DIR/$fullid.folded"
-
     local tool=${fullid%%-*}  # See extract-datafile-tool.
     if [ "$tool" == 'perf' ]; then
+        local scriptfile="$PERF_DIR/$fullid.script"
+        local foldedfile="$PERF_DIR/$fullid.folded"
         (
         set -x
         perf script \
-            --max-stack $PERF_MAX_STACK \
+            --max-stack $MAX_STACK \
             --input $datafile \
             > $scriptfile
-
+        )
+        local rc=$?
+        if [ $? -ne $EC_TRUE ]; then
+            return $EC_FALSE
+        fi
+        (
+        set -x
         $FLAMEGRAPH_REPO/stackcollapse-perf.pl $scriptfile > $foldedfile
         $FLAMEGRAPH_REPO/flamegraph.pl $foldedfile > $outfile
         )
+    elif [ "$tool" == 'uftrace' ]; then
+        (
+        set -x
+        uftrace dump \
+            --data $datafile \
+            --flame-graph \
+            | $FLAMEGRAPH_REPO/flamegraph.pl \
+            > $outfile
+            #--sample-time 1us
+        )
+        if [ $? -ne $EC_TRUE ]; then
+            return $EC_FALSE
+        fi
     else
         fail "unsupported tool '$tool'"
     fi
+
     return $EC_TRUE
 }
 
@@ -307,26 +374,33 @@ function do-flamegraph-command() {
     echo "==== generating profile data with $tool ===="
     echo
     local datafile_freq=$NO_FREQUENCY
-    if [ "$tool" == 'perf' -a -z "$extra_arg" ]; then
-        extra_arg=$PERF_FREQUENCY
-        datafile_freq=$extra_arg
+    if [ -z "$extra_arg" ]; then
+        if [ "$tool" == 'perf' ]; then
+            extra_arg=$PERF_FREQUENCY
+            datafile_freq=$extra_arg
+        fi
     fi
-    local datafile=$(get-data-file "$tool" "$tags" $datafile_freq)
+    local datafile=$(get-data-loc "$tool" "$tags" $datafile_freq)
     if [ "$tool" == 'perf' ]; then
         local frequency=$extra_arg
-        run-perf "$datafile" "$frequency" "$cmd"
+        if ! run-perf "$datafile" "$frequency" "$cmd"; then
+            return $EC_FALSE
+        fi
+    elif [ "$tool" == 'uftrace' ]; then
+        if ! run-uftrace "$datafile" "$cmd"; then
+            return $EC_FALSE
+        fi
     else
         fail "unsupported tool '$tool'"
     fi
     echo
-    echo "# data file: $datafile"
+    echo "# data file(s): $datafile"
 
     echo
     echo "==== generating the flamegraph ===="
     echo
     flamegraphfile=$(get-flamegraph-file $datafile)
-    create-flamegraph "$datafile" "$flamegraphfile"
-    if [ $? -ne $EC_TRUE ]; then
+    if ! create-flamegraph "$datafile" "$flamegraphfile"; then
         fail "could not create flamegraph at $flamegraphfile"
     fi
     echo
@@ -339,10 +413,15 @@ function do-flamegraph-command() {
         #remotefile=$(basename $(get-flamegraph-file "$datafile" 'yes'))
         remotename=$(basename $flamegraphfile)
         remotefile="flamegraphs/${remotename#*-}"
-        upload-file $flamegraphfile $remotefile 'Add a flame graph SVG file.'
+        if ! upload-file $flamegraphfile $remotefile 'Add a flame graph SVG file.'; then
+            print-err "upload failed!"
+            return $EC_FALSE
+        fi
         echo
         echo "# uploaded to $(get-upload-url $remotefile)"
     fi
+
+    return $EC_TRUE
 }
 
 
@@ -413,9 +492,11 @@ if [ "$0" == "$BASH_SOURCE" ]; then
     if [ $datafileonly == 'yes' ]; then
         datafile_freq=$NO_FREQUENCY
         if [ -z "$frequency" ]; then
-            datafile_freq=$PERF_FREQUENCY
+            if [ "$tool" == 'perf' ]; then
+                datafile_freq=$PERF_FREQUENCY
+            fi
         fi
-        get-data-file "$tool" "$tags" $datafile_freq
+        get-data-loc "$tool" "$tags" $datafile_freq
         exit 0
     fi
 

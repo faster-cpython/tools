@@ -43,6 +43,7 @@ function upload-file() {
     fi
 
     pushd-quiet $FASTER_CPYTHON_REPO
+    set -e
     (
     set -x
     cp "$localfile" "$remotefile"
@@ -50,6 +51,7 @@ function upload-file() {
     git commit -m "$msg"
     git push
     )
+    set +e
     popd-quiet
 }
 
@@ -73,7 +75,9 @@ if [ "$0" == "$BASH_SOURCE" ]; then
 
     echo "### uploading $localfile ###"
     echo
-    upload-file "$localfile" "$remotefile" "$msg"
+    if ! upload-file "$localfile" "$remotefile" "$msg"; then
+        fail "upload failed!"
+    fi
     echo
     echo "# uploaded to $(get-upload-url $remotefile)"
 fi
