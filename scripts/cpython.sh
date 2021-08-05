@@ -8,13 +8,38 @@ source $SCRIPTS_DIR/utils.sh
 
 
 CPYTHON_URL='https://github.com/python/cpython'
-CPYTHON_REPO=$PERF_DIR/cpython
-PYTHON=$CPYTHON_REPO/python
 
 PYTHON_PREFIX=/opt/python-perf-tools-cpython-build
-CONFIG_CACHE=$PERF_DIR/python-config.cache
-BUILD_INFO_FILE=$PERF_DIR/python-build-info
 
+
+function cpython-resolve-repo() {
+    local datadir=$1
+    if [ -z "$datadir" -o "$datadir" == '-' ]; then
+        datadir=$PERF_DIR
+    fi
+    echo "$datadir/cpython"
+}
+
+function cpython-resolve-exe() {
+    local repodir=$(cpython-resolve-repo $1)
+    echo "$repodir/python"
+}
+
+function cpython-resolve-config-cache() {
+    local datadir=$1
+    if [ -z "$datadir" -o "$datadir" == '-' ]; then
+        datadir=$PERF_DIR
+    fi
+    echo "$datadir/python-config.cache"
+}
+
+function cpython-resolve-build-info() {
+    local datadir=$1
+    if [ -z "$datadir" -o "$datadir" == '-' ]; then
+        datadir=$PERF_DIR
+    fi
+    echo "$datadir/python-build-info"
+}
 
 function cpython-ensure-deps() {
     sudo apt install -y \
@@ -41,26 +66,29 @@ function cpython-ensure-deps() {
 # repo
 
 function cpython-ensure-repo() {
-    if [ ! -e $CPYTHON_REPO ]; then
+    local repodir=$(cpython-resolve-repo $1)
+    if [ ! -e $repodir ]; then
         (
         set -x
-        &>$DEVNULL git clone $CPYTHON_URL $CPYTHON_REPO
+        &>$DEVNULL git clone $CPYTHON_URL $repodir
         )
     fi
 }
 
 #function cpython-ensure-revision() {
-#    local revision=$1
-#    local remote=$2
+#    local datadir=$1
+#    local revision=$2
+#    local remote=$3
 #
-#    if ! is-repo-clean $CPYTHON_REPO; then
+#    local repodir=$(cpython-resolve-repo $datadir)
+#    if ! is-repo-clean $repodir; then
 #        fail "CPython repo isn't clean"
 #    fi
 #
 #    if [ -n "$remote" ]; then
 #        if is-git-ref $revision; then
 #            local remote_orig=$remote
-#            remote=$(ensure-git-remote $CPYTHON_REPO $remote)
+#            remote=$(ensure-git-remote $repodir $remote)
 #            if [ $? -ne $EC_TRUE ]; then
 #                fail "bad remote '$remote_orig'"
 #            else
@@ -76,14 +104,20 @@ function cpython-ensure-repo() {
 # build info
 
 function cpython-get-config-opts() {
-    local build=$1
-    local optlevel=$2
-    local prefix=$3
-    if [ -z "$prefix" -o "$prefix" == 'yes' ]; then
+    local datadir=$1
+    local build=$2
+    local optlevel=$3
+    local prefix=$4
+    if [ -z "$build" -o "$build" == '-' ]; then
+        build='release'
+    fi
+    if [ -z "$prefix" -o "$prefix" == '-' ]; then
+        # XXX Allow not using "--prefix"?
         prefix=$PYTHON_PREFIX
     fi
+    local configcache=$(cpython-resolve-config-cache $datadir)
 
-    echo -n " --cache-file=$CONFIG_CACHE"
+    echo -n " --cache-file=$configcache"
     echo -n " --prefix=$prefix"
     echo -n ' --enable-ipv6'
 
@@ -100,7 +134,7 @@ function cpython-get-config-opts() {
         ;;
     esac
 
-    if [ -n "$optlevel" ]; then
+    if [ -n "$optlevel" -a "$optlevel" != '-' ]; then
         echo -n " CFLAGS=-O$optlevel"
     fi
 
@@ -109,54 +143,62 @@ function cpython-get-config-opts() {
 }
 
 function cpython-read-config-opts() {
-    if [ ! -e $BUILD_INFO_FILE ]; then
+    local datadir=$1
+    local infofile=$(cpython-resolve-build-info $datadir)
+    if [ ! -e $infofile ]; then
         return $EC_FALSE
     fi
-    jq -r '.config_opts' $BUILD_INFO_FILE
+    jq -r '.config_opts' $infofile
     return $EC_TRUE
 }
 
 function cpython-get-build-id() {
-    local build=$1
-    local optlevel=$2
-    local revision=$3
+    local datadir=$1
+    local build=$2
+    local optlevel=$3
+    local revision=$4
 
-    if [ -z "$revision" ]; then
-        pushd-quiet $CPYTHON_REPO
+    if [ -z "$revision" -o "$revision" == '-' ]; then
+        local repodir=$(cpython-resolve-repo $datadir)
+        pushd-quiet $repodir
         local revision=$(git rev-parse --short HEAD)
         popd-quiet
     fi
 
     local buildid="$revision-$build"
-    if [ -n "optlevel" ]; then
+    if [ -n "$optlevel" -a "$optlevel" != '-' ]; then
         buildid="$buildid-opt$optlevel"
     fi
     echo $buildid
 }
 
 function cpython-read-build-id() {
-    if [ ! -e $BUILD_INFO_FILE ]; then
+    local datadir=$1
+    local infofile=$(cpython-resolve-build-info $datadir)
+    if [ ! -e $infofile ]; then
         return $EC_FALSE
     fi
-    jq '.buildid' $BUILD_INFO_FILE
+    jq '.buildid' $infofile
     return $EC_TRUE
 }
 
 function cpython-ensure-build-info() {
-    local buildid=$1
-    local build=$2
-    local optlevel=$3
-    local prefix=$4
-    local revision=$5
-    local configopts=$6
+    local datadir=$1
+    local buildid=$2
+    local build=$3
+    local optlevel=$4
+    local prefix=$5
+    local revision=$6
+    local configopts=$7
 
+    local repodir=$(cpython-resolve-repo $datadir)
     local branch=
-    if [ -z "$revision" ]; then
-        local repoinfo=$(get-repo-info $CPYTHON_REPO)
+    if [ -z "$revision" -o "$revision" == '-' ]; then
+        local repoinfo=$(get-repo-info $repodir)
         revision=$(echo $repoinfo | jq '.revision')
         branch=$(echo $repoinfo | jq '.branch')
     else
-        pushd-quiet $CPYTHON_REPO
+        pushd-quiet $repodir
         branch=$(git rev-parse --abbrev-ref HEAD)
         popd-quiet
         if [ "$branch" == 'HEAD' ]; then
@@ -164,19 +206,20 @@ function cpython-ensure-build-info() {
         fi
     fi
 
-    if [ -z "$buildid" ]; then
-        buildid=$(cpython-get-build-id "$build" "$optlevel" "$revision")
+    if [ -z "$buildid" -o "$buildid" == '-' ]; then
+        buildid=$(cpython-get-build-id "$datadir" "$build" "$optlevel" "$revision")
     fi
-    local lastid=$(cpython-read-build-id)
+    local lastid=$(cpython-read-build-id $datadir)
     if [ $? -eq $EC_TRUE -a $buildid == $lastid ]; then
         return $EC_TRUE
     fi
 
-    if [ -z "$configopts" ]; then
-        configopts=$(cpython-get-config-opts "$build" "$optlevel" "$prefix")
+    if [ -z "$configopts" -o "$configopts" == '-' ]; then
+        configopts=$(cpython-get-config-opts "$datadir" "$build" "$optlevel" "$prefix")
     fi
 
-    cat << EOF > $BUILD_INFO_FILE
+    local infofile=$(cpython-resolve-build-info $datadir)
+    cat << EOF > $infofile
 {
     "buildid": "$buildid",
     "build": "$build",
@@ -192,9 +235,10 @@ EOF
 # building
 
 function cpython-config-opts-changed() {
-    local build=$1
-    local optlevel=$2
-    local prefix=$3
+    local datadir=$1
+    local build=$2
+    local optlevel=$3
+    local prefix=$4
 
     # XXX
 
@@ -202,21 +246,24 @@ function cpython-config-opts-changed() {
 }
 
 function cpython-build() {
-    local build=$1
-    local optlevel=$2
-    local prefix=$3
-    local verbose=$4
+    local datadir=$1
+    local build=$2
+    local optlevel=$3
+    local prefix=$4
     local force=$5
+    local verbose=$6
 
-    pushd-quiet $CPYTHON_REPO
+    local repodir=$(cpython-resolve-repo $datadir)
+    pushd-quiet $repodir
     local revision=$(git rev-parse --short HEAD)
     popd-quiet
 
-    local buildid=$(cpython-get-build-id "$build" "$optlevel" "$revision")
+    local buildid=$(cpython-get-build-id "$datadir" "$build" "$optlevel" "$revision")
 
+    local python=$(cpython-resolve-exe $datadir)
     if [ "$force" != 'yes' ]; then
-        if [ -e $PYTHON ]; then
-            local buildid_old=$(cpython-read-build-id)
+        if [ -e $python ]; then
+            local buildid_old=$(cpython-read-build-id $datadir)
             if [ "$buildid" == "$buildid_old" ]; then
                 # The build is up-to-date.
                 return $EC_FALSE
@@ -224,36 +271,38 @@ function cpython-build() {
         fi
     fi
 
-    if ! is-repo-clean $CPYTHON_REPO; then
+    echo "'$repodir'"
+    if ! is-repo-clean $repodir; then
         fail "CPython repo isn't clean"
     fi
 
-    if cpython-config-opts-changed "$build" "$optlevel" "$prefix"; then
-        pushd-quiet $CPYTHON_REPO
+    if cpython-config-opts-changed "$datadir" "$build" "$optlevel" "$prefix"; then
+        local configcache=$(cpython-resolve-config-cache $datadir)
+        pushd-quiet $repodir
         if [ "$verbose" == "yes" ]; then
             (
             set -x
             make distclean
-            2>$DEVNULL rm $CONFIG_CACHE
+            2>$DEVNULL rm $configcache
             )
         else
             (
             set -x
             &>$DEVNULL make distclean
-            &>$DEVNULL rm $CONFIG_CACHE
+            &>$DEVNULL rm $configcache
             )
         fi
         popd-quiet
     fi
 
-    local configopts=$(cpython-get-config-opts "$build" "$optlevel" "$prefix")
-    cpython-ensure-build-info "$buildid" "$build" "$optlevel" "$prefix" "$revision" "$configopts"
+    local configopts=$(cpython-get-config-opts "$datadir" "$build" "$optlevel" "$prefix")
+    cpython-ensure-build-info "$datadir" "$buildid" "$build" "$optlevel" "$prefix" "$revision" "$configopts"
 
     # Run the build.
     echo
     echo "==== building Python ===="
     echo
-    pushd-quiet $CPYTHON_REPO
+    pushd-quiet $repodir
     if [ "$verbose" == "yes" ]; then
         (
         set -x
@@ -276,7 +325,63 @@ function cpython-build() {
 # the script
 
 if [ "$0" == "$BASH_SOURCE" ]; then
-    #cpython-ensure-deps
-    #cpython-ensure-repo
-    cpython-build "$@"
+    prep='no'
+    datadir=$PERF_DIR
+    build='release'
+    optlevel='-'
+    prefix=$PYTHON_PREFIX
+    force='no'
+    verbose='no'
+    while test $# -gt 0 ; do
+        arg=$1
+        shift
+        case $arg in
+          --prep)
+            prep='yes'
+            ;;
+          --datadir)
+            datadir=$1
+            shift
+            if [ -z "$datadir" -o "$datadir" == '-' ]; then
+                datadir=$PERF_DIR
+            fi
+            ;;
+          --build)
+            build=$1
+            shift
+            if [ -z "$build" -o "$build" == '-' ]; then
+                build='release'
+            fi
+            ;;
+          --optlevel)
+            optlevel=$1
+            shift
+            if [ -z "$optlevel" ]; then
+                optlevel='-'
+            fi
+            ;;
+          --prefix)
+            prefix=$1
+            shift
+            if [ -z "$prefix" -o "$prefix" == '-' ]; then
+                prefix=$PYTHON_PREFIX
+            fi
+            ;;
+          --force)
+            force='yes'
+            ;;
+          --verbose)
+            verbose='yes'
+            ;;
+          *)
+            fail "unsupported arg $arg"
+            ;;
+        esac
+    done
+
+    if [ "$prep" == 'yes' ]; then
+        cpython-ensure-deps
+        cpython-ensure-repo $datadir
+    fi
+    cpython-build "$datadir" "$build" "$optlevel" "$prefix" "$force" "$verbose"
 fi

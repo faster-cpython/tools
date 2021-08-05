@@ -7,11 +7,10 @@ fi
 source $SCRIPTS_DIR/utils.sh
 source $SCRIPTS_DIR/cpython.sh
 source $SCRIPTS_DIR/upload.sh
+source $SCRIPTS_DIR/run-profiler.sh
 
 
 FLAMEGRAPH_URL=https://github.com/brendangregg/FlameGraph
-# This is duplicated in run-profiler.sh.
-FLAMEGRAPH_REPO=$PERF_DIR/FlameGraph
 
 
 function ensure-perf-deps() {
@@ -50,11 +49,13 @@ function ensure-strace-deps() {
 }
 
 function ensure-flamegraph-deps() {
-    if [ ! -e $FLAMEGRAPH_REPO ]; then
+    local datadir=$1
+    local repodir=$(resolve-flamegraph-repo $datadir)  # from run-profiler.sh
+    if [ ! -e $repodir ]; then
         echo "# get flamegraph tools"
         (
         set -x
-        git clone $FLAMEGRAPH_URL $FLAMEGRAPH_REPO
+        git clone $FLAMEGRAPH_URL $repodir
         )
     fi
 }
@@ -64,11 +65,29 @@ function ensure-flamegraph-deps() {
 # the script
 
 if [ "$0" == "$BASH_SOURCE" ]; then
+    local datadir=$PERF_DIR
+    while test $# -gt 0 ; do
+        arg=$1
+        shift
+        case $arg in
+          --datadir)
+            datadir=$1
+            shift
+            if [ -z "$datadir" -o "$datadir" == '-' ]; then
+                datadir=$PERF_DIR
+            fi
+            ;;
+          *)
+            fail "unsupported arg $arg"
+            ;;
+        esac
+    done
+
     cpython-ensure-deps  # from cpython.sh
-    cpython-ensure-repo  # from cpython.sh
+    cpython-ensure-repo $datadir  # from cpython.sh
     ensure-perf-deps
     ensure-uftrace-deps
     ensure-strace-deps
-    ensure-flamegraph-deps
-    ensure-upload-deps  # from upload.sh
+    ensure-flamegraph-deps $datadir
+    ensure-uploads-deps $datadir  # from upload.sh
 fi

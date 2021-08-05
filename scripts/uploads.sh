@@ -7,20 +7,29 @@ fi
 source $SCRIPTS_DIR/utils.sh
 
 
-FASTER_CPYTHON_URL=git@github.com:faster-cpython/ideas.git
-FASTER_CPYTHON_BLOB_URL=https://github.com/faster-cpython/ideas/blob/main
-FASTER_CPYTHON_REPO=$PERF_DIR/faster-cpython-ideas
+UPLOADS_REMOTE=git@github.com:faster-cpython/ideas.git
+UPLOADS_BLOB_URL=https://github.com/faster-cpython/ideas/blob/main
 
 
-function ensure-upload-deps() {
-    if [ ! -e $FASTER_CPYTHON_REPO ]; then
+function resolve-uploads-repo() {
+    local datadir=$1
+    if [ -z "$datadir" -o "$datadir" == '-' ]; then
+        datadir=$PERF_DIR
+    fi
+    echo "$datadir/faster-cpython-ideas"
+}
+
+function ensure-uploads-deps() {
+    local datadir=$1
+    local repodir=$(resolve-uploads-repo $datadir)
+    if [ ! -e $repodir ]; then
         (
         set -x
-        git clone $FASTER_CPYTHON_URL $FASTER_CPYTHON_REPO
+        git clone $UPLOADS_REMOTE $repodir
         )
     fi
     echo "# make sure faster-cpython-ideas is clean and on the latest main"
-    pushd-quiet $FASTER_CPYTHON_REPO
+    pushd-quiet $repodir
     (
     set -x
     git checkout main
@@ -30,9 +39,10 @@ function ensure-upload-deps() {
 }
 
 function upload-file() {
-    local localfile=$1
-    local remotefile=$2
-    local msg=$3
+    local datadir=$1
+    local localfile=$2
+    local remotefile=$3
+    local msg=$4
 
     if [ -z "$remotefile" ]; then
         remotefile=$(basename "$localfile")
@@ -42,7 +52,8 @@ function upload-file() {
         msg='Add a data file.'
     fi
 
-    pushd-quiet $FASTER_CPYTHON_REPO
+    local repodir=$(resolve-uploads-repo $datadir)
+    pushd-quiet $repodir
     set -e
     (
     set -x
@@ -57,7 +68,7 @@ function upload-file() {
 
 function get-upload-url() {
     local remotefile=$1
-    echo "$FASTER_CPYTHON_BLOB_URL/$remotefile"
+    echo "$UPLOADS_BLOB_URL/$remotefile"
 }
 
 

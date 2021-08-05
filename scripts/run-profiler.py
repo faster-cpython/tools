@@ -8,7 +8,7 @@ CPYTHON_SCRIPT = os.path.join(SCRIPTS_DIR, 'cpython.sh')
 PROFILER_SCRIPT = os.path.join(SCRIPTS_DIR, 'run-profiler.sh')
 
 DATA_DIR = os.path.join(os.path.expanduser('~'), 'perf-data')
-PYTHON = os.path.join(DATA_DIR, 'cpython', 'python')
+PYTHON = os.path.join(DATA_DIR, 'cpython', 'python')  # See cpython.sh.
 
 VERBOSITY = 3
 
@@ -41,13 +41,26 @@ def needs_python(cmd, cmd_kwargs):
         raise NotImplementedError('cmd')
 
 
-def build_python(build, *, force=False):
-    optlevel = 0
-    prefix = ''
-    verbose = 'no'
-    verbose = 'yes'
-    force = 'yes' if force else 'no'
-    argv = [CPYTHON_SCRIPT, build, str(optlevel), prefix, verbose, force]
+def build_python(build, *,
+                 datadir=None,
+                 optlevel=0,  # unoptimized
+                 prefix=None,
+                 force=False,
+                 verbose=False,
+                 ):
+    #verbose = True
+    argv = [
+        CPYTHON_SCRIPT,
+        #'--prep',
+        '--datadir', datadir or '-',
+        '--build', build or '-',
+        '--optlevel', str(optlevel) if optlevel is not None else '-',
+        '--prefix', prefix or '-',
+    ]
+    if force:
+        argv.append('--force')
+    if verbose:
+        argv.append('--verbose')
 
     #print(f'# {" ".join(argv)}')
     proc = subprocess.run(argv)
@@ -58,13 +71,15 @@ def build_python(build, *, force=False):
 # commands
 
 def cmd_flamegraph(tool, pycmd, pytags, *,
+                   datadir=None,
                    datafileonly=False,
                    upload=False,
                    **tool_kwargs):
     argv = [
         PROFILER_SCRIPT,
         tool,
-        '--tags', pytags,
+        '--datadir', datadir or '-',
+        '--tags', pytags or '-',
     ]
 
     if tool == 'perf':
@@ -112,7 +127,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common.add_argument('-q', '--quiet',
                         action='store_const', const=1, default=0)
 
-    pycommon = argparse.ArgumentParser(add_help=False)
+    datacommon = argparse.ArgumentParser(add_help=False)
+    datacommon.add_argument('--datadir')
+
+    pycommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
     pycommon.add_argument('--rebuild', dest='pyrebuild',
                           action='store_true')
     pycommon.add_argument('--no-rebuild', dest='pyrebuild',
@@ -127,14 +145,14 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     pycommon.add_argument('--no-site', dest='nosite', action='store_true')
     pycommon.set_defaults(nosite=False)
 
-    profcommon = argparse.ArgumentParser(add_help=False)
+    profcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
     profcommon.add_argument('--datafile-only', dest='datafileonly',
                             action='store_true')
 
-    fgcommon = argparse.ArgumentParser(add_help=False)
-    fgcommon.add_argument('--upload', action='store_true')
-    fgcommon.add_argument('--no-upload', dest='upload', action='store_false')
-    fgcommon.set_defaults(upload=False)
+    uploadcommon = argparse.ArgumentParser(parents=[datacommon], add_help=False)
+    uploadcommon.add_argument('--upload', action='store_true')
+    uploadcommon.add_argument('--no-upload', dest='upload', action='store_false')
+    uploadcommon.set_defaults(upload=False)
 
     parser = argparse.ArgumentParser(
         prog=prog,
@@ -145,19 +163,19 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = subs.add_parser(
         'flamegraph',
-        parents=[common, pycommon, profcommon, fgcommon],
+        parents=[common, pycommon, profcommon, uploadcommon],
     )
     fgsubs = sub.add_subparsers(dest='tool')
 
     fgsub = fgsubs.add_parser(
         'perf',
-        parents=[common, pycommon, profcommon, fgcommon],
+        parents=[common, pycommon, profcommon, uploadcommon],
     )
     fgsub.add_argument('--frequency', type=int)
 
     fgsub = fgsubs.add_parser(
         'uftrace',
-        parents=[common, pycommon, profcommon, fgcommon],
+        parents=[common, pycommon, profcommon, uploadcommon],
     )
 
     args = parser.parse_args(argv)
@@ -197,7 +215,8 @@ def main(cmd, cmd_kwargs, *, pybuild=None, pyrebuild=False):
         raise ValueError(f'unsupported cmd {cmd!r}')
 
     if pybuild:
-        if not build_python(pybuild, force=pyrebuild):
+        datadir = cmd_kwargs.get('datadir')
+        if not build_python(pybuild, datadir=datadir, force=pyrebuild):
             sys.exit('ERROR: failed to build Python')
 
     run_cmd(**cmd_kwargs)
