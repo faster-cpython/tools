@@ -112,34 +112,44 @@ DATAFILE_SUFFIX='.data'
 NO_FREQUENCY='-'
 
 
+function get-fullid() {
+    local tool=$1
+    local tags=$2
+    local frequency=$3
+
+    if [ -n "$tags" ]; then
+        if [ "$tags" == '-' ]; then
+            tags=""
+        elif [[ $tags != '-'* ]]; then
+            tags="-$tags"
+        fi
+    fi
+    if [ -z "$frequency" -o "$frequency" == '-' ]; then
+        if [ "$tool" == 'perf' ]; then
+            frequency=$PERF_FREQUENCY
+        else
+            frequency=$NO_FREQUENCY
+        fi
+    fi
+    if [ "$frequency" != $NO_FREQUENCY ]; then
+        tags="-freq$frequency$tags"
+    fi
+
+    echo "${tool}${tags}"
+}
+
 function get-data-loc() {
     local datadir=$1
     local tool=$2
     local tags=$3
+    local frequency=$4
 
     if [ -z "$datadir" -o "$datadir" == '-' ]; then
         datadir=$PERF_DIR
     fi
-    if [ -n "$tags" ]; then
-        if [[ $tags != '-'* ]]; then
-            tags=${tags:1}
-        fi
-    fi
 
-    if [ "$tool" == 'perf' ]; then
-        local frequency=$3
-        if [ "$frequency" != $NO_FREQUENCY ]; then
-            if [ -z "$frequency" ]; then
-                frequency=$PERF_FREQUENCY
-            fi
-            tags="-freq$frequency$tags"
-        fi
-    elif [ "$tool" == 'uftrace' ]; then
-        :
-    else
-        fail "unsupported tool '$tool'"
-    fi
-    echo "$datadir/$tool$tags$DATAFILE_SUFFIX"
+    local fullid=$(get-fullid "$tool" "$tags" "$frequency")
+    echo "$datadir/${fullid}$DATAFILE_SUFFIX"
 }
 
 function extract-datafile-fullid() {
@@ -200,11 +210,11 @@ function run-perf() {
     local frequency=$3
     local cmd=$4
 
-    if [ -z "$frequency" ]; then
+    if [ -z "$frequency" -o "$frequency" == '-' ]; then
         frequency=$PERF_FREQUENCY
     fi
     if [ -z "$datafile" ]; then
-        datafile=$(get-data-loc "$datadir" 'perf' '' "$frequency")
+        datafile=$(get-data-loc "$datadir" 'perf' '-' "$frequency")
     elif [[ $datafile == "-"* ]]; then
         local tags=$datafile
         if [[ $tags == *".data" ]]; then
@@ -254,14 +264,14 @@ function run-uftrace() {
     local uftrace_data=$2
     local cmd=$3
 
-    if [ -z "$uftrace_data" ]; then
-        datadir=$(get-data-loc "$datadir" 'uftrace' '' "$frequency")
+    if [ -z "$uftrace_data" -o "$uftrace_data" == '-' ]; then
+        uftrace_data=$(get-data-loc "$datadir" 'uftrace' '-' $NO_FREQUENCY)
     elif [[ $uftrace_data == "-"* ]]; then
         local tags=$uftrace_data
         if [[ $tags == *".data" ]]; then
             tags="${tags:0:-5}"
         fi
-        uftrace_data=$(get-data-loc "$datadir" 'uftrace' "$tags" "$frequency")
+        uftrace_data=$(get-data-loc "$datadir" 'uftrace' "$tags" $NO_FREQUENCY)
     fi
 
     (
@@ -351,7 +361,13 @@ function do-flamegraph-command() {
     local tags=$3
     local cmd=$4
     local upload=$5
-    local extra_arg=$6
+    local frequency=$6  # only expected for perf
+
+    if [ -z "$frequency" -o "$frequency" == '-' ]; then
+        frequency=$NO_FREQUENCY
+    elif [ "$tool" != 'perf' ]; then
+        fail "got unexpected frequency"
+    fi
 
     echo
     echo "==== warming up the disk cache ===="
@@ -367,16 +383,11 @@ function do-flamegraph-command() {
     echo
     echo "==== generating profile data with $tool ===="
     echo
-    local datafile_freq=$NO_FREQUENCY
-    if [ -z "$extra_arg" ]; then
-        if [ "$tool" == 'perf' ]; then
-            extra_arg=$PERF_FREQUENCY
-            datafile_freq=$extra_arg
-        fi
-    fi
-    local datafile=$(get-data-loc "$datadir" "$tool" "$tags" $datafile_freq)
+    local datafile=$(get-data-loc "$datadir" "$tool" "$tags" "$frequency")
     if [ "$tool" == 'perf' ]; then
-        local frequency=$extra_arg
+        if [ "$frequency" == $NO_FREQUENCY ]; then
+            frequency=$PERF_FREQUENCY
+        fi
         if ! run-perf "$datadir" "$datafile" "$frequency" "$cmd"; then
             return $EC_FALSE
         fi
@@ -405,14 +416,15 @@ function do-flamegraph-command() {
         echo "==== uploading the flamegraph SVG file ===="
         echo
         #remotefile=$(basename $(get-flamegraph-file "$datadir" "$datafile" 'yes'))
-        remotename=$(basename $flamegraphfile)
-        remotefile="flamegraphs/${remotename#*-}"
-        if ! upload-file "$datadir" "$flamegraphfile" "$remotefile" 'Add a flame graph SVG file.'; then
+        uploadname=$(basename $flamegraphfile)
+        # XXX Leave the "flamegraph-" prefix?
+        uploadfile="flamegraphs/${remotename#*-}"  # Drop the "flamegraph-" prefix.
+        if ! upload-file "$datadir" "$flamegraphfile" "$uploadfile" 'Add a flame graph SVG file.'; then
             print-err "upload failed!"
             return $EC_FALSE
         fi
         echo
-        echo "# uploaded to $(get-upload-url $remotefile)"
+        echo "# uploaded to $(get-upload-url $uploadfile)"
     fi
 
     return $EC_TRUE
@@ -425,12 +437,12 @@ function do-flamegraph-command() {
 if [ "$0" == "$BASH_SOURCE" ]; then
     # Parse the CLI args.
     tool=
-    tags=
     cmd=
     datadir=$PERF_DIR
+    tags=
     upload='no'
     datafileonly='no'
-    perf_frequency=
+    frequency=$NO_FREQUENCY
     if [ $# -gt 0 ]; then
         tool=$1
         if [[ $tool == "-"* ]]; then
@@ -441,6 +453,9 @@ if [ "$0" == "$BASH_SOURCE" ]; then
             shift
         else
             shift
+        fi
+        if [ "$tool" == 'perf' ]; then
+            frequency=$PERF_FREQUENCY
         fi
     fi
     while test $# -gt 0 ; do
@@ -453,12 +468,14 @@ if [ "$0" == "$BASH_SOURCE" ]; then
             if [ -n "$tags" ]; then
                 if [[ $tags != '-'* ]]; then
                     tags="-$tags"
+                elif [ "$tags" == '-' ]; then
+                    tags=""
                 fi
             fi
             ;;
           --datadir)
             datadir=$1
-            if [ -z "$datadir" ]; then
+            if [ -z "$datadir" -o "$datadir" == '-' ]; then
                 datadir=$PERF_DIR
             fi
             shift
@@ -468,9 +485,11 @@ if [ "$0" == "$BASH_SOURCE" ]; then
             ;;
           --frequency)
             if [ "$tool" == 'perf' ]; then
-                perf_frequency=$1
-                tags="-freq$perf_frequency$tags"
+                frequency=$1
                 shift
+                if [ -z "$frequency" -o "$frequency" == '-' ]; then
+                    frequency=$PERF_FREQUENCY
+                fi
             else
                 fail "unsupported flag $arg"
             fi
@@ -487,21 +506,22 @@ if [ "$0" == "$BASH_SOURCE" ]; then
             ;;
         esac
     done
+    if [ -z "$tool" -o "$tool" == '-' ]; then
+        fail "missing tool"
+    fi
     if [ -z "$cmd" ]; then
         fail "missing cmd"
     fi
 
+    if [ -z "$tags" ]; then
+        tags='-'
+    fi
+
     if [ $datafileonly == 'yes' ]; then
-        datafile_freq=$NO_FREQUENCY
-        if [ -z "$frequency" ]; then
-            if [ "$tool" == 'perf' ]; then
-                datafile_freq=$PERF_FREQUENCY
-            fi
-        fi
-        get-data-loc "$datadir" "$tool" "$tags" $datafile_freq
+        get-data-loc "$datadir" "$tool" "$tags" "$frequency"
         exit 0
     fi
 
     # Run the profiler and generate a flamegraph.
-    do-flamegraph-command "$datadir" "$tool" "$tags" "$cmd" "$upload" "$perf_frequency"
+    do-flamegraph-command "$datadir" "$tool" "$tags" "$cmd" "$upload" "$frequency"
 fi
