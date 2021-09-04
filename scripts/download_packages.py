@@ -36,7 +36,9 @@ def main():
     # Sort from high to low download count
     rows.sort(key=lambda row: -row["download_count"])
     # Look at top 100 releases
-    for row in rows[:100]:
+    rows = rows[:100]
+    print(f"Downloading {len(rows)} packages...")
+    for row in rows:
         print(row)
         info = dl_package_info(row["project"])
         releases = info["releases"]
