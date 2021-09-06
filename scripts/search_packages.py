@@ -1,3 +1,5 @@
+from __future__ import annotations  # Hide annotations from runtime
+
 import argparse
 import contextlib
 import glob
