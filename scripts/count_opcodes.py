@@ -32,6 +32,8 @@ CACHE_WASTED = "__cache_wasted__" # Number of wasted cache entries
 OPS_QUICKENED = "__ops_quickened__" # Number of ops that were quickened
 SKIP_QUICKEN = "__skip_quicken__" # ops not quickened for lack of cache space
 PREV_EXTENDED = "__prev_extended__" # skipped quickening as prev is extended
+NSTORE_FAST = "__nstore_fast__"  # Number of STORE_FAST opcodes
+NSTORE_NONE_FAST = "__nstore_none_fast__"  # Number of STORE_FAST preceded by LOAD_CONST(None)
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -212,6 +214,27 @@ class ConstantsReporter(Reporter):
             key = f"!{const!r}"
             counter[key] += 1
 
+
+STORE_FAST = opcode.opmap["STORE_FAST"]
+LOAD_CONST = opcode.opmap["LOAD_CONST"]
+
+class StoreNoneReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        co_code = co.co_code
+        for i in range(0, len(co_code), 2):
+            counter[NOPCODES] += 1
+            op = co_code[i]
+            if op == STORE_FAST:
+                counter[NSTORE_FAST] += 1
+                if i > 0:
+                    prevop = co_code[i-2]
+                    if prevop == LOAD_CONST:
+                        prevoparg = co_code[i-1]
+                        val = co.co_consts[prevoparg]
+                        if val is None:
+                            counter[NSTORE_NONE_FAST] += 1
+
 class NamesReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
@@ -247,7 +270,9 @@ argparser.add_argument("--names", type=int, metavar="N",
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
-                       help="Show fraction of cache entries needed per opcode ")
+                       help="Show fraction of cache entries needed per opcode")
+argparser.add_argument("--store-none", action="store_true",
+                       help="count frequency of LOAD_CONST(None) + STORE_FAST")
 argparser.add_argument("filenames", nargs="*", metavar="FILE",
                        help="files, directories or tarballs to count")
 
@@ -256,7 +281,7 @@ def main():
     args = argparser.parse_args()
     verbose = 1 + args.verbose - args.quiet
     bias = args.bias or 0
-    if not (args.pairs or args.singles or args.constants or args.names):
+    if not (args.pairs or args.singles or args.constants or args.names or args.store_none):
         args.pairs = 20
 
     filenames = args.filenames
@@ -272,7 +297,9 @@ def main():
         print("In", filenames)
 
     counter = Counter()
-    if args.constants:
+    if args.store_none:
+        reporter = StoreNoneReporter()
+    elif args.constants:
         reporter = ConstantsReporter()
     elif args.names:
         reporter = NamesReporter()
@@ -311,6 +338,19 @@ def main():
     nopcodes = counter[NOPCODES]
     npairs = counter[NPAIRS]
     print(f"Total: {showstats(counter)}")
+
+    if args.store_none:
+        total = counter[NOPCODES]
+        value1 = counter[NSTORE_FAST]
+        value2 = counter[NSTORE_NONE_FAST]
+        fraction1 = value1 / total
+        fraction2 = value2 / value1
+        label1 = "Opcodes:"
+        label2 = "STORE_FAST:"
+        label3 = "STORE_FAST preceded by LOAD_CONST(None):"
+        print(f"{label1:>40} {total:10,}")
+        print(f"{label2:>40} {value1:10,} ({fraction1*100:.2g}%)")
+        print(f"{label3:>40} {value2:10,} ({fraction2*100:.2g}%)")
 
     if args.constants or args.names:
         num = args.constants or args.names
