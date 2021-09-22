@@ -34,6 +34,7 @@ SKIP_QUICKEN = "__skip_quicken__" # ops not quickened for lack of cache space
 PREV_EXTENDED = "__prev_extended__" # skipped quickening as prev is extended
 NSTORE_FAST = "__nstore_fast__"  # Number of STORE_FAST opcodes
 NSTORE_NONE_FAST = "__nstore_none_fast__"  # Number of STORE_FAST preceded by LOAD_CONST(None)
+CO_CONSTS_SIZE = "__co_consts_size__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -47,7 +48,8 @@ SHOW_ITEMS = [
     (CACHE_WASTED, "cache wasted"),
     (OPS_QUICKENED, "ops quickened"),
     (SKIP_QUICKEN, "skip quicken"),
-    (PREV_EXTENDED, "prev extended args")
+    (PREV_EXTENDED, "prev extended args"),
+    (CO_CONSTS_SIZE, "number of co_consts"),
 ]
 
 # TODO: Make this list an option
@@ -161,6 +163,7 @@ class Reporter:
 
         for co in all_code_objects(code):
             counter[NCODEOBJS] += 1
+            counter[CO_CONSTS_SIZE] += len(co.co_consts)
             self.reporting_guts(counter, co, bias)
 
         counter[NLINES] += len(source.splitlines())
