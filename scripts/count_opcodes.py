@@ -35,6 +35,7 @@ PREV_EXTENDED = "__prev_extended__" # skipped quickening as prev is extended
 NSTORE_FAST = "__nstore_fast__"  # Number of STORE_FAST opcodes
 NSTORE_NONE_FAST = "__nstore_none_fast__"  # Number of STORE_FAST preceded by LOAD_CONST(None)
 CO_CONSTS_SIZE = "__co_consts_size__"
+CO_CONSTS_NUM = "__co_consts_num__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -49,7 +50,8 @@ SHOW_ITEMS = [
     (OPS_QUICKENED, "ops quickened"),
     (SKIP_QUICKEN, "skip quicken"),
     (PREV_EXTENDED, "prev extended args"),
-    (CO_CONSTS_SIZE, "number of co_consts"),
+    (CO_CONSTS_SIZE, "total size of co_consts"),
+    (CO_CONSTS_NUM, "number of co_consts"),
 ]
 
 # TODO: Make this list an option
@@ -161,10 +163,14 @@ class Reporter:
             counter[NERRORS] += 1
             return counter
 
+        const_ids = set()
         for co in all_code_objects(code):
             counter[NCODEOBJS] += 1
-            counter[CO_CONSTS_SIZE] += len(co.co_consts)
+            if id(co.co_consts) not in const_ids:
+                const_ids.add(id(co.co_consts))
+                counter[CO_CONSTS_SIZE] += len(co.co_consts)
             self.reporting_guts(counter, co, bias)
+        counter[CO_CONSTS_NUM] = len(const_ids)
 
         counter[NLINES] += len(source.splitlines())
         if verbose > 0:
