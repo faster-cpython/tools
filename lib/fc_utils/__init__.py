@@ -20,6 +20,10 @@ from .text import (
     indent_lines,
     format_item,
 )
+from .python_info import (
+    is_python,
+    get_python_info,
+)
 """
 from .code import (
     FuncID, CodeInfo,

@@ -3,14 +3,22 @@ import json
 import os
 import os.path
 import re
+import shlex
 import subprocess
 import sys
+import sysconfig
 
 
 try:
     PLATLIBDIR = sys.platlibdir
 except AttributeError:
     PLATLIBDIR = 'lib'
+
+
+def is_python(filename):
+    m = re.match(r'^python[\d\.]*(\.exe)?$',
+                 os.path.basename(filename).lower())
+    return m is not None
 
 
 def _hash_file(filename, hashobj=None, gitinfo=None, *, userev=None):
@@ -107,25 +115,44 @@ def _resolve_git(info, isdev):
         else:
             raise NotImplementedError(ref)
 
+    date = None
+    if rev and reporoot:
+        proc = subprocess.run(f"git show --format='%aI' --no-patch {rev}",
+                              shell=True,
+                              capture_output=True,
+                              text=True,
+                              cwd=reporoot,
+                              )
+        if proc.returncode == 0:
+            date = proc.stdout.strip()
+            #date = datetime.datetime.fromisoformat(proc.stdout.strip())
+
     return {
         'root': reporoot,
         'branch': branch,
         'tag': tag,
         'revision': rev or None,
+        'date': date,
     }
 
 
-def _get_runtime_info(python=None):
+def _get_runtime_info(python=None, full=False):
     if python and python != sys.executable:
-        proc = subprocess.run([python, __file__, '_dump'],
+        argv = [python, __file__, '_dump']
+        if full:
+            argv.append('--full')
+        proc = subprocess.run(argv,
                               text=True,
                               capture_output=True,
                               )
-        proc.check_returncode()
+        try:
+            proc.check_returncode()
+        except subprocess.CalledProcessError as exc:
+            print(exc.stderr)
+            raise  # re-raise
         return json.loads(proc.stdout)
 
     version, _git, builddate, compiler = _parse_version(sys.version)
-
 
     stdlib = os.path.dirname(os.__file__)
     if os.path.basename(stdlib) == 'Lib':
@@ -160,6 +187,7 @@ def _get_runtime_info(python=None):
 
     info = {
         'version': version,
+        'version_str': sys.version,
         'hexversion': sys.hexversion,
         'apiversion': sys.api_version,
         'implementation': sys.implementation.name,
@@ -172,6 +200,7 @@ def _get_runtime_info(python=None):
             'compiler': compiler,
             'isdev': isdev,
             'git': git,
+            'configure_args': None,  # set if full
         },
         'install': {
             'executable': sys.executable,
@@ -186,6 +215,14 @@ def _get_runtime_info(python=None):
         #'distro': 'cpython',
         #'distro': 'system',
     }
+
+    if full:
+        configvars = sysconfig.get_config_vars()
+        # XXX Pull in everything from sysconfig.get_config_vars()?
+        configargs = configvars.get('CONFIG_ARGS')
+        if configargs is not None:
+            info['build']['configure_args'] = shlex.split(configargs)
+
     return info
 
 
@@ -201,7 +238,7 @@ def _get_python_id(python, gitinfo=None):
     return m.hexdigest()
 
 
-def _get_python_config(python, prefix):
+def _get_python_config(python, prefix, full=False):
     # XXX
     return None
     ...
@@ -216,16 +253,19 @@ def _get_python_config(python, prefix):
 
 
 
-def get_python_info(python):
-    info = _get_runtime_info(python)
+def get_python_info(python, *, full=False):
+    info = _get_runtime_info(python, full)
     python = info['install']['executable']
 
     git = info['build']['git']
     gitinfo = (git['root'], git['revision']) if git['root'] else None
+    assert 'id' not in info
     info['id'] = _get_python_id(python, gitinfo)
 
+    assert 'config' not in info
     info['config'] = _get_python_config(python,
                                         info['install']['prefix'],
+                                        full,
                                         )
 
     return info
@@ -234,8 +274,8 @@ def get_python_info(python):
 #############################
 # commands
 
-def cmd_show(python, *, fmt='table'):
-    info = get_python_info(python)
+def cmd_show(python, *, fmt='table', full=False):
+    info = get_python_info(python, full=full)
 
     if fmt == 'table':
         # XXX
@@ -248,9 +288,9 @@ def cmd_show(python, *, fmt='table'):
         raise ValueError(f'unsupported fmt {fmt!r}')
 
 
-def cmd_dump():
-    info = _get_runtime_info()
-    json.dump(info, sys.stdout)
+def cmd_dump(*, full=False):
+    info = _get_runtime_info(full=full)
+    json.dump(info, sys.stdout, indent='  ')
 
 
 COMMANDS = {
@@ -272,9 +312,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = subs.add_parser('show')
     sub.add_argument('--format', dest='fmt', default='table')
+    sub.add_argument('--full', action='store_true')
     sub.add_argument('python', nargs='?', default=sys.executable)
 
-    subs.add_parser('_dump')
+    sub = subs.add_parser('_dump')
+    sub.add_argument('--full', action='store_true')
 
     args = parser.parse_args(argv)
     ns = vars(args)
