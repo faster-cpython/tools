@@ -78,7 +78,7 @@ portal_config=
 BENCH_CONN="$BENCH_USER@$BENCH_HOST"
 } 2>/dev/null
 
-alias bench-ssh="bench ssh -p $BENCH_PORT $BENCH_CONN"
+alias bench-ssh="bench ssh -A -p $BENCH_PORT $BENCH_CONN"
 alias bench-scp="bench scp -P $BENCH_PORT"
 { set +x; } 2>/dev/null
 

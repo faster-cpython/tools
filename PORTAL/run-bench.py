@@ -514,7 +514,7 @@ def _build_compile_script(cfg, req):
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git checout {branch}
+                git checkout {branch}
                 git reset --hard {remote}/{branch}
                 )
             fi

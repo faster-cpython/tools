@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal
 import logging
 import shlex
@@ -35,6 +36,22 @@ def render_duration(seconds):
     assert minutes < 60
     seconds -= minutes * 60
     return f'{minutes}m{seconds:.3f}'
+
+
+def get_command_info(argv):
+    executable = argv[0]
+    if _utils.is_python(executable):
+        kind = 'python'
+        data =_utils.get_python_info(executable, full=True)
+    else:
+        kind = None
+        data = None
+    return {
+        'kind': kind,
+        'executable': executable,
+        'argv': argv,
+        'data': data,
+    }
 
 
 ##################################
@@ -103,13 +120,6 @@ def _parse_output(text):
     return result
 
 
-def _render_result(result):
-    yield ''
-    for kind in KINDS:
-        duration = render_duration(result[kind])
-        yield f'{kind + ":":8} {duration}'
-
-
 def _combine_results(*results, average=True):
     if not results:
         return None
@@ -141,6 +151,53 @@ def _run_time(cmd_argv, time_argv, repeat, average):
         else:
             aggregate = result
     return aggregate
+
+
+##################################
+# output
+
+def _render_command_info(info):
+    if info is None:
+        return
+
+    kind = info['kind']
+    data = info['data']
+    if not kind:
+        return
+    elif info['kind'] == 'python':
+        version = data['version_str']
+        yield f'# Python {version}'
+
+        git = [
+            data['build']['git']['revision'][:10],
+        ]
+        git_extra = []
+        branch = data['build']['git']['branch']
+        if branch:
+            git_extra.append(branch)
+        gitdate = data['build']['git']['date']
+        if gitdate:
+            gitdate = datetime.datetime.fromisoformat(gitdate)
+            gitdate = gitdate.strftime('%b |%d %Y, %H:%M:%S %z')
+            gitdate = gitdate.replace('|0', '').replace('|', '')
+#            gitdate = gitdate.replace('T', ' ').replace('-', ' -').replace('+', ' +')
+            git_extra.append(gitdate)
+        git.append(f'({", ".join(git_extra)})')
+        yield f'# git rev {" ".join(git)}'
+
+        configargs = data['build'].get('configure_args')
+        if configargs is not None:
+            configargs.insert(0, './configure')
+            yield f'# {" ".join(configargs)}'
+    else:
+        raise NotImplementedError(info)
+
+
+def _render_result(result):
+    yield ''
+    for kind in KINDS:
+        duration = render_duration(result[kind])
+        yield f'{kind + ":":8} {duration}'
 
 
 ##################################
@@ -179,6 +236,14 @@ def main(cmd_argv, *, repeat=None, average=True):
         run_cmd = _get_cmd_runner(time_argv, cmd_argv)
         run_cmd(capture=False)
         return
+
+    info = get_command_info(cmd_argv)
+    printed = False
+    for line in _render_command_info(info):
+        print(line)
+        printed = True
+    if printed:
+        print()
 
     result = _run_time(cmd_argv, time_argv, repeat, average)
     for line in _render_result(result):
