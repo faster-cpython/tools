@@ -500,22 +500,28 @@ def _build_compile_script(cfg, req):
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
 
+        remote="{remote}"
+
         pushd {bfiles.cpython}
+        if [ -n "$remote" ]; then
+            ( set -x
+            2>/dev/null git remote add {remote} {req.remote_url}
+            git fetch --tags {remote};
+            )
+        fi
         ( set -x
-        2>/dev/null git remote add $remote {req.remote_url}
-        git fetch --tags {remote};
         # Get the upstream tags, just in case.
         git fetch --tags origin;
         )
         branch="{branch}"
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git checkout -b {branch} --track {remote}/{branch}
+                git checkout -b {branch} --track {remote or "origin"}/{branch or "$branch"}
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git checkout {branch}
-                git reset --hard {remote}/{branch}
+                git checkout {branch or "$branch"}
+                git reset --hard {remote or "origin"}/{branch or "$branch"}
                 )
             fi
         fi
