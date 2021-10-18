@@ -476,7 +476,7 @@ def _build_compile_config(cfg, req):
 
     cfg['run_benchmark'] = {}
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
-    cfg['run_benchmark']['system_tune'] = 'False'
+    cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
 
     return cfg
