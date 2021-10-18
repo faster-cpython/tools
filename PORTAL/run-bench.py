@@ -753,7 +753,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     parser.add_argument('--create-only', dest='createonly',
                         action='store_true')
-    parser.add_argument('--optimize', action='store_true')
+    parser.add_argument('--no-optimize', dest='optimize', action='store_false')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--benchmarks')
     parser.add_argument('--branch')
