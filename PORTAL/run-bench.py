@@ -60,6 +60,77 @@ def _resolve_user(cfg, user=None):
     return user
 
 
+def _check_name(name, *, loose=False):
+    if not name:
+        raise ValueError(name)
+    orig = name
+    if loose:
+        name = '_' + name.replace('-', '_')
+    if not name.isidentifier():
+        raise ValueError(orig)
+
+
+class GitHubTarget(types.SimpleNamespace):
+
+    @classmethod
+    def origin(cls, org, project):
+        return cls(org, project, remote_name='origin')
+
+    def __init__(self, org, project, ref=None, remote_name=None, upstream=None):
+        _check_name(org, loose=True)
+        _check_name(project, loose=True)
+        if not ref:
+            ref = None
+        elif not _looks_like_git_branch(ref):
+            if not _looks_like_git_revision(ref):
+                raise ValueError(ref)
+        if not remote_name:
+            remote_name = None
+        else:
+            _check_name(remote_name, loose=True)
+        if upstream is not None and not isinstance(upstream, GitHubTarget):
+            raise TypeError(upstream)
+
+        kwargs = dict(locals())
+        del kwargs['self']
+        del kwargs['__class__']
+        super().__init__(**kwargs)
+
+    @property
+    def remote(self):
+        if self.remote_name:
+            return self.remote_name
+        return self.org if self.upstream else 'upstream'
+
+    @property
+    def url(self):
+        return f'https://github.com/{self.org}/{self.project}'
+
+    @property
+    def archive_url(self):
+        ref = self.ref or 'main'
+        return f'{self.url}/archive/{self.ref or "main"}.tar.gz'
+
+    def copy(self, ref=None):
+        return type(self)(
+            org=self.org,
+            project=self.project,
+            ref=ref or self.ref,
+            upstream=self.upstream,
+        )
+
+    def fork(self, org, project=None, ref=None):
+        return type(self)(
+            org=org,
+            project=project or self.project,
+            ref=ref or self.ref,
+            upstream=self,
+        )
+
+    def as_jsonable(self):
+        return dict(vars(self))
+
+
 def _git_remote_from_ref(ref):
     ...
 
@@ -88,7 +159,7 @@ def _resolve_git_remote(remote, user=None, revision=None, branch=None):
 
 
 def _looks_like_git_branch(value):
-    return bool(re.match(r'^[\w-]+$', value))
+    return bool(re.match(r'^[\w][\w.-]*$', value))
 
 
 def _looks_like_git_revision(value):
@@ -202,6 +273,10 @@ class PortalRequestFS(types.SimpleNamespace):
         return f'{self.data_root}/request.json'
 
     @property
+    def manifest(self):
+        return f'{self.data_root}/benchmarks.manifest'
+
+    @property
     def compile_config(self):
         return f'{self.data_root}/compile.ini'
 
@@ -245,6 +320,10 @@ class BenchRequestFS(types.SimpleNamespace):
     @property
     def pyperformance(self):
         return f'{self.REPOS}/pyperformance'
+
+    @property
+    def pyston_benchmarks(self):
+        return f'{self.REPOS}/pyston-benchmarks'
 
     @property
     def data_root(self):
@@ -398,15 +477,29 @@ def unstage_request(reqid):
 
 class BenchCompileRequest(types.SimpleNamespace):
 
+    CPYTHON = GitHubTarget.origin('python', 'cpython')
+    PYPERFORMANCE = GitHubTarget.origin('python', 'pyperformance')
+    PYSTON_BENCHMARKS = GitHubTarget.origin('pyston', 'python-macrobenchmarks')
+    pyperformance = PYPERFORMANCE
+    pyston_benchmarks = PYSTON_BENCHMARKS
+    #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
+    #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
+
     def __init__(self,
                  id,
-                 remote,
-                 revision,
-                 branch,
-                 benchmarks,
-                 optimize,
-                 debug,
+                 ref,
+                 remote=None,
+                 branch=None,
+                 benchmarks=None,
+                 optimize=True,
+                 debug=False,
                  ):
+        if branch and not _looks_like_git_branch(branch):
+            raise ValueError(branch)
+        if not _looks_like_git_branch(ref):
+            if not _looks_like_git_revision(ref):
+                raise ValueError(ref)
+
         kwargs = dict(locals())
         del kwargs['self']
         del kwargs['__class__']
@@ -416,12 +509,11 @@ class BenchCompileRequest(types.SimpleNamespace):
         )
 
     @property
-    def remote_name(self):
-        return self.remote
-
-    @property
-    def remote_url(self):
-        return f'https://github.com/{self.remote}/cpython'
+    def cpython(self):
+        if self.remote:
+            return self.CPYTHON.fork(self.remote, ref=self.ref)
+        else:
+            return self.CPYTHON.copy(ref=self.ref)
 
     def as_jsonable(self):
         return dict(vars(self))
@@ -442,8 +534,8 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
 
     meta = BenchCompileRequest(
         id=reqid,
+        ref=revision,
         remote=_resolve_git_remote(remote, user, branch, revision),
-        revision=revision,
         branch=branch,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
@@ -452,29 +544,40 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
     return reqid, meta
 
 
+def _build_manifest(req):
+    bfiles = BenchRequestFS(req.id)
+    return textwrap.dedent(f'''
+        [includes]
+        <default>
+        {bfiles.pyston_benchmarks}/benchmarks/MANIFEST
+    '''[1:-1])
+
+
 def _build_compile_config(cfg, req):
-    benchreq = BenchRequestFS(req.id)
+    pfiles = PortalRequestFS(req.id)
+    bfiles = BenchRequestFS(req.id)
 
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
-    cfg['config']['json_dir'] = benchreq.results_dir
+    cfg['config']['json_dir'] = bfiles.results_dir
     cfg['config']['debug'] = str(req.debug)
     # XXX pyperformance should be looking in [scm] for this.
     cfg['config']['git_remote'] = req.remote
 
     cfg['scm'] = {}
-    cfg['scm']['repo_dir'] = benchreq.cpython
+    cfg['scm']['repo_dir'] = bfiles.cpython
     cfg['scm']['git_remote'] = req.remote
     cfg['scm']['update'] = 'True'
 
     cfg['compile'] = {}
-    cfg['compile']['bench_dir'] = benchreq.scratch_dir
+    cfg['compile']['bench_dir'] = bfiles.scratch_dir
     cfg['compile']['pgo'] = str(req.optimize)
     cfg['compile']['lto'] = str(req.optimize)
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
+    cfg['run_benchmark']['manifest'] = pfiles.manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
@@ -486,10 +589,6 @@ def _build_compile_script(cfg, req):
     pfiles = PortalRequestFS(req.id)
     bfiles = BenchRequestFS(req.id)
 
-    remote = req.remote_name or ""
-    revision = req.revision or ""
-    branch = req.branch or ""
-
     # On the bench host:
     python = 'python3.9'
     numjobs = 20
@@ -500,43 +599,89 @@ def _build_compile_script(cfg, req):
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
 
-        remote="{remote}"
+        #####################
+        # Ensure the dependencies.
 
-        pushd {bfiles.cpython}
-        if [ -n "$remote" ]; then
+        if [ ! -e {bfiles.cpython} ]; then
             ( set -x
-            2>/dev/null git remote add {remote} {req.remote_url}
-            git fetch --tags {remote};
+            git clone https://github.com/python/cpython "{bfiles.cpython}"
             )
         fi
-        ( set -x
+        if [ ! -e {bfiles.pyperformance} ]; then
+            ( set -x
+            git clone https://github.com/python/pyperformance "{bfiles.pyperformance}"
+            )
+        fi
+        if [ ! -e {bfiles.pyston_benchmarks} ]; then
+            ( set -x
+            git clone https://github.com/pyston/python-macrobenchmarks "{bfiles.pyston_benchmarks}"
+            )
+        fi
+
+        #####################
+        # Get the repos are ready for the requested remotes and revisions.
+
+        remote="{req.cpython.remote}"
+        if [ "$remote" != 'origin' ]; then
+            ( set -x
+            2>/dev/null git -C "{bfiles.cpython}" remote add "{req.cpython.remote}" "{req.cpython.url}"
+            git -C "{bfiles.cpython}" fetch --tags "{req.cpython.remote}"
+            )
+        fi
         # Get the upstream tags, just in case.
-        git fetch --tags origin;
+        ( set -x
+        git -C "{bfiles.cpython}" fetch --tags origin
         )
-        branch="{branch}"
+        branch="{req.branch or ''}"
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git checkout -b {branch} --track {remote or "origin"}/{branch or "$branch"}
+                git -C "{bfiles.cpython}" checkout -b "{req.branch or '$branch'}" --track "{req.cpython.remote or 'origin'}/{req.branch or '$branch'}"
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git checkout {branch or "$branch"}
-                git reset --hard {remote or "origin"}/{branch or "$branch"}
+                git -C "{bfiles.cpython}" checkout "{req.branch or '$branch'}"
+                git -C "{bfiles.cpython}" reset --hard "{req.cpython.remote}/{req.branch or '$branch'}"
                 )
             fi
         fi
-        popd
+
+        remote="{req.pyperformance.remote}"
+        if [ "$remote" != 'origin' ]; then
+            ( set -x
+            2>/dev/null git -C "{bfiles.pyperformance}" remote add "{req.pyperformance.remote}" "{req.pyperformance.url}"
+            git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
+            )
+        fi
+        ( set -x
+        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.remote}/{req.pyperformance.ref or 'main'}"
+        )
+
+        remote="{req.pyston_benchmarks.remote}"
+        if [ "$remote" != 'origin' ]; then
+            ( set -x
+            2>/dev/null git -C "{bfiles.pyston_benchmarks}" remote add "{req.pyston_benchmarks.remote}" "{req.pyston_benchmarks.url}"
+            git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
+            )
+        fi
+        ( set -x
+        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.remote}/{req.pyston_benchmarks.ref or 'main'}"
+        )
+
+        #####################
+        # Run the benchmarks.
 
         ( set -x
         PYTHONPATH={bfiles.pyperformance} MAKEFLAGS="-j{numjobs}" \\
-            {python} -m pyperformance compile \\
-            --venv {bfiles.venv} \\
-            {pfiles.compile_config} \\
-            {revision} \\
-            {branch} \\
+            "{python}" -m pyperformance compile \\
+            --venv "{bfiles.venv}" \\
+            "{pfiles.compile_config}" \\
+            "{req.ref}" {('"' + req.branch + '"') if req.branch else ''} \\
             2>&1 | tee {pfiles.results_log}
         )
         exitcode=$?
+
+        #####################
+        # Record the results metadata.
 
         results=$(2>/dev/null ls {bfiles.results_data})
         results_name=$(2>/dev/null basename $results)
@@ -565,6 +710,7 @@ def _build_compile_script(cfg, req):
             ln -s $results {pfiles.results_data}
             )
         fi
+
         echo "...done!"
     '''[1:-1])
 
@@ -650,12 +796,17 @@ def create_bench_compile_request(remote, revision, branch=None, *,
 
     os.mkdir(pfiles.reqdir)
 
-    # write metadata.
+    # Write metadata.
     with open(pfiles.request, 'w') as outfile:
         json.dump(req.as_jsonable(), outfile, indent=4)
         print(file=outfile)
 
-    # write the config.
+    # Write the benchmarks manifest.
+    manifest = _build_manifest(req)
+    with open(pfiles.manifest, 'w') as outfile:
+        outfile.write(manifest)
+
+    # Write the config.
     ini = _build_compile_config(cfg, req)
     with open(pfiles.compile_config, 'w') as outfile:
         ini.write(outfile)
