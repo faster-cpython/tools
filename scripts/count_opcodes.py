@@ -36,6 +36,10 @@ NSTORE_FAST = "__nstore_fast__"  # Number of STORE_FAST opcodes
 NSTORE_NONE_FAST = "__nstore_none_fast__"  # Number of STORE_FAST preceded by LOAD_CONST(None)
 CO_CONSTS_SIZE = "__co_consts_size__"
 CO_CONSTS_NUM = "__co_consts_num__"
+NUM_JUMP_ABS = "__num_jump_abs__"
+NUM_JUMP_REL = "__num_jump_rel__"
+NUM_JUMP_ABS_EXT = "__num_jump_abs_extended__"
+NUM_JUMP_REL_EXT = "__num_jump_rel_extended__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -52,6 +56,10 @@ SHOW_ITEMS = [
     (PREV_EXTENDED, "prev extended args"),
     (CO_CONSTS_SIZE, "total size of co_consts"),
     (CO_CONSTS_NUM, "number of co_consts"),
+    (NUM_JUMP_ABS, "number of absolute jumps"),
+    (NUM_JUMP_REL, "number of relative jumps"),
+    (NUM_JUMP_ABS_EXT, "number of absolute jumps with extended args"),
+    (NUM_JUMP_REL_EXT, "number of relative jumps with extended args"),
 ]
 
 # TODO: Make this list an option
@@ -253,6 +261,24 @@ class NamesReporter(Reporter):
                 key = f"!{name}"
                 counter[key] += 1
 
+class JumpsReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        co_code = co.co_code
+        for i in range(0, len(co_code), 2):
+            counter[NOPCODES] += 1
+            op = co_code[i]
+            extended = i>0 and self.prev_is_extended_arg
+            if op in opcode.hasjabs:
+                counter[NUM_JUMP_ABS] += 1
+                if extended:
+                    counter[NUM_JUMP_ABS_EXT] += 1
+            if op in opcode.hasjrel:
+                counter[NUM_JUMP_REL] += 1
+                if extended:
+                    counter[NUM_JUMP_REL_EXT] += 1
+            self.prev_is_extended_arg = opcode.opname[op] == "EXTENDED_ARG"
+
 
 def expand_globs(filenames):
     for filename in filenames:
@@ -276,6 +302,8 @@ argparser.add_argument("--constants", type=int, metavar="N",
                        help="Show N most common constants")
 argparser.add_argument("--names", type=int, metavar="N",
                        help="Show N most common names")
+argparser.add_argument("--jumps", action="store_true",
+                      help="counts jumps with and without extended args")
 argparser.add_argument("--bias", type=int,
                        help="Add bias for opcodes inside for-loops")
 argparser.add_argument("--cache-needs", action="store_true",
@@ -312,6 +340,8 @@ def main():
         reporter = ConstantsReporter()
     elif args.names:
         reporter = NamesReporter()
+    elif args.jumps:
+        reporter = JumpsReporter()
     else:
         reporter = Reporter()
     hits = 0
