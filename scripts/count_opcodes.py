@@ -268,7 +268,7 @@ class JumpsReporter(Reporter):
         for i in range(0, len(co_code), 2):
             counter[NOPCODES] += 1
             op = co_code[i]
-            extended = i>0 and self.prev_is_extended_arg
+            extended = i > 0 and self.prev_is_extended_arg
             if op in opcode.hasjabs:
                 counter[NUM_JUMP_ABS] += 1
                 if extended:
