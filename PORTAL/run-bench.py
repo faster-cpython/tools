@@ -103,6 +103,16 @@ class GitHubTarget(types.SimpleNamespace):
         return self.org if self.upstream else 'upstream'
 
     @property
+    def fullref(self):
+        if self.ref:
+            if _looks_like_git_revision(self.ref):
+                return self.ref
+            branch = self.ref
+        else:
+            branch = 'main'
+        return f'{self.remote}/{branch}' if self.remote else branch
+
+    @property
     def url(self):
         return f'https://github.com/{self.org}/{self.project}'
 
@@ -650,22 +660,22 @@ def _build_compile_script(cfg, req):
         if [ "$remote" != 'origin' ]; then
             ( set -x
             2>/dev/null git -C "{bfiles.pyperformance}" remote add "{req.pyperformance.remote}" "{req.pyperformance.url}"
-            git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
             )
         fi
         ( set -x
-        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.remote}/{req.pyperformance.ref or 'main'}"
+        git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
+        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.fullref}"
         )
 
         remote="{req.pyston_benchmarks.remote}"
         if [ "$remote" != 'origin' ]; then
             ( set -x
             2>/dev/null git -C "{bfiles.pyston_benchmarks}" remote add "{req.pyston_benchmarks.remote}" "{req.pyston_benchmarks.url}"
-            git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
             )
         fi
         ( set -x
-        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.remote}/{req.pyston_benchmarks.ref or 'main'}"
+        git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
+        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.fullref}"
         )
 
         #####################
