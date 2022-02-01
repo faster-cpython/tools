@@ -480,7 +480,8 @@ class BenchCompileRequest(types.SimpleNamespace):
     CPYTHON = GitHubTarget.origin('python', 'cpython')
     PYPERFORMANCE = GitHubTarget.origin('python', 'pyperformance')
     PYSTON_BENCHMARKS = GitHubTarget.origin('pyston', 'python-macrobenchmarks')
-    pyperformance = PYPERFORMANCE.copy('bc47417')  # main from 2021-10-21
+
+    pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
     pyston_benchmarks = PYSTON_BENCHMARKS.copy('96730b0')  # main from 2021-07-15
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
