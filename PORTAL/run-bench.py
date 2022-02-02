@@ -126,14 +126,16 @@ class GitHubTarget(types.SimpleNamespace):
             org=self.org,
             project=self.project,
             ref=ref or self.ref,
+            remote_name=self.remote_name,
             upstream=self.upstream,
         )
 
-    def fork(self, org, project=None, ref=None):
+    def fork(self, org, project=None, ref=None, remote_name=None):
         return type(self)(
             org=org,
             project=project or self.project,
             ref=ref or self.ref,
+            remote_name=remote_name,
             upstream=self,
         )
 
