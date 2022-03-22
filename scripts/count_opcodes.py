@@ -269,15 +269,21 @@ class JumpsReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
         co_code = co.co_code
+        extra = 0
         for i in range(0, len(co_code), 2):
             counter[NOPCODES] += 1
             op = co_code[i]
-            extended = i > 0 and self.prev_is_extended_arg
+            oparg = extra*256 + co_code[i+1]
+            if op == opcode.EXTENDED_ARG:
+                extra = oparg
+                continue
+            extended = extra > 0
+            extra = 0
             if op in opcode.hasjabs:
                 counter[NUM_JUMP_ABS] += 1
                 if extended:
                     counter[NUM_JUMP_ABS_EXT] += 1
-                target = 2 * co_code[i+1]
+                target = 2 * oparg
                 if target < i:
                     counter[NUM_JUMP_ABS_BACKWARDS] += 1
                     if extended:
@@ -286,7 +292,6 @@ class JumpsReporter(Reporter):
                 counter[NUM_JUMP_REL] += 1
                 if extended:
                     counter[NUM_JUMP_REL_EXT] += 1
-            self.prev_is_extended_arg = opcode.opname[op] == "EXTENDED_ARG"
 
 
 def expand_globs(filenames):
