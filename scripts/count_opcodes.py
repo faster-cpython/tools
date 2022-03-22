@@ -42,6 +42,7 @@ NUM_JUMP_ABS_EXT = "__num_jump_abs_extended__"
 NUM_JUMP_REL_EXT = "__num_jump_rel_extended__"
 NUM_JUMP_ABS_BACKWARDS = "__num_jump_abs_backwards__"
 NUM_JUMP_ABS_BACKWARDS_EXT = "__num_jump_abs_extended_backwards__"
+NUM_SHORT_ABS_JUMPS = "__num_short_abs_jumps__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -64,6 +65,7 @@ SHOW_ITEMS = [
     (NUM_JUMP_REL_EXT, "number of relative jumps with extended args"),
     (NUM_JUMP_ABS_BACKWARDS, "number of absolute jumps backwards"),
     (NUM_JUMP_ABS_BACKWARDS_EXT, "number of absolute jumps backwards with extended args"),
+    (NUM_SHORT_ABS_JUMPS, "number of absolute jumps with delta < 256"),
 ]
 
 # TODO: Make this list an option
@@ -288,6 +290,8 @@ class JumpsReporter(Reporter):
                     counter[NUM_JUMP_ABS_BACKWARDS] += 1
                     if extended:
                         counter[NUM_JUMP_ABS_BACKWARDS_EXT] += 1
+                if abs(target-i)//2 < 256:
+                    counter[NUM_SHORT_ABS_JUMPS] += 1
             if op in opcode.hasjrel:
                 counter[NUM_JUMP_REL] += 1
                 if extended:
