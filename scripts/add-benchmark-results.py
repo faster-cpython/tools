@@ -207,6 +207,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     parser.add_argument('--host')
     parser.add_argument('--repo', default=REPO)
     parser.add_argument('--branch', default=BRANCH)
+    parser.add_argument('--upload', action='store_true')
     parser.add_argument('filenames', nargs='+')
 
     args = parser.parse_args(argv)
@@ -215,8 +216,13 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return ns
 
 
-def main(filenames, release=None, host=None, repo=REPO, branch=BRANCH):
-    print(filenames)
+def main(filenames, *,
+         release=None,
+         host=None,
+         repo=REPO,
+         branch=BRANCH,
+         upload=False,
+         ):
     repo, isremote = prepare_repo(repo, branch)
     add_results = add_results_to_remote if isremote else add_results_to_local
     assert filenames
@@ -234,8 +240,15 @@ def main(filenames, release=None, host=None, repo=REPO, branch=BRANCH):
         print()
         print(msg)
     if not isremote:
-        print()
-        print('(Now you may push to your GitHub clone and make a pull request.)')
+        # XXX Optionally create the pull request?
+        if upload:
+            git('push', repo=repo)
+            print('(Now you may make a pull request.)')
+        else:
+            print()
+            print('(Now you may push to your GitHub clone and make a pull request.)')
+        ghuser = '<your GH user>'
+        print('({REPO}/compare/main...{ghuser}:{branch}?expand=1)')
 
 
 if __name__ == '__main__':
