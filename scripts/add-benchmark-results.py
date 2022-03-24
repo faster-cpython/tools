@@ -17,13 +17,13 @@ DIRNAME = 'benchmark-results'
 BRANCH = 'add-benchmark-results'
 
 
-def git(cmd, *args, reporoot, capture=False, quiet=False):
+def git(cmd, *args, root, capture=False, quiet=False):
     """Run git with the given command."""
     argv = [GIT, cmd, *args]
     if not quiet:
-        print(f'# {" ".join(shlex.quote(a) for a in argv)} (cwd: {reporoot})')
+        print(f'# {" ".join(shlex.quote(a) for a in argv)} (cwd: {root})')
     kwargs = dict(
-        cwd=reporoot,
+        cwd=root,
         check=True,
     )
     if capture:
@@ -38,21 +38,22 @@ def git(cmd, *args, reporoot, capture=False, quiet=False):
         return ''
 
 
-def ensure_git_branch(reporoot, branch):
+def ensure_git_branch(root, branch):
     """Switch to the given branch, creating it if necessary."""
     actual = git(
         'rev-parse', '--abbrev-ref', 'HEAD',
-        reporoot=reporoot,
+        root=root,
         capture=True,
         quiet=True,
     )
     if actual != branch:
-        text = git('branch', '--list', reporoot=reporoot, capture=True)
+        text = git('branch', '--list', root=root, capture=True)
         if branch in text.split():
             # It alrady exists.
-            git('checkout', branch)
+            git('checkout', branch, root=root)
         else:
-            git('checkout', '-b', branch)
+            git('checkout', 'main', root=root)
+            git('checkout', '-b', branch, root=root)
     # else we're already there so do nothing.
 
 
@@ -152,17 +153,29 @@ def get_uploaded_name(metadata, release=None, host=None):
     return f'{implname}-{release}-{commit[:10]}-{host}-{compat}.json'
 
 
+def prepare_repo(repo, branch=BRANCH):
+    """Get the repo ready before adding results."""
+    repo, isremote = resolve_repo(repo)
+
+    if isremote:
+        raise NotImplementedError
+    else:
+        # Note that we do not switch the branch back when we are done.
+        ensure_git_branch(repo, branch)
+
+    return repo, isremote
+
+
 def add_results_to_local(reporoot, name, localfile, *, branch=BRANCH):
     """Add the file to a local repo using the given name."""
-    target = os.path.join(reporoot, DIRNAME, name)
+    reltarget = os.path.join(DIRNAME, name)
+    target = os.path.join(reporoot, reltarget)
     if os.path.exists(target):
         # XXX ignore if the same?
         raise Exception(f'{target} already exists')
-    # Note that we do not switch the branch back when we are done.
-    ensure_git_branch(reporoot, branch)
     shutil.copyfile(localfile, target)
-    git('add', target, reporoot=reporoot)
-    git('commit', '-m', f'Add Benchmark Results ({name})', reporoot=reporoot)
+    git('add', reltarget, root=reporoot)
+    git('commit', '-m', f'Add Benchmark Results ({name})', root=reporoot)
     return textwrap.dedent(f'''
         DONE: added benchmark results to local repo
         from: {localfile}
@@ -181,14 +194,6 @@ def add_results_to_remote(url, name, localfile, *, branch=BRANCH):
     # * create a pull request using the GH API using a temporary local clone
     # * create a pull request using just the GH API (is this possible?)
     raise NotImplementedError
-
-
-def add_results(localfile, remotename, *, repo=REPO, branch=BRANCH):
-    repo, isremote = resolve_repo(repo)
-    if isremote:
-        return add_results_to_remote(repo, remotename, localfile, branch=branch)
-    else:
-        return add_results_to_local(repo, remotename, localfile, branch=branch)
 
 
 #######################################
@@ -213,17 +218,14 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
 
 def main(filename, release=None, host=None, repo=REPO, branch=BRANCH):
+    repo, isremote = prepare_repo(repo, branch)
+    add_results = add_results_to_remote if isremote else add_results_to_local
     with ensure_json(filename) as localfile:
         with open(localfile) as infile:
             text = infile.read()
         metadata = parse_metadata(text)
         name = get_uploaded_name(metadata, release, host)
-        msg = add_results(
-            localfile,
-            name,
-            repo=repo,
-            branch=branch,
-        )
+        msg = add_results(repo, name, localfile, branch=branch)
     print()
     print(msg)
 
