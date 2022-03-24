@@ -40,6 +40,9 @@ NUM_JUMP_ABS = "__num_jump_abs__"
 NUM_JUMP_REL = "__num_jump_rel__"
 NUM_JUMP_ABS_EXT = "__num_jump_abs_extended__"
 NUM_JUMP_REL_EXT = "__num_jump_rel_extended__"
+NUM_JUMP_ABS_BACKWARDS = "__num_jump_abs_backwards__"
+NUM_JUMP_ABS_BACKWARDS_EXT = "__num_jump_abs_extended_backwards__"
+NUM_SHORT_ABS_JUMPS = "__num_short_abs_jumps__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -60,6 +63,9 @@ SHOW_ITEMS = [
     (NUM_JUMP_REL, "number of relative jumps"),
     (NUM_JUMP_ABS_EXT, "number of absolute jumps with extended args"),
     (NUM_JUMP_REL_EXT, "number of relative jumps with extended args"),
+    (NUM_JUMP_ABS_BACKWARDS, "number of absolute jumps backwards"),
+    (NUM_JUMP_ABS_BACKWARDS_EXT, "number of absolute jumps backwards with extended args"),
+    (NUM_SHORT_ABS_JUMPS, "number of absolute jumps with delta < 256"),
 ]
 
 # TODO: Make this list an option
@@ -265,19 +271,31 @@ class JumpsReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
         co_code = co.co_code
+        extra = 0
         for i in range(0, len(co_code), 2):
             counter[NOPCODES] += 1
             op = co_code[i]
-            extended = i > 0 and self.prev_is_extended_arg
+            oparg = extra*256 + co_code[i+1]
+            if op == opcode.EXTENDED_ARG:
+                extra = oparg
+                continue
+            extended = extra > 0
+            extra = 0
             if op in opcode.hasjabs:
                 counter[NUM_JUMP_ABS] += 1
                 if extended:
                     counter[NUM_JUMP_ABS_EXT] += 1
+                target = 2 * oparg
+                if target < i:
+                    counter[NUM_JUMP_ABS_BACKWARDS] += 1
+                    if extended:
+                        counter[NUM_JUMP_ABS_BACKWARDS_EXT] += 1
+                if abs(target-i)//2 < 256:
+                    counter[NUM_SHORT_ABS_JUMPS] += 1
             if op in opcode.hasjrel:
                 counter[NUM_JUMP_REL] += 1
                 if extended:
                     counter[NUM_JUMP_REL_EXT] += 1
-            self.prev_is_extended_arg = opcode.opname[op] == "EXTENDED_ARG"
 
 
 def expand_globs(filenames):
