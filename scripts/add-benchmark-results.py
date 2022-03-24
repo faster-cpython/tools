@@ -3,9 +3,11 @@ import hashlib
 import json
 import os
 import os.path
+import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 import urllib.parse
 
@@ -17,13 +19,82 @@ DIRNAME = 'benchmark-results'
 BRANCH = 'add-benchmark-results'
 
 
-def git(cmd, *args, reporoot, capture=False, quiet=False):
+def get_os_name(metadata=None):
+    if metadata:
+        platform = metadata['platform'].lower()
+        if 'linux' in platform:
+            return 'linux'
+        elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
+            return 'mac'
+        elif 'win' in platform:
+            return 'windows'
+        else:
+            raise NotImplementedError(platform)
+    else:
+        if sys.platform == 'win32':
+            return 'windows'
+        elif sys.paltform == 'linux':
+            return 'linux'
+        elif sys.platform == 'darwin':
+            return 'mac'
+        else:
+            raise NotImplementedError(sys.platform)
+
+
+def get_arch(metadata=None):
+    if metadata:
+        platform = metadata['platform'].lower()
+        if 'x86_64' in platform:
+            return 'x86_64'
+        elif 'amd64' in platform:
+            return 'amd64'
+
+        procinfo = metadata['cpu_model_name'].lower()
+        if 'aarch64' in procinfo:
+            return 'arm64'
+        elif 'arm' in procinfo:
+            if '64' in procinfo:
+                return 'arm64'
+            else:
+                return 'arm32'
+        elif 'intel' in procinfo:
+            return 'x86_64'
+        else:
+            raise NotImplementedError((platform, procinfo))
+    else:
+        uname = platform.uname()
+        machine = uname.machine.lower()
+        if machine in ('amd64', 'x86_64'):
+            return machine
+        elif machine == 'aarch64':
+            return 'arm64'
+        elif 'arm' in machine:
+            return 'arm'
+        else:
+            raise NotImplementedError(machine)
+
+
+def resolve_host(host, metadata=None):
+    """Return the best string to use as a label for the host."""
+    if host:
+        return host
+    # We could use metadata['hostname'] but that doesn't
+    # make a great label in the default case.
+    host = get_os_name(metadata)
+    arch = get_arch(metadata)
+    if arch in ('arm32', 'arm64'):
+        host += '-arm'
+    # Ignore everything else.
+    return host
+
+
+def git(cmd, *args, root, capture=False, quiet=False):
     """Run git with the given command."""
     argv = [GIT, cmd, *args]
     if not quiet:
-        print(f'# {" ".join(shlex.quote(a) for a in argv)} (cwd: {reporoot})')
+        print(f'# {" ".join(shlex.quote(a) for a in argv)} (cwd: {root})')
     kwargs = dict(
-        cwd=reporoot,
+        cwd=root,
         check=True,
     )
     if capture:
@@ -38,21 +109,22 @@ def git(cmd, *args, reporoot, capture=False, quiet=False):
         return ''
 
 
-def ensure_git_branch(reporoot, branch):
+def ensure_git_branch(root, branch):
     """Switch to the given branch, creating it if necessary."""
     actual = git(
         'rev-parse', '--abbrev-ref', 'HEAD',
-        reporoot=reporoot,
+        root=root,
         capture=True,
         quiet=True,
     )
     if actual != branch:
-        text = git('branch', '--list', reporoot=reporoot, capture=True)
+        text = git('branch', '--list', root=root, capture=True)
         if branch in text.split():
             # It alrady exists.
-            git('checkout', branch)
+            git('checkout', branch, root=root)
         else:
-            git('checkout', '-b', branch)
+            git('checkout', 'main', root=root)
+            git('checkout', '-b', branch, root=root)
     # else we're already there so do nothing.
 
 
@@ -152,24 +224,34 @@ def get_uploaded_name(metadata, release=None, host=None):
     return f'{implname}-{release}-{commit[:10]}-{host}-{compat}.json'
 
 
+def prepare_repo(repo, branch=BRANCH):
+    """Get the repo ready before adding results."""
+    repo, isremote = resolve_repo(repo)
+
+    if isremote:
+        raise NotImplementedError
+    else:
+        # Note that we do not switch the branch back when we are done.
+        ensure_git_branch(repo, branch)
+
+    return repo, isremote
+
+
 def add_results_to_local(reporoot, name, localfile, *, branch=BRANCH):
     """Add the file to a local repo using the given name."""
-    target = os.path.join(reporoot, DIRNAME, name)
+    reltarget = os.path.join(DIRNAME, name)
+    target = os.path.join(reporoot, reltarget)
     if os.path.exists(target):
         # XXX ignore if the same?
         raise Exception(f'{target} already exists')
-    # Note that we do not switch the branch back when we are done.
-    ensure_git_branch(reporoot, branch)
     shutil.copyfile(localfile, target)
-    git('add', target, reporoot=reporoot)
-    git('commit', '-m', f'Add Benchmark Results ({name})', reporoot=reporoot)
+    git('add', reltarget, root=reporoot)
+    git('commit', '-m', f'Add Benchmark Results ({name})', root=reporoot)
     return textwrap.dedent(f'''
         DONE: added benchmark results to local repo
         from: {localfile}
         to:   repo at {reporoot}
         as:   {DIRNAME}/{name}
-
-        (Now you may push to your GitHub clone and make a pull request.)
     ''').strip()
 
 
@@ -183,19 +265,8 @@ def add_results_to_remote(url, name, localfile, *, branch=BRANCH):
     raise NotImplementedError
 
 
-def add_results(localfile, remotename, *, repo=REPO, branch=BRANCH):
-    repo, isremote = resolve_repo(repo)
-    if isremote:
-        return add_results_to_remote(repo, remotename, localfile, branch=branch)
-    else:
-        return add_results_to_local(repo, remotename, localfile, branch=branch)
-
-
 #######################################
 # the script
-
-import sys
-
 
 def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
@@ -204,7 +275,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     parser.add_argument('--host')
     parser.add_argument('--repo', default=REPO)
     parser.add_argument('--branch', default=BRANCH)
-    parser.add_argument('filename')
+    parser.add_argument('--upload', action='store_true')
+    parser.add_argument('filenames', nargs='+')
 
     args = parser.parse_args(argv)
     ns = vars(args)
@@ -212,20 +284,41 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return ns
 
 
-def main(filename, release=None, host=None, repo=REPO, branch=BRANCH):
-    with ensure_json(filename) as localfile:
-        with open(localfile) as infile:
-            text = infile.read()
-        metadata = parse_metadata(text)
-        name = get_uploaded_name(metadata, release, host)
-        msg = add_results(
-            localfile,
-            name,
-            repo=repo,
-            branch=branch,
-        )
-    print()
-    print(msg)
+def main(filenames, *,
+         release=None,
+         host=None,
+         repo=REPO,
+         branch=BRANCH,
+         upload=False,
+         ):
+    repo, isremote = prepare_repo(repo, branch)
+    add_results = add_results_to_remote if isremote else add_results_to_local
+    assert filenames
+    for filename in filenames:
+        print()
+        print('#' * 40)
+        print(f'adding {filename} to repo at {repo}...')
+        print()
+        with ensure_json(filename) as localfile:
+            with open(localfile) as infile:
+                text = infile.read()
+            metadata = parse_metadata(text)
+            _host = resolve_host(host, metadata)
+            name = get_uploaded_name(metadata, release, _host)
+            msg = add_results(repo, name, localfile, branch=branch)
+        print()
+        print(msg)
+    if not isremote:
+        # XXX Optionally create the pull request?
+        if upload:
+            git('push', repo=repo)
+            print()
+            print('(Now you may make a pull request.)')
+        else:
+            print()
+            print('(Now you may push to your GitHub clone and make a pull request.)')
+        ghuser = '<your GH user>'
+        print('({REPO}/compare/main...{ghuser}:{branch}?expand=1)')
 
 
 if __name__ == '__main__':
