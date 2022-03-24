@@ -181,8 +181,6 @@ def add_results_to_local(reporoot, name, localfile, *, branch=BRANCH):
         from: {localfile}
         to:   repo at {reporoot}
         as:   {DIRNAME}/{name}
-
-        (Now you may push to your GitHub clone and make a pull request.)
     ''').strip()
 
 
@@ -209,7 +207,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     parser.add_argument('--host')
     parser.add_argument('--repo', default=REPO)
     parser.add_argument('--branch', default=BRANCH)
-    parser.add_argument('filename')
+    parser.add_argument('filenames', nargs='+')
 
     args = parser.parse_args(argv)
     ns = vars(args)
@@ -217,17 +215,27 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return ns
 
 
-def main(filename, release=None, host=None, repo=REPO, branch=BRANCH):
+def main(filenames, release=None, host=None, repo=REPO, branch=BRANCH):
+    print(filenames)
     repo, isremote = prepare_repo(repo, branch)
     add_results = add_results_to_remote if isremote else add_results_to_local
-    with ensure_json(filename) as localfile:
-        with open(localfile) as infile:
-            text = infile.read()
-        metadata = parse_metadata(text)
-        name = get_uploaded_name(metadata, release, host)
-        msg = add_results(repo, name, localfile, branch=branch)
-    print()
-    print(msg)
+    assert filenames
+    for filename in filenames:
+        print()
+        print('#' * 40)
+        print(f'adding {filename} to repo at {repo}...')
+        print()
+        with ensure_json(filename) as localfile:
+            with open(localfile) as infile:
+                text = infile.read()
+            metadata = parse_metadata(text)
+            name = get_uploaded_name(metadata, release, host)
+            msg = add_results(repo, name, localfile, branch=branch)
+        print()
+        print(msg)
+    if not isremote:
+        print()
+        print('(Now you may push to your GitHub clone and make a pull request.)')
 
 
 if __name__ == '__main__':
