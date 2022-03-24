@@ -3,9 +3,11 @@ import hashlib
 import json
 import os
 import os.path
+import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 import urllib.parse
 
@@ -15,6 +17,75 @@ GIT = shutil.which('git')
 REPO = 'https://github.com/faster-cpython/ideas'
 DIRNAME = 'benchmark-results'
 BRANCH = 'add-benchmark-results'
+
+
+def get_os_name(metadata=None):
+    if metadata:
+        platform = metadata['platform'].lower()
+        if 'linux' in platform:
+            return 'linux'
+        elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
+            return 'mac'
+        elif 'win' in platform:
+            return 'windows'
+        else:
+            raise NotImplementedError(platform)
+    else:
+        if sys.platform == 'win32':
+            return 'windows'
+        elif sys.paltform == 'linux':
+            return 'linux'
+        elif sys.platform == 'darwin':
+            return 'mac'
+        else:
+            raise NotImplementedError(sys.platform)
+
+
+def get_arch(metadata=None):
+    if metadata:
+        platform = metadata['platform'].lower()
+        if 'x86_64' in platform:
+            return 'x86_64'
+        elif 'amd64' in platform:
+            return 'amd64'
+
+        procinfo = metadata['cpu_model_name'].lower()
+        if 'aarch64' in procinfo:
+            return 'arm64'
+        elif 'arm' in procinfo:
+            if '64' in procinfo:
+                return 'arm64'
+            else:
+                return 'arm32'
+        elif 'intel' in procinfo:
+            return 'x86_64'
+        else:
+            raise NotImplementedError((platform, procinfo))
+    else:
+        uname = platform.uname()
+        machine = uname.machine.lower()
+        if machine in ('amd64', 'x86_64'):
+            return machine
+        elif machine == 'aarch64':
+            return 'arm64'
+        elif 'arm' in machine:
+            return 'arm'
+        else:
+            raise NotImplementedError(machine)
+
+
+def resolve_host(host, metadata=None):
+    """Return the best string to use as a label for the host."""
+    if host:
+        return host
+    # We could use metadata['hostname'] but that doesn't
+    # make a great label in the default case.
+    host = get_os_name(metadata)
+    arch = get_arch(metadata)
+    if arch in ('arm32', 'arm64'):
+        host += '-arm'
+    # Ignore everything else.
+    return host
 
 
 def git(cmd, *args, root, capture=False, quiet=False):
@@ -197,9 +268,6 @@ def add_results_to_remote(url, name, localfile, *, branch=BRANCH):
 #######################################
 # the script
 
-import sys
-
-
 def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
     parser = argparse.ArgumentParser(prog=prog)
@@ -235,7 +303,8 @@ def main(filenames, *,
             with open(localfile) as infile:
                 text = infile.read()
             metadata = parse_metadata(text)
-            name = get_uploaded_name(metadata, release, host)
+            _host = resolve_host(host, metadata)
+            name = get_uploaded_name(metadata, release, _host)
             msg = add_results(repo, name, localfile, branch=branch)
         print()
         print(msg)
