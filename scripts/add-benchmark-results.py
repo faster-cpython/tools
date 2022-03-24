@@ -312,6 +312,7 @@ def main(filenames, *,
         # XXX Optionally create the pull request?
         if upload:
             git('push', repo=repo)
+            print()
             print('(Now you may make a pull request.)')
         else:
             print()
