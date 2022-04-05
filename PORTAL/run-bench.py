@@ -650,7 +650,8 @@ class BenchCompileRequest(types.SimpleNamespace):
     PYPERFORMANCE = GitHubTarget.origin('python', 'pyperformance')
     PYSTON_BENCHMARKS = GitHubTarget.origin('pyston', 'python-macrobenchmarks')
 
-    pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
+    #pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
+    pyperformance = PYPERFORMANCE.copy('5b6142e')  # will be 1.0.5 release
     pyston_benchmarks = PYSTON_BENCHMARKS.copy('96e7bb3')  # main from 2022-01-21
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
@@ -842,9 +843,8 @@ def _build_compile_script(cfg, req):
         # Run the benchmarks.
 
         ( set -x
-        PYTHONPATH={bfiles.pyperformance} MAKEFLAGS="-j{numjobs}" \\
-            "{python}" -m pyperformance compile \\
-            --venv "{bfiles.venv}" \\
+        MAKEFLAGS="-j{numjobs}" \\
+            "{python}" {bfiles.pyperformance}/dev.py compile \\
             "{pfiles.compile_config}" \\
             "{req.ref}" {('"' + req.branch + '"') if req.branch else ''} \\
             2>&1 | tee {pfiles.results_log}
