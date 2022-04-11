@@ -148,46 +148,20 @@ def resolve_repo(repo):
         return repo, False
 
 
-@contextlib.contextmanager
-def ensure_json(filename):
-    """Return the filename of the corresponding plain JSON file."""
-    # We trust the file suffix.
-    tmpdir = None
+def read_results(filename):
+    """Read the benchmark results from the given file."""
     if filename.endswith('.json'):
-        jsonfile = filename
+        _open = open
     elif filename.endswith('.json.gz'):
-        jsonfile = filename[:-3]
-        if not os.path.exists(jsonfile):
-            tmpdir = tempfile.TemporaryDirectory()
-            jsonfile = os.path.join(tmpdir.name, os.path.basename(jsonfile))
-            with gzip.open(filename, 'rb') as infile:
-                with open(jsonfile, 'wb') as outfile:
-                    shutil.copyfileobj(infile, outfile)
-        # XXX Otherwise, make sure it matches?
+        _open = gzip.open
     else:
-        raise NotImplementedError(repr(filename))
-    try:
-        yield jsonfile
-    finally:
-        if tmpdir is not None:
-            tmpdir.cleanup()
-
-
-def normalize_json(filename):
-    with open(filename) as infile:
-        data = json.load(infile)
-    with open(filename, 'w') as outfile:
-        json.dump(data, outfile, indent=2)
-
-
-def parse_metadata(data):
-    """Return the metadata corresponding to the given results."""
-    if isinstance(data, str):
-        data = json.loads(data)
-    if data['version'] == '1.0':
-        return data['metadata']
+        raise NotImplementedError(filename)
+    with _open(filename) as infile:
+        results = json.load(infile)
+    if results['version'] == '1.0':
+        return results
     else:
-        raise NotImplementedError(data['version'])
+        raise NotImplementedError(results['version'])
 
 
 def get_compat_id(metadata, *, short=True):
@@ -245,15 +219,15 @@ def prepare_repo(repo, branch=BRANCH):
     return repo, isremote
 
 
-def add_results_to_local(reporoot, name, localfile, *, branch=BRANCH):
+def add_results_to_local(results, reporoot, name, localfile, *, branch=BRANCH):
     """Add the file to a local repo using the given name."""
     reltarget = os.path.join(DIRNAME, name)
     target = os.path.join(reporoot, reltarget)
     if os.path.exists(target):
         # XXX ignore if the same?
         raise Exception(f'{target} already exists')
-    shutil.copyfile(localfile, target)
-    normalize_json(target)
+    with open(target, 'w') as outfile:
+        json.dump(results, outfile, indent=2)
     git('add', reltarget, root=reporoot)
     git('commit', '-m', f'Add Benchmark Results ({name})', root=reporoot)
     return textwrap.dedent(f'''
@@ -308,13 +282,11 @@ def main(filenames, *,
         print('#' * 40)
         print(f'adding {filename} to repo at {repo}...')
         print()
-        with ensure_json(filename) as localfile:
-            with open(localfile) as infile:
-                text = infile.read()
-            metadata = parse_metadata(text)
-            _host = resolve_host(host, metadata)
-            name = get_uploaded_name(metadata, release, _host)
-            msg = add_results(repo, name, localfile, branch=branch)
+        results = read_results(filename)
+        metadata = results['metadata']
+        _host = resolve_host(host, metadata)
+        name = get_uploaded_name(metadata, release, _host)
+        msg = add_results(results, repo, name, filename, branch=branch)
         print()
         print(msg)
     if not isremote:
