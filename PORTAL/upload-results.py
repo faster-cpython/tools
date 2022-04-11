@@ -1,4 +1,5 @@
 import os.path
+import re
 import subprocess
 
 
@@ -8,6 +9,7 @@ SCRIPT = os.path.join(ROOT, 'scripts', 'add-benchmark-results.py')
 
 BENCH_USER = os.path.expanduser('~benchmarking')
 RESULTS_DIR = os.path.join(BENCH_USER, 'BENCH', 'REQUESTS')
+RESULTS_DIR_RE = re.compile(rf'^.*({RESULTS_DIR}/req-\d+-\w+)')
 
 RESULTS_REPO = os.path.join(os.path.expanduser('~'), 'faster-cpython-ideas')
 
@@ -16,7 +18,17 @@ def resolve_results_files(results):
     """Return the absolute paths for the given values."""
     filenames = []
     for name in results:
-        if os.path.isabs(name):
+        if name.endswith('.log'):
+            with open(name) as infile:
+                for line in infile:
+                    m = RESULTS_DIR_RE.match(line)
+                    if m:
+                        dirname, = m.groups()
+                        filename = os.path.join(dirname, 'results-data.json.gz')
+                        break
+                else:
+                    raise NotImplementedError(name)
+        elif os.path.isabs(name):
             filename = name
         else:
             if name.endswith('.json') or '.json' in os.path.basename(name):
