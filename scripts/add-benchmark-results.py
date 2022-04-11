@@ -20,6 +20,19 @@ REPO = 'https://github.com/faster-cpython/ideas'
 DIRNAME = 'benchmark-results'
 BRANCH = 'add-benchmark-results'
 
+HOME = os.path.expanduser('~')
+REPOS_DIR = os.path.join(HOME, 'repos')
+BENCHMARKS = {
+    'pyperformance': {
+        'url': 'https://github.com/python/pyperformance',
+        'reldir': 'pyperformance/data-files/benchmarks',
+    },
+    'pyston': {
+        'url': 'https://github.com/pyston/python-macrobenchmarks',
+        'reldir': 'benchmarks',
+    },
+}
+
 
 def get_os_name(metadata=None):
     if metadata:
@@ -188,7 +201,88 @@ def get_compat_id(metadata, *, short=True):
     return compat
 
 
-def get_uploaded_name(metadata, release=None, host=None):
+def get_benchmarks(*, _cache={}):
+    """Return the per-suite lists of benchmarks."""
+    benchmarks = {}
+    for suite, info in BENCHMARKS.items():
+        if suite in _cache:
+            benchmarks[suite] = list(_cache[suite])
+            continue
+        url = info['url']
+        reldir = info['reldir']
+        reporoot = os.path.join(REPOS_DIR, os.path.basename(url))
+        if not os.path.exists(reporoot):
+            if not os.path.exists(REPOS_DIR):
+                os.makedirs(REPOS_DIR)
+            git('clone', url, reporoot, root=None)
+        names = _get_benchmark_names(os.path.join(reporoot, reldir))
+        benchmarks[suite] = _cache[suite] = names
+    return benchmarks
+
+
+def _get_benchmark_names(benchmarksdir):
+    manifest = os.path.join(benchmarksdir, 'MANIFEST')
+    if os.path.isfile(manifest):
+        with open(manifest) as infile:
+            for line in infile:
+                if line.strip() == '[benchmarks]':
+                    for line in infile:
+                        if line.strip() == 'name\tmetafile':
+                            break
+                    else:
+                        raise NotImplementedError(manifest)
+                    break
+            else:
+                raise NotImplementedError(manifest)
+            for line in infile:
+                if line.startswith('['):
+                    break
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                name, _ = line.split('\t')
+                yield name
+    else:
+        for name in os.listdir(benchmarksdir):
+            if name.startswith('bm_'):
+                yield name[3:]
+
+
+def split_benchmarks(results):
+    """Return results collated by suite."""
+    split = {}
+    benchmarks = get_benchmarks()
+    by_name = {}
+    for suite, names in benchmarks.items():
+        for name in names:
+            if name in by_name:
+                raise NotImplementedError((suite, name))
+            by_name[name] = suite
+    for data in results['benchmarks']:
+        name = data['metadata']['name']
+        try:
+            suite = by_name[name]
+        except KeyError:
+            # Some benchmarks actually produce results for
+            # sub-benchmarks (e.g. logging -> logging_simple).
+            _name = name
+            while '_' in _name:
+                _name, _, _ = _name.rpartition('_')
+                if _name in by_name:
+                    suite = by_name[_name]
+                    break
+            else:
+                suite = 'unknown'
+        if suite not in split:
+            split[suite] = {k: v
+                            for k, v in results.items()
+                            if k != 'benchmarks'}
+            split[suite]['benchmarks'] = []
+        split[suite]['benchmarks'].append(data)
+    return split
+
+
+def get_uploaded_name(metadata, release=None, host=None, suite=None):
     """Return the base filename to use for the given results metadata.
 
     See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
@@ -203,7 +297,8 @@ def get_uploaded_name(metadata, release=None, host=None):
     if not host:
         host = metadata['hostname']
     compat = get_compat_id(metadata)
-    return f'{implname}-{release}-{commit[:10]}-{host}-{compat}.json'
+    suite = f'-{suite}' if suite and suite != 'pyperformance' else ''
+    return f'{implname}-{release}-{commit[:10]}-{host}-{compat}{suite}.json'
 
 
 def prepare_repo(repo, branch=BRANCH):
@@ -285,10 +380,16 @@ def main(filenames, *,
         results = read_results(filename)
         metadata = results['metadata']
         _host = resolve_host(host, metadata)
-        name = get_uploaded_name(metadata, release, _host)
-        msg = add_results(results, repo, name, filename, branch=branch)
-        print()
-        print(msg)
+        split = split_benchmarks(results)
+        if 'other' in split:
+            raise NotImplementedError(sorted(split))
+        for suite in split:
+            name = get_uploaded_name(metadata, release, _host, suite)
+            msg = add_results(split[suite], repo, name, filename, branch=branch)
+            print()
+            print(msg)
+            print()
+
     if not isremote:
         # XXX Optionally create the pull request?
         if upload:
