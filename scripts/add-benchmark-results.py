@@ -173,6 +173,13 @@ def ensure_json(filename):
             tmpdir.cleanup()
 
 
+def normalize_json(filename):
+    with open(filename) as infile:
+        data = json.load(infile)
+    with open(filename, 'w') as outfile:
+        json.dump(data, outfile, indent=2)
+
+
 def parse_metadata(data):
     """Return the metadata corresponding to the given results."""
     if isinstance(data, str):
@@ -246,6 +253,7 @@ def add_results_to_local(reporoot, name, localfile, *, branch=BRANCH):
         # XXX ignore if the same?
         raise Exception(f'{target} already exists')
     shutil.copyfile(localfile, target)
+    normalize_json(target)
     git('add', reltarget, root=reporoot)
     git('commit', '-m', f'Add Benchmark Results ({name})', root=reporoot)
     return textwrap.dedent(f'''
