@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import urllib.parse
 
@@ -151,26 +152,25 @@ def resolve_repo(repo):
 def ensure_json(filename):
     """Return the filename of the corresponding plain JSON file."""
     # We trust the file suffix.
-    cleanup = True
+    tmpdir = None
     if filename.endswith('.json'):
         jsonfile = filename
-        cleanup = False
     elif filename.endswith('.json.gz'):
         jsonfile = filename[:-3]
-        if os.path.exists(jsonfile):
-            # XXX Make sure it matches?
-            cleanup = False
-        else:
-            with gzip.open(filename) as infile:
-                with open(jsonfile, 'w') as outfile:
+        if not os.path.exists(jsonfile):
+            tmpdir = tempfile.TemporaryDirectory()
+            jsonfile = os.path.join(tmpdir.name, os.path.basename(jsonfile))
+            with gzip.open(filename, 'rb') as infile:
+                with open(jsonfile, 'wb') as outfile:
                     shutil.copyfileobj(infile, outfile)
+        # XXX Otherwise, make sure it matches?
     else:
         raise NotImplementedError(repr(filename))
     try:
         yield jsonfile
     finally:
-        if cleanup:
-            os.unlink(jsonfile)
+        if tmpdir is not None:
+            tmpdir.cleanup()
 
 
 def parse_metadata(data):
