@@ -1,4 +1,5 @@
 import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -187,7 +188,7 @@ def get_compat_id(metadata, *, short=True):
     data = [
         metadata['hostname'],
         metadata['platform'],
-        metadata['perf_version'],
+        metadata.get('perf_version'),
         metadata['performance_version'],
         metadata['cpu_model_name'],
         metadata.get('cpu_freq'),
@@ -311,7 +312,7 @@ def main(filenames, *,
     if not isremote:
         # XXX Optionally create the pull request?
         if upload:
-            git('push', repo=repo)
+            git('push', root=repo)
             print()
             print('(Now you may make a pull request.)')
         else:
