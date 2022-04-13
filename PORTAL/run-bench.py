@@ -953,8 +953,8 @@ def create_bench_compile_request(remote, revision, branch=None, *,
                                  debug=False,
                                  cfg=None,
                                  ):
-    if not cfg:
-        cfg = PortalConfig.load()
+    if not cfg or isinstance(cfg, str):
+        cfg = PortalConfig.load(cfg)
 
     ensure_dirs()
 
@@ -1059,7 +1059,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     parser.add_argument('--create-only', dest='createonly',
                         action='store_true')
-    parser.add_argument('--no-optimize', dest='optimize', action='store_false')
+    parser.add_argument('--config', dest='cfgfile')
+    parser.add_argument('--no-optimize', dest='optimize',
+                        action='store_false')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--foreground', action='store_true')
     parser.add_argument('--background', dest='foreground',
@@ -1074,8 +1076,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return vars(args)
 
 
-def main(*, createonly=False, foreground=False, **kwargs):
-    cfg = PortalConfig.load()
+def main(*, createonly=False, foreground=False, cfgfile=None, **kwargs):
+    cfg = PortalConfig.load(cfgfile)
 
     #if USER != cfg.bench_user:
     #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
