@@ -997,25 +997,7 @@ def create_bench_compile_request(remote, revision, branch=None, *,
     return reqid
 
 
-def send_bench_compile_request(remote, revision, branch=None, *,
-                               benchmarks=None,
-                               optimize=False,
-                               debug=False,
-                               foreground=False,
-                               cfg=None,
-                               ):
-    if not cfg:
-        cfg = PortalConfig.load()
-
-    reqid = create_bench_compile_request(
-        remote=remote,
-        revision=revision,
-        branch=branch,
-        benchmarks=benchmarks,
-        optimize=optimize,
-        debug=debug,
-        cfg=cfg,
-    )
+def send_bench_compile_request(reqid, foreground=False):
     pfiles = PortalRequestFS(reqid)
 
     print('staging...')
@@ -1027,6 +1009,7 @@ def send_bench_compile_request(remote, revision, branch=None, *,
     except Exception:
         shutil.rmtree(pfiles.reqdir)
         raise  # re-raise
+
     try:
         print('...running....')
         #print(_read_file(pfiles.portal_script))
@@ -1097,16 +1080,16 @@ def main(*, createonly=False, foreground=False, **kwargs):
     #if USER != cfg.bench_user:
     #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
 
+    reqid = create_bench_compile_request(cfg=cfg, **kwargs)
+    print(f'Created request {reqid}:')
+    print()
+    for line in render_request(reqid):
+        print(f'  {line}')
     if createonly:
-        reqid = create_bench_compile_request(cfg=cfg, **kwargs)
-        print(f'Created request {reqid}:')
-        print()
-        for line in render_request(reqid):
-            print(line)
         return
 
     # XXX
-    send_bench_compile_request(cfg=cfg, foreground=foreground, **kwargs)
+    send_bench_compile_request(reqid, foreground=foreground)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
