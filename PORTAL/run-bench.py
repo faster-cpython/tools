@@ -1001,6 +1001,7 @@ def send_bench_compile_request(remote, revision, branch=None, *,
                                benchmarks=None,
                                optimize=False,
                                debug=False,
+                               foreground=False,
                                cfg=None,
                                ):
     if not cfg:
@@ -1077,6 +1078,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                         action='store_true')
     parser.add_argument('--no-optimize', dest='optimize', action='store_false')
     parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--foreground', action='store_true')
+    parser.add_argument('--background', dest='foreground',
+                        action='store_const', const=False)
     parser.add_argument('--benchmarks')
     parser.add_argument('--branch')
     parser.add_argument('--remote', required=True)
@@ -1087,7 +1091,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return vars(args)
 
 
-def main(*, createonly=False, **kwargs):
+def main(*, createonly=False, foreground=False, **kwargs):
     cfg = PortalConfig.load()
 
     #if USER != cfg.bench_user:
@@ -1102,7 +1106,7 @@ def main(*, createonly=False, **kwargs):
         return
 
     # XXX
-    send_bench_compile_request(cfg=cfg, **kwargs)
+    send_bench_compile_request(cfg=cfg, foreground=foreground, **kwargs)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
