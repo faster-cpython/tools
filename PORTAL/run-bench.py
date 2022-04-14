@@ -1021,7 +1021,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         #!/usr/bin/env bash
 
         # This script only runs on the portal host.
-        #  It does 4 things:
+        # It does 4 things:
         #   1. switch to the {benchuser} user, if necessary
         #   2. prepare the bench host, including sending all
         #      the request files to the bench host (over SSH)
