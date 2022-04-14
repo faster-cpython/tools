@@ -534,9 +534,13 @@ class PortalConfig(types.SimpleNamespace):
 
     @classmethod
     def load(cls, filename=None):
-        with open(filename or cls.CONFIG) as infile:
+        if not filename:
+            filename = cls.CONFIG
+        with open(filename) as infile:
             data = json.load(infile)
-        return cls(**data)
+        self = cls(**data)
+        self._filename = filename
+        return self
 
     def __init__(self,
                  bench_user,
@@ -560,6 +564,16 @@ class PortalConfig(types.SimpleNamespace):
             send_port=send_port,
             data_dir=data_dir or None,
         )
+
+    def __str__(self):
+        return self.filename
+
+    @property
+    def filename(self):
+        try:
+            return self._filename
+        except AttributeError:
+            return None
 
 
 class BenchConfig(types.SimpleNamespace):
@@ -921,7 +935,7 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
 
-        cfgfile='{cfg.CONFIG}'
+        cfgfile='{cfg.filename or cfg.CONFIG}'
 
         benchuser="$(jq -r '.bench_user' $cfgfile)"
         if [ "$USER" != "{benchuser}" ]; then
