@@ -425,12 +425,6 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 # files
 
 DATA_ROOT = os.path.expanduser(f'{HOME}/BENCH')
-REQUESTS = f'{DATA_ROOT}/REQUESTS'
-
-
-def ensure_dirs(dataroot=DATA_ROOT):
-    for dirname in (DATA_ROOT, REQUESTS):
-        os.makedirs(DATA_ROOT, exist_ok=True)
 
 
 class PortalRequestFS(types.SimpleNamespace):
@@ -946,7 +940,7 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
         set -x
 
         # Set up before running.
-        ssh -p {port} "{conn}" mkdir -p {REQUESTS}
+        ssh -p {port} "{conn}" mkdir -p {DATA_ROOT}/REQUESTS
         scp -rp -P {port} {reqdir} "{conn}":{reqdir}
         ssh -p {port} "{conn}" mkdir -p {bfiles.scratch_dir}
         ssh -p {port} "{conn}" mkdir -p {bfiles.results_dir}
@@ -966,15 +960,13 @@ def create_bench_compile_request(reqid, pfiles, cfg, remote, revision, branch=No
                                  optimize=False,
                                  debug=False,
                                  ):
-    ensure_dirs(pfiles.portaldata)
-
     req = _resolve_bench_compile_request(
         reqid, remote, revision, branch, benchmarks,
         optimize=optimize,
         debug=debug,
     )
 
-    os.mkdir(pfiles.reqdir)
+    os.makedirs(pfiles.reqdir, exist_ok=True)
 
     # Write metadata.
     with open(pfiles.request, 'w') as outfile:
