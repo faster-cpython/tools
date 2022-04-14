@@ -1003,7 +1003,7 @@ def create_bench_compile_request(reqid, pfiles, cfg, remote, revision, branch=No
 def send_bench_compile_request(reqid, pfiles, foreground=False):
     print('staging...')
     try:
-        stage_request(reqid)
+        stage_request(reqid, pfiles)
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
@@ -1018,9 +1018,9 @@ def send_bench_compile_request(reqid, pfiles, foreground=False):
     except KeyboardInterrupt:
         # XXX Mark it as canceled.
         raise  # re-raise
-    finally:    
+    finally:
         print('...unstaging...')
-        unstage_request(reqid)
+        unstage_request(reqid, pfiles)
         print('...done!')
 
         print()
@@ -1083,13 +1083,13 @@ def main(*, createonly=False, foreground=False, cfgfile=None, **kwargs):
     req = create_bench_compile_request(reqid, pfiles, cfg, **kwargs)
     print(f'Created request {req.id}:')
     print()
-    for line in render_request(req.id, pfiles):
+    for line in render_request(reqid, pfiles):
         print(f'  {line}')
     if createonly:
         return
 
     # XXX
-    send_bench_compile_request(req.id, foreground=foreground)
+    send_bench_compile_request(reqid, pfiles, foreground=foreground)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
