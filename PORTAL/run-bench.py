@@ -1018,7 +1018,7 @@ def create_bench_compile_request(reqid, pfiles, cfg, remote, revision, branch=No
     return req
 
 
-def send_bench_compile_request(reqid, pfiles, foreground=False):
+def send_bench_compile_request(reqid, pfiles, attach=False):
     print('staging...')
     try:
         stage_request(reqid, pfiles)
@@ -1076,8 +1076,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     parser.add_argument('--no-optimize', dest='optimize',
                         action='store_false')
     parser.add_argument('--debug', action='store_true')
-    parser.add_argument('--foreground', action='store_true')
-    parser.add_argument('--background', dest='foreground',
+    parser.add_argument('--attach', action='store_true')
+    parser.add_argument('--no-attach', dest='attach',
                         action='store_const', const=False)
     parser.add_argument('--benchmarks')
     parser.add_argument('--branch')
@@ -1089,7 +1089,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     return vars(args)
 
 
-def main(*, createonly=False, foreground=False, cfgfile=None, **kwargs):
+def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     cfg = PortalConfig.load(cfgfile)
 
     #if USER != cfg.bench_user:
@@ -1107,7 +1107,7 @@ def main(*, createonly=False, foreground=False, cfgfile=None, **kwargs):
         return
 
     # XXX
-    send_bench_compile_request(reqid, pfiles, foreground=foreground)
+    send_bench_compile_request(reqid, pfiles, attach=attach)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
