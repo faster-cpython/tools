@@ -61,7 +61,7 @@ def parse_req_id(reqid):
 def _utcnow():
     if time.tzname[0] == 'UTC':
         return time.time()
-    timestamp = time.mktime(time.gmtime())
+    return time.mktime(time.gmtime())
 
 
 def _resolve_user(cfg, user=None):
