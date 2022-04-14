@@ -1,5 +1,6 @@
 from collections import namedtuple
 import configparser
+import datetime
 import json
 import os
 import os.path
@@ -51,6 +52,13 @@ class RequestID(namedtuple('RequestID', 'timestamp user')):
 
     def __str__(self):
         return f'req-{self.timestamp}-{self.user}'
+
+    @property
+    def date(self):
+        return datetime.datetime.fromtimestamp(
+            self.timestamp,
+            datetime.timezone.utc,
+        )
 
 
 ##################################
