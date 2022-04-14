@@ -26,6 +26,15 @@ HOME = os.path.expanduser('~')
 class RequestID(namedtuple('RequestID', 'timestamp user')):
 
     @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        else:
+            raise NotImplementedError(raw)
+
+    @classmethod
     def parse(cls, idstr):
         m = re.match(r'^req-(\d{10})-(\w+)$', idstr)
         if not m:
@@ -41,18 +50,6 @@ class RequestID(namedtuple('RequestID', 'timestamp user')):
 
     def __str__(self):
         return f'req-{self.timestamp}-{self.user}'
-
-
-def next_req_id(user=None, cfg=None):
-    req = RequestID.generate(cfg, user)
-    return str(req)
-
-
-def parse_req_id(reqid):
-    req = RequestID.parse(reqid)
-    if not req:
-        return None, None
-    return req.user, req.timestamp
 
 
 ##################################
@@ -440,12 +437,10 @@ def ensure_dirs():
 class PortalRequestFS(types.SimpleNamespace):
     # On the portal host.
 
-    def __init__(self, req):
-        if isinstance(req, str):
-            reqid = req
-        else:
-            raise NotImplementedError(req)
-        super().__init__(reqid=reqid)
+    def __init__(self, reqid):
+        super().__init__(
+            reqid=RequestID.from_raw(reqid),
+        )
 
     @property
     def data_root(self):
@@ -491,11 +486,9 @@ class BenchRequestFS(types.SimpleNamespace):
     REPOS = f'{DATA_ROOT}/repositories'
 
     def __init__(self, req):
-        if isinstance(req, str):
-            reqid = req
-        else:
-            raise NotImplementedError(req)
-        super().__init__(reqid=reqid)
+        super().__init__(
+            reqid=RequestID.from_raw(reqid),
+        )
 
     @property
     def cpython(self):
@@ -624,8 +617,8 @@ def _get_staged_request():
         reqdir = os.readlink(STAGING)
     except FileNotFoundError:
         return None
-    reqid = os.path.basename(reqdir)
-    if not parse_req_id(reqid)[0]:
+    reqid = RequestID.parse(os.path.basename(reqdir))
+    if not reqid:
         return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not a request ID')
     if os.path.dirname(reqdir) != REQUESTS:
         return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
@@ -648,6 +641,7 @@ def stage_request(reqid):
 
 
 def unstage_request(reqid):
+    reqid = RequestID.from_raw(reqid)
     curid = _get_staged_request()
     if not curid or not isinstance(curid, str):
         raise RequestStagedRequestError(reqid)
@@ -709,9 +703,11 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
                                    optimize,
                                    debug,
                                    ):
-    user = _resolve_user(cfg)
-    reqid = next_req_id(user, cfg=cfg)
+    reqid = RequestID.generate(cfg)
+
     commit, branch, tag = _resolve_git_revision_and_branch(revision, branch, remote)
+    remote = _resolve_git_remote(remote, reqid.user, branch, commit)
+
     if isinstance(benchmarks, str):
         benchmarks = benchmarks.replace(',', ' ').split()
     if benchmarks:
@@ -722,13 +718,13 @@ def _resolve_bench_compile_request(cfg, remote, revision, branch, benchmarks, *,
         id=reqid,
         # XXX Add a "commit" field and use "tag or branch" for ref.
         ref=commit,
-        remote=_resolve_git_remote(remote, user, branch, commit),
+        remote=remote,
         branch=branch,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),
     )
-    return reqid, meta
+    return meta
 
 
 def _build_manifest(req):
@@ -973,11 +969,12 @@ def create_bench_compile_request(remote, revision, branch=None, *,
 
     ensure_dirs()
 
-    reqid, req = _resolve_bench_compile_request(
+    req = _resolve_bench_compile_request(
         cfg, remote, revision, branch, benchmarks,
         optimize=optimize,
         debug=debug,
     )
+    reqid = req.id
     pfiles = PortalRequestFS(reqid)
 
     os.mkdir(pfiles.reqdir)
@@ -1009,10 +1006,11 @@ def create_bench_compile_request(remote, revision, branch=None, *,
         outfile.write(script)
     os.chmod(pfiles.portal_script, 0o755)
 
-    return reqid
+    return req
 
 
 def send_bench_compile_request(reqid, foreground=False):
+    reqid = RequestID.from_raw(reqid)
     pfiles = PortalRequestFS(reqid)
 
     print('staging...')
@@ -1097,16 +1095,16 @@ def main(*, createonly=False, foreground=False, cfgfile=None, **kwargs):
     #if USER != cfg.bench_user:
     #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
 
-    reqid = create_bench_compile_request(cfg=cfg, **kwargs)
-    print(f'Created request {reqid}:')
+    req = create_bench_compile_request(cfg=cfg, **kwargs)
+    print(f'Created request {req.id}:')
     print()
-    for line in render_request(reqid):
+    for line in render_request(req.id):
         print(f'  {line}')
     if createonly:
         return
 
     # XXX
-    send_bench_compile_request(reqid, foreground=foreground)
+    send_bench_compile_request(req.id, foreground=foreground)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
