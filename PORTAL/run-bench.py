@@ -698,7 +698,9 @@ class BenchCompileRequest(types.SimpleNamespace):
             return self.CPYTHON.copy(ref=self.ref)
 
     def as_jsonable(self):
-        return dict(vars(self))
+        data = dict(vars(self))
+        data['id'] = str(self.id)
+        return data
 
 
 def _resolve_bench_compile_request(reqid, remote, revision, branch, benchmarks, *,
