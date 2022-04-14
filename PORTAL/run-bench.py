@@ -1048,7 +1048,7 @@ def send_bench_compile_request(reqid, pfiles, attach=False):
 
 
 def render_request(reqid, pfiles):
-    yield f'(in {pfiles.reqdir})'
+    yield f'(from {pfiles.request}):'
     yield ''
     # XXX Show something better?
     text = _read_file(pfiles.request)
@@ -1056,7 +1056,7 @@ def render_request(reqid, pfiles):
 
 
 def render_results(reqid, pfiles):
-    yield f'(in {pfiles.reqdir})'
+    yield f'(from {pfiles.results_meta}):'
     yield ''
     # XXX Show something better?
     text = _read_file(pfiles.results_meta)
@@ -1090,22 +1090,40 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
 
 def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
+    if not cfgfile:
+        cfgfile = PortalConfig.CONFIG
+    div = '#' * 40
+
+    print(div)
+    print('# config')
+    print()
+    print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
 
     #if USER != cfg.bench_user:
     #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
 
+    print()
+    print(div)
+    print('# preparing request')
+    print()
     reqid = RequestID.generate(cfg)
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
-
+    print(f'request ID: {reqid}')
+    print()
+    print(f'generating request files in {pfiles.root}...')
     req = create_bench_compile_request(reqid, pfiles, cfg, **kwargs)
-    print(f'Created request {req.id}:')
+    print('...done (generating request files)')
     print()
     for line in render_request(reqid, pfiles):
         print(f'  {line}')
     if createonly:
         return
 
+    print()
+    print(div)
+    print('# sending request')
+    print()
     # XXX
     send_bench_compile_request(reqid, pfiles, attach=attach)
     #send_bench_compile_request('origin', 'master', debug=True)
