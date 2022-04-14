@@ -431,7 +431,9 @@ class PortalRequestFS(types.SimpleNamespace):
     # On the portal host.
 
     def __init__(self, reqid, portaldata=DATA_ROOT):
-        if not portaldata:
+        if portaldata:
+            portaldata = os.path.abspath(os.path.expanduser(portaldata))
+        else:
             portaldata = DATA_ROOT
         super().__init__(
             reqid=RequestID.from_raw(reqid),
@@ -539,7 +541,7 @@ class PortalConfig(types.SimpleNamespace):
         with open(filename) as infile:
             data = json.load(infile)
         self = cls(**data)
-        self._filename = filename
+        self._filename = os.path.abspath(os.path.expanduser(filename))
         return self
 
     def __init__(self,
@@ -557,6 +559,8 @@ class PortalConfig(types.SimpleNamespace):
             raise ValueError('missing send_host')
         if not send_port:
             raise ValueError('missing send_port')
+        if data_dir:
+            datadir = os.path.abspath(os.path.expanduser(data_dir))
         super().__init__(
             bench_user=bench_user,
             send_user=send_user,
