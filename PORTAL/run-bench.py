@@ -437,8 +437,9 @@ class PortalRequestFS(types.SimpleNamespace):
             portaldata = DATA_ROOT
         super().__init__(
             reqid=RequestID.from_raw(reqid),
-            root=f'{portaldata}/REQUESTS/{reqid}',
             portaldata=portaldata,
+            requests=f'{portaldata}/REQUESTS',
+            root=f'{portaldata}/REQUESTS/{reqid}',
         )
 
     @property
@@ -641,7 +642,7 @@ def _get_staged_request(pfiles):
     reqid = RequestID.parse(os.path.basename(reqdir))
     if not reqid:
         return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not a request ID')
-    if os.path.dirname(reqdir) != pfiles.portaldata:
+    if os.path.dirname(reqdir) != pfiles.requests:
         return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequsetResolveError(reqid, reqdir, 'missing', 'target request dir missing')
