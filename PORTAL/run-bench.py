@@ -979,8 +979,7 @@ def _build_compile_script(req, bfiles):
         fi
 
         if [ -n "$results" -a -e $results ]; then
-            (
-            set -x
+            ( set -x
             ln -s $results {bfiles.pyperformance_results}
             )
         fi
