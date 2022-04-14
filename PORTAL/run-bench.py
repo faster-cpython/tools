@@ -23,21 +23,36 @@ SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 HOME = os.path.expanduser('~')
 
 
-def next_req_id(user=None, cfg=None):
-    if not cfg:
-        cfg = PortalConfig.load()
+class RequestID(namedtuple('RequestID', 'timestamp user')):
 
-    user = _resolve_user(cfg, user)
-    timestamp = int(_utcnow())
-    return f'req-{timestamp}-{user}'
+    @classmethod
+    def parse(cls, idstr):
+        m = re.match(r'^req-(\d{10})-(\w+)$', idstr)
+        if not m:
+            return None
+        timestamp, user = m.groups()
+        return cls(int(timestamp), user)
+
+    @classmethod
+    def generate(cls, cfg, user=None):
+        user = _resolve_user(cfg, user)
+        timestamp = int(_utcnow())
+        return cls(timestamp, user)
+
+    def __str__(self):
+        return f'req-{self.timestamp}-{self.user}'
+
+
+def next_req_id(user=None, cfg=None):
+    req = RequestID.generate(cfg, user)
+    return str(req)
 
 
 def parse_req_id(reqid):
-    m = re.match(r'^req-(\d{10})-(\w+)$', reqid)
-    if not m:
+    req = RequestID.parse(reqid)
+    if not req:
         return None, None
-    timestamp, user = m.groups()
-    return user, timestamp
+    return req.user, req.timestamp
 
 
 ##################################
