@@ -941,7 +941,7 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
         if [ "$USER" != "{benchuser}" ]; then
             setfacl -m {benchuser}:x $(dirname "$SSH_AUTH_SOCK")
             setfacl -m {benchuser}:rwx "$SSH_AUTH_SOCK"
-            exec sudo --login --user --preserve-env SSH_AUTH_SOCK {benchuser} $@
+            exec sudo --login --user {benchuser} --preserve-env='SSH_AUTH_SOCK' $@
         fi
 
         user="$(jq -r '.send_user' $cfgfile)"
