@@ -608,7 +608,7 @@ class RequestNotStagedError(StagedRequestError):
 
 class StagedRequestResolveError(Exception):
     def __init__(self, reqid, reqdir, reason, msg):
-        super().__init__(f'{raeson} ({msg} - {reqdir})')
+        super().__init__(f'{reason} ({msg} - {reqdir})')
         self.reqid = reqid
         self.reqdir = reqdir
         self.reason = reason
@@ -624,7 +624,7 @@ def _get_staged_request(pfiles):
     if not reqid:
         return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not a request ID')
     if os.path.dirname(reqdir) != pfiles.portaldata:
-        return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
+        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequsetResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
@@ -646,9 +646,9 @@ def unstage_request(reqid, pfiles):
     reqid = RequestID.from_raw(reqid)
     curid = _get_staged_request(pfiles)
     if not curid or not isinstance(curid, str):
-        raise RequestStagedRequestError(reqid)
+        raise RequestNotStagedError(reqid)
     elif curid != reqid:
-        raise RequestStagedRequestError(reqid, curid)
+        raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.current_request)
 
 
