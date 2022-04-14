@@ -25,7 +25,12 @@ SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 HOME = os.path.expanduser('~')
 
 
-class RequestID(namedtuple('RequestID', 'timestamp user')):
+class RequestID(namedtuple('RequestID', 'kind timestamp user')):
+
+    KIND = types.SimpleNamespace(
+        BENCHMARKS='bench-compile',
+    )
+    _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
 
     @classmethod
     def from_raw(cls, raw):
@@ -38,20 +43,56 @@ class RequestID(namedtuple('RequestID', 'timestamp user')):
 
     @classmethod
     def parse(cls, idstr):
-        m = re.match(r'^req-(\d{10})-(\w+)$', idstr)
+        kinds = '|'.join(cls._KIND_BY_VALUE)
+        m = re.match(rf'^req-(?:({kinds})-)?(\d{10})-(\w+)$', idstr)
         if not m:
             return None
-        timestamp, user = m.groups()
-        return cls(int(timestamp), user)
+        kind, timestamp, user = m.groups()
+        return cls(kind, int(timestamp), user)
 
     @classmethod
-    def generate(cls, cfg, user=None):
+    def generate(cls, cfg, user=None, kind=KIND.BENCHMARKS):
         user = _resolve_user(cfg, user)
         timestamp = int(_utcnow())
-        return cls(timestamp, user)
+        return cls(kind, timestamp, user)
+
+    def __new__(cls, kind, timestamp, user):
+        if not kind:
+            kind = cls.KIND.BENCHMARKS
+        else:
+            try:
+                kind = cls._KIND_BY_VALUE[kind]
+            except KeyError:
+                raise ValueError(f'unsupported kind {kind!r}')
+
+        if not timestamp:
+            raise ValueError('missing timestamp')
+        elif isinstance(timestamp, str):
+            timestamp, _, _ = timestamp.partition('.')
+            timestamp = int(timestamp)
+        elif not isinstance(timestamp, int):
+            try:
+                timestamp = int(timestamp)
+            except TypeError:
+                raise TypeError(f'expected int timestamp, got {timestamp!r}')
+
+        if not user:
+            raise ValueError('missing user')
+        elif not isinstance(user, str):
+            raise TypeError(f'expected str for user, got {user!r}')
+        else:
+            _check_name(user)
+
+        self = super().__new__(
+            cls,
+            kind=kind,
+            timestamp=timestamp,
+            user=user,
+        )
+        return self
 
     def __str__(self):
-        return f'req-{self.timestamp}-{self.user}'
+        return f'req-{self.kind}-{self.timestamp}-{self.user}'
 
     @property
     def date(self):
@@ -1208,7 +1249,7 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     print(div)
     print('# preparing request')
     print()
-    reqid = RequestID.generate(cfg)
+    reqid = RequestID.generate(cfg, kind=RequestID.KIND.BENCHMARKS)
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
     print(f'request ID: {reqid}')
