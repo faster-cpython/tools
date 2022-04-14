@@ -486,7 +486,7 @@ class BenchRequestFS(types.SimpleNamespace):
 
     REPOS = f'{DATA_ROOT}/repositories'
 
-    def __init__(self, req):
+    def __init__(self, reqid):
         super().__init__(
             reqid=RequestID.from_raw(reqid),
         )
