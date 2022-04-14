@@ -431,6 +431,11 @@ DATA_ROOT = os.path.expanduser(f'{HOME}/BENCH')
 class BaseRequestFS(types.SimpleNamespace):
     """The file structure that the portal and bench hosts have in common."""
 
+    @classmethod
+    def from_user(cls, user, reqid):
+        topdata = f'/home/{user}/BENCH'
+        return cls(reqid, topdata)
+
     def __init__(self, reqid, topdata=DATA_ROOT):
         reqid = RequestID.from_raw(reqid)
         if topdata:
@@ -781,8 +786,7 @@ def _resolve_bench_compile_request(reqid, remote, revision, branch, benchmarks, 
     return meta
 
 
-def _build_manifest(req):
-    bfiles = BenchRequestFS(req.id)
+def _build_manifest(req, bfiles):
     return textwrap.dedent(f'''
         [includes]
         <default>
@@ -790,9 +794,7 @@ def _build_manifest(req):
     '''[1:-1])
 
 
-def _build_pyperformance_config(cfg, req, pfiles):
-    bfiles = BenchRequestFS(req.id)
-
+def _build_pyperformance_config(req, pfiles, bfiles):
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
@@ -836,7 +838,7 @@ def _quote_shell_str(value, *, required=True):
     return shlex.quote(value)
 
 
-def _build_compile_script(cfg, req):
+def _build_compile_script(req, bfiles):
     python = 'python3.9'  # On the bench host:
     numjobs = 20
 
@@ -851,7 +853,6 @@ def _build_compile_script(cfg, req):
     maybe_branch = req.branch or ''
     _check_shell_str(req.ref)
 
-    bfiles = BenchRequestFS(req.id)
     _check_shell_str(bfiles.pyperformance_config)
     _check_shell_str(bfiles.cpython_repo)
     _check_shell_str(bfiles.pyperformance_repo)
@@ -988,7 +989,7 @@ def _build_compile_script(cfg, req):
     '''[1:-1])
 
 
-def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
+def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     cfgfile = _quote_shell_str(cfg.filename or cfg.CONFIG)
     if hidecfg:
         benchuser = '$benchuser'
@@ -1008,7 +1009,6 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
     pyperformance_results = _quote_shell_str(pfiles.pyperformance_results)
     pyperformance_log = _quote_shell_str(pfiles.pyperformance_log)
 
-    bfiles = BenchRequestFS(req.id)
     _check_shell_str(bfiles.reqdir)
     _check_shell_str(bfiles.requests)
     _check_shell_str(bfiles.bench_script)
@@ -1069,7 +1069,7 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
     '''[1:-1])
 
 
-def create_bench_compile_request(reqid, pfiles, cfg, remote, revision, branch=None, *,
+def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, branch=None, *,
                                  benchmarks=None,
                                  optimize=False,
                                  debug=False,
@@ -1088,23 +1088,23 @@ def create_bench_compile_request(reqid, pfiles, cfg, remote, revision, branch=No
         print(file=outfile)
 
     # Write the benchmarks manifest.
-    manifest = _build_manifest(req)
+    manifest = _build_manifest(req, bfiles)
     with open(pfiles.manifest, 'w') as outfile:
         outfile.write(manifest)
 
     # Write the config.
-    ini = _build_pyperformance_config(cfg, req, pfiles)
+    ini = _build_pyperformance_config(req, pfiles, bfiles)
     with open(pfiles.pyperformance_config, 'w') as outfile:
         ini.write(outfile)
 
     # Write the commands to execute remotely.
-    script = _build_compile_script(cfg, req)
+    script = _build_compile_script(req, bfiles)
     with open(pfiles.bench_script, 'w') as outfile:
         outfile.write(script)
     os.chmod(pfiles.bench_script, 0o755)
 
     # Write the commands to execute locally.
-    script = _build_send_script(cfg, req, pfiles)
+    script = _build_send_script(cfg, req, pfiles, bfiles)
     with open(pfiles.portal_script, 'w') as outfile:
         outfile.write(script)
     os.chmod(pfiles.portal_script, 0o755)
@@ -1203,10 +1203,11 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     print()
     reqid = RequestID.generate(cfg)
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
     print(f'request ID: {reqid}')
     print()
     print(f'generating request files in {pfiles.reqdir}...')
-    req = create_bench_compile_request(reqid, pfiles, cfg, **kwargs)
+    req = create_bench_compile_request(cfg, pfiles, bfiles, reqid, **kwargs)
     print('...done (generating request files)')
     print()
     for line in render_request(reqid, pfiles):
