@@ -4,6 +4,7 @@ import json
 import os
 import os.path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -788,12 +789,47 @@ def _build_compile_config(cfg, req, pfiles):
     return cfg
 
 
-def _build_compile_script(cfg, req, pfiles):
-    bfiles = BenchRequestFS(req.id)
+def _check_shell_str(value, *, required=True, allowspaces=False):
+    if not value and required:
+        raise ValueError(f'missing required value')
+    if not isinstance(value, str):
+        raise TypeError(f'expected str, got {value!r}')
+    if not allowspaces and ' ' in value:
+        raise ValueError(f'unexpected space in {value!r}')
+    return value
 
-    # On the bench host:
-    python = 'python3.9'
+
+def _quote_shell_str(value, *, required=True):
+    _check_shell_str(value, required=required, allowspaces=True)
+    return shlex.quote(value)
+
+
+def _build_compile_script(cfg, req, pfiles):
+    python = 'python3.9'  # On the bench host:
     numjobs = 20
+
+    _check_shell_str(str(req.id) if req.id else '')
+    _check_shell_str(req.cpython.url)
+    _check_shell_str(req.cpython.remote)
+    _check_shell_str(req.pyperformance.url)
+    _check_shell_str(req.pyperformance.remote)
+    _check_shell_str(req.pyston_benchmarks.url)
+    _check_shell_str(req.pyston_benchmarks.remote)
+    _check_shell_str(req.branch, required=False)
+    maybe_branch = req.branch or ''
+    _check_shell_str(req.ref)
+
+    compile_config = _quote_shell_str(pfiles.compile_config)
+    results_log = _quote_shell_str(pfiles.results_log)
+    results_meta = _quote_shell_str(pfiles.results_meta)
+    results_data = _quote_shell_str(pfiles.results_data)
+
+    bfiles = BenchRequestFS(req.id)
+    cpython_repo = _quote_shell_str(bfiles.cpython)
+    pyperformance_repo = _quote_shell_str(bfiles.pyperformance)
+    pyston_benchmarks_repo = _quote_shell_str(bfiles.pyston_benchmarks)
+    bench_results_data = _quote_shell_str(bfiles.results_data)
+    _check_shell_str(python)
 
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
@@ -804,92 +840,92 @@ def _build_compile_script(cfg, req, pfiles):
         #####################
         # Ensure the dependencies.
 
-        if [ ! -e {bfiles.cpython} ]; then
+        if [ ! -e {cpython_repo} ]; then
             ( set -x
-            git clone https://github.com/python/cpython "{bfiles.cpython}"
+            git clone https://github.com/python/cpython {cpython_repo}
             )
         fi
-        if [ ! -e {bfiles.pyperformance} ]; then
+        if [ ! -e {pyperformance_repo} ]; then
             ( set -x
-            git clone https://github.com/python/pyperformance "{bfiles.pyperformance}"
+            git clone https://github.com/python/pyperformance {pyperformance_repo}
             )
         fi
-        if [ ! -e {bfiles.pyston_benchmarks} ]; then
+        if [ ! -e {pyston_benchmarks_repo} ]; then
             ( set -x
-            git clone https://github.com/pyston/python-macrobenchmarks "{bfiles.pyston_benchmarks}"
+            git clone https://github.com/pyston/python-macrobenchmarks {pyston_benchmarks_repo}
             )
         fi
 
         #####################
         # Get the repos are ready for the requested remotes and revisions.
 
-        remote="{req.cpython.remote}"
+        remote='{req.cpython.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C "{bfiles.cpython}" remote add "{req.cpython.remote}" "{req.cpython.url}"
-            git -C "{bfiles.cpython}" fetch --tags "{req.cpython.remote}"
+            2>/dev/null git -C {cpython_repo} remote add {req.cpython.remote} {req.cpython.url}
+            git -C {cpython_repo} fetch --tags {req.cpython.remote}
             )
         fi
         # Get the upstream tags, just in case.
         ( set -x
-        git -C "{bfiles.cpython}" fetch --tags origin
+        git -C {cpython_repo} fetch --tags origin
         )
-        branch="{req.branch or ''}"
+        branch='{maybe_branch}'
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git -C "{bfiles.cpython}" checkout -b "{req.branch or '$branch'}" --track "{req.cpython.remote or 'origin'}/{req.branch or '$branch'}"
+                git -C {cpython_repo} checkout -b {req.branch or '$branch'} --track {req.cpython.remote}/{req.branch or '$branch'}
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git -C "{bfiles.cpython}" checkout "{req.branch or '$branch'}"
-                git -C "{bfiles.cpython}" reset --hard "{req.cpython.remote}/{req.branch or '$branch'}"
+                git -C {cpython_repo} checkout {req.branch or '$branch'}
+                git -C {cpython_repo} reset --hard {req.cpython.remote}/{req.branch or '$branch'}
                 )
             fi
         fi
 
-        remote="{req.pyperformance.remote}"
+        remote='{req.pyperformance.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C "{bfiles.pyperformance}" remote add "{req.pyperformance.remote}" "{req.pyperformance.url}"
+            2>/dev/null git -C {pyperformance_repo} remote add {req.pyperformance.remote} {req.pyperformance.url}
             )
         fi
         ( set -x
-        git -C "{bfiles.pyperformance}" fetch --tags "{req.pyperformance.remote}"
-        git -C "{bfiles.pyperformance}" checkout "{req.pyperformance.fullref}"
+        git -C {pyperformance_repo} fetch --tags {req.pyperformance.remote}
+        git -C {pyperformance_repo} checkout {req.pyperformance.fullref}
         )
 
-        remote="{req.pyston_benchmarks.remote}"
+        remote='{req.pyston_benchmarks.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C "{bfiles.pyston_benchmarks}" remote add "{req.pyston_benchmarks.remote}" "{req.pyston_benchmarks.url}"
+            2>/dev/null git -C {pyston_benchmarks_repo} remote add {req.pyston_benchmarks.remote} {req.pyston_benchmarks.url}
             )
         fi
         ( set -x
-        git -C "{bfiles.pyston_benchmarks}" fetch --tags "{req.pyston_benchmarks.remote}"
-        git -C "{bfiles.pyston_benchmarks}" checkout "{req.pyston_benchmarks.fullref}"
+        git -C {pyston_benchmarks_repo} fetch --tags {req.pyston_benchmarks.remote}
+        git -C {pyston_benchmarks_repo} checkout {req.pyston_benchmarks.fullref}
         )
 
         #####################
         # Run the benchmarks.
 
         ( set -x
-        MAKEFLAGS="-j{numjobs}" \\
-            "{python}" {bfiles.pyperformance}/dev.py compile \\
-            "{pfiles.compile_config}" \\
-            "{req.ref}" {('"' + req.branch + '"') if req.branch else ''} \\
-            2>&1 | tee {pfiles.results_log}
+        MAKEFLAGS='-j{numjobs}' \\
+            {python} {pyperformance_repo}/dev.py compile \\
+            {compile_config} \\
+            {req.ref} {maybe_branch} \\
+            2>&1 | tee {results_log}
         )
         exitcode=$?
 
         #####################
         # Record the results metadata.
 
-        results=$(2>/dev/null ls {bfiles.results_data})
+        results=$(2>/dev/null ls {bench_results_data})
         results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
         if [ $exitcode -eq 0 -a -n "$results" ]; then
-            cat > {pfiles.results_meta} << EOF
+            cat > {results_meta} << EOF
         {{
             "reqid": "{req.id}",
             "status": "success",
@@ -897,7 +933,7 @@ def _build_compile_script(cfg, req, pfiles):
         }}
         EOF
         else
-            cat > {pfiles.results_meta} << EOF
+            cat > {results_meta} << EOF
         {{
             "reqid": "{req.id}",
             "status": "failed"
@@ -908,7 +944,7 @@ def _build_compile_script(cfg, req, pfiles):
         if [ -n "$results" -a -e $results ]; then
             (
             set -x
-            ln -s $results {pfiles.results_data}
+            ln -s $results {results_data}
             )
         fi
 
@@ -917,22 +953,31 @@ def _build_compile_script(cfg, req, pfiles):
 
 
 def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
-    bfiles = BenchRequestFS(req.id)
-
+    cfgfile = _quote_shell_str(cfg.filename or cfg.CONFIG)
     if hidecfg:
         benchuser = '$benchuser'
         user = '$user'
-        host = '$host'
+        host = _host = '$host'
         port = '$port'
     else:
-        benchuser = cfg.bench_user
-        user = cfg.send_user
-        host = cfg.send_host
+        benchuser = _check_shell_str(cfg.bench_user)
+        user = _check_shell_str(cfg.send_user)
+        host = _check_shell_str(cfg.send_host)
         port = cfg.send_port
     conn = f'{user}@{host}'
 
-    #reqdir = pfiles.current_request
-    reqdir = pfiles.reqdir
+    #reqdir = _quote_shell_str(pfiles.current_request)
+    reqdir = _quote_shell_str(pfiles.reqdir)
+
+    bfiles = BenchRequestFS(req.id)
+    requests_dir = _quote_shell_str(f'{DATA_ROOT}/REQUESTS')
+    bench_script = _quote_shell_str(pfiles.bench_script)
+    scratch_dir = _quote_shell_str(bfiles.scratch_dir)
+    results_dir = _quote_shell_str(bfiles.results_dir)
+
+    results_meta = _quote_shell_str(f'{pfiles.results_meta}')
+    results_data = _quote_shell_str(f'{pfiles.results_data}')
+    results_log = _quote_shell_str(f'{pfiles.results_log}')
 
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
@@ -940,39 +985,40 @@ def _build_send_script(cfg, req, pfiles, *, hidecfg=False):
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
 
-        cfgfile='{cfg.filename or cfg.CONFIG}'
+        cfgfile={cfgfile}
 
-        benchuser="$(jq -r '.bench_user' $cfgfile)"
-        if [ "$USER" != "{benchuser}" ]; then
+        benchuser=$(jq -r '.bench_user' {cfgfile})
+        if [ "$USER" != {benchuser} ]; then
             setfacl -m {benchuser}:x $(dirname "$SSH_AUTH_SOCK")
             setfacl -m {benchuser}:rwx "$SSH_AUTH_SOCK"
-            exec sudo --login --user {benchuser} --preserve-env='SSH_AUTH_SOCK' $0 $@
+            # Stop running and re-run this script as the {benchuser} user.
+            exec sudo --login --user {benchuser} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
         fi
 
-        user="$(jq -r '.send_user' $cfgfile)"
-        host="$(jq -r '.send_host' $cfgfile)"
-        port="$(jq -r '.send_port' $cfgfile)"
+        user=$(jq -r '.send_user' {cfgfile})
+        host=$(jq -r '.send_host' {cfgfile})
+        port=$(jq -r '.send_port' {cfgfile})
 
-        if ssh -p {port} "{conn}" test -e {reqdir}; then
-            >&2 echo "{req.id} was already sent"
+        if ssh -p {port} {conn} test -e {reqdir}; then
+            >&2 echo "request {req.id} was already sent"
             exit 1
         fi
 
         set -x
 
         # Set up before running.
-        ssh -p {port} "{conn}" mkdir -p {DATA_ROOT}/REQUESTS
-        scp -rp -P {port} {reqdir} "{conn}":{reqdir}
-        ssh -p {port} "{conn}" mkdir -p {bfiles.scratch_dir}
-        ssh -p {port} "{conn}" mkdir -p {bfiles.results_dir}
+        ssh -p {port} {conn} mkdir -p {requests_dir}
+        scp -rp -P {port} {reqdir} {conn}:{reqdir}
+        ssh -p {port} {conn} mkdir -p {scratch_dir}
+        ssh -p {port} {conn} mkdir -p {results_dir}
 
         # Run the request.
-        ssh -p {port} "{conn}" {pfiles.bench_script}
+        ssh -p {port} {conn} {bench_script}
         
         # Finish up.
-        scp -p -P {port} "{conn}":{pfiles.results_meta} {reqdir}
-        scp -rp -P {port} "{conn}":{pfiles.results_data} {reqdir}
-        scp -rp -P {port} "{conn}":{pfiles.results_log} {reqdir}
+        scp -p -P {port} {conn}:{results_meta} {reqdir}
+        scp -rp -P {port} {conn}:{results_data} {reqdir}
+        scp -rp -P {port} {conn}:{results_log} {reqdir}
     '''[1:-1])
 
 
