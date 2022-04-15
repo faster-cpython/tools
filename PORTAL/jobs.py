@@ -1662,7 +1662,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('list', help='Print a table of all known jobs')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
-    sub.add_argument('-n', '--lines', action='store_true',
+    sub.add_argument('-n', '--lines', type=int, default=-1,
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('--follow', action='store_true',
                      help='Attach stdout to the job\'s output')
@@ -1689,7 +1689,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('reqid')
 
     sub = add_cmd('attach', help='Equivalent to show --follow')
-    sub.add_argument('-n', '--lines', action='store_true',
+    sub.add_argument('-n', '--lines', type=int, default=-1,
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('reqid', nargs='?')
 
