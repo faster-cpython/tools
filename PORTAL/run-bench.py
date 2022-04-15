@@ -822,6 +822,7 @@ class PortalRequestFS(BaseRequestFS):
         return f'{self.requests}/CURRENT'
 
     # the job
+
     @property
     def portal_script(self):
         """The script that preps the job, runs it, and cleans up.
