@@ -1659,7 +1659,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     def add_cmd(name, **kwargs):
         return subs.add_parser(name, parents=[common], **kwargs)
 
-    sub = add_cmd('list', help='Print a table of all known jobs')
+#    sub = add_cmd('list', help='Print a table of all known jobs')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=-1,
@@ -1672,20 +1672,20 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     jobs = sub.add_subparsers(dest='job')
     # Subcommands for different jobs are added below.
 
-    sub = add_cmd('copy', help='Create a new copy of an existing job request')
-    sub.add_argument('reqid', nargs='?')
+#    sub = add_cmd('copy', help='Create a new copy of an existing job request')
+#    sub.add_argument('reqid', nargs='?')
 
-    sub = add_cmd('remove', help='Delete a job request')
-    sub.add_argument('reqid')
+#    sub = add_cmd('remove', help='Delete a job request')
+#    sub.add_argument('reqid')
 
     sub = add_cmd('run', help='Run a previously created job request')
     sub.add_argument('--attach', action='store_true')
     sub.add_argument('--no-attach', dest='attach',
                      action='store_const', const=False)
-    sub.add_argument('--copy', action='store_true',
-                     help='Run a new copy of the given job request')
-    sub.add_argument('--force', action='store_true',
-                     help='Run the job even if another is already running')
+#    sub.add_argument('--copy', action='store_true',
+#                     help='Run a new copy of the given job request')
+#    sub.add_argument('--force', action='store_true',
+#                     help='Run the job even if another is already running')
     sub.add_argument('reqid')
 
     sub = add_cmd('attach', help='Equivalent to show --follow')
