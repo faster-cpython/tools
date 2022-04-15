@@ -833,6 +833,11 @@ class PortalRequestFS(BaseRequestFS):
         """
         return f'{self.reqdir}/send.sh'
 
+    @property
+    def logfile(self):
+        """Where the job output is written."""
+        return f'{self.reqdir}/job.log'
+
 
 class BenchRequestFS(BaseRequestFS):
     """Files on the bench host."""
