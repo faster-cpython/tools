@@ -235,7 +235,7 @@ class Result(Metadata):
         'reqid',
         'reqdir',
         'status',
-        #'history',
+        'history',
     ]
 
     STATUS = types.SimpleNamespace(
@@ -248,7 +248,7 @@ class Result(Metadata):
     )
     _STATUS_BY_VALUE = {v: k for k, v in vars(STATUS).items()}
 
-    def __init__(self, reqid, reqdir, status=STATUS.CREATED):
+    def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
         if not reqid:
             raise ValueError('missing reqid')
         reqid = RequestID.from_raw(reqid)
@@ -258,16 +258,50 @@ class Result(Metadata):
         if not isinstance(reqdir, str):
             raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
 
-        if status:
+        if status == self.STATUS.CREATED:
+            status = None
+        elif status:
             try:
                 status = self._STATUS_BY_VALUE[status]
             except KeyError:
                 raise ValueError(f'unsupported status {status!r}')
+        else:
+            status = None
+
+        if history:
+            h = []
+            for st, date in history:
+                try:
+                    st = self._STATUS_BY_VALUE[st]
+                except KeyError:
+                    raise ValueError(f'unsupported history status {st!r}')
+                if not date:
+                    date = None
+                elif isinstance(date, str):
+                    date = datetime.fromisoformat(date)
+                elif isisntance(date, int):
+                    date = datetime.utcfromtimestamp(date)
+                elif not isinstance(date, datetime.datetime):
+                    raise TypeError(f'unsupported history date {date!r}')
+                h.append(st, date)
+            history = h
+        else:
+            history = [
+                (self.STATUS.CREATED, reqid.date),
+            ]
+            if status is not None:
+                for st in self._STATUS_BY_VALUE:
+                    history.append((st, None))
+                    if status == st:
+                        break
+                    if status == self.STATUS.RUNNING:
+                        history.append((status, None))
 
         super().__init__(
             reqid=reqid,
             reqdir=reqdir,
-            status=status or self.STATUS.CREATED,
+            status=status,
+            history=history,
         )
 
     def __str__(self):
@@ -275,6 +309,8 @@ class Result(Metadata):
 
     @property
     def short(self):
+        if not self.status:
+            return f'<{self.reqid}: (created)>'
         return f'<{self.reqid}: {self.status}>'
 
     @property
@@ -288,6 +324,8 @@ class Result(Metadata):
     def as_jsonable(self):
         data = super().as_jsonable()
         data['reqid'] = str(data['reqid'])
+        data['history'] = [(st, d.isoformat() if d else None)
+                           for st, d in data['history']]
         return data
 
 
