@@ -1502,7 +1502,7 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
     return req, result
 
 
-def send_bench_compile_request(reqid, result, pfiles, attach=False):
+def send_bench_compile_request(reqid, result, pfiles):
     print('staging...')
     try:
         stage_request(reqid, pfiles)
@@ -1626,9 +1626,13 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     print('# sending request')
     print()
     # XXX
-    send_bench_compile_request(reqid, res, pfiles, attach=attach)
+    send_bench_compile_request(reqid, res, pfiles)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
+
+    if attach:
+        # XXX
+        ...
 
 
 if __name__ == '__main__':
