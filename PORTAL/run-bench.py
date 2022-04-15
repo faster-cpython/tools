@@ -291,12 +291,12 @@ class Result(Metadata):
                 if not date:
                     date = None
                 elif isinstance(date, str):
-                    date = datetime.fromisoformat(date)
-                elif isisntance(date, int):
-                    date = datetime.utcfromtimestamp(date)
+                    date = datetime.datetime.fromisoformat(date)
+                elif isinstance(date, int):
+                    date = datetime.datetime.utcfromtimestamp(date)
                 elif not isinstance(date, datetime.datetime):
                     raise TypeError(f'unsupported history date {date!r}')
-                h.append(st, date)
+                h.append((st, date))
             history = h
         else:
             history = [
@@ -1101,8 +1101,9 @@ class BenchCompileResult(Result):
                  status=None,
                  pyperformance_results=None,
                  pyperformance_results_orig=None,
+                 **kwargs
                  ):
-        super().__init__(reqid, reqdir, status)
+        super().__init__(reqid, reqdir, status, **kwargs)
         self.pyperformance_results = pyperformance_results
         self.pyperformance_results_orig = pyperformance_results_orig
 
