@@ -84,7 +84,7 @@ logger = MainLogger()
 class RequestID(namedtuple('RequestID', 'kind timestamp user')):
 
     KIND = types.SimpleNamespace(
-        BENCHMARKS='bench-compile',
+        BENCHMARKS='compile-bench',
     )
     _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
 
@@ -1616,50 +1616,39 @@ def render_results(reqid, pfiles):
 
 
 ##################################
-# the script
+# commands
 
-def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
-    import argparse
-    parser = argparse.ArgumentParser(prog=prog)
-
-    parser.add_argument('--create-only', dest='createonly',
-                        action='store_true')
-    parser.add_argument('--config', dest='cfgfile')
-    parser.add_argument('--no-optimize', dest='optimize',
-                        action='store_false')
-    parser.add_argument('--debug', action='store_true')
-    parser.add_argument('--attach', action='store_true')
-    parser.add_argument('--no-attach', dest='attach',
-                        action='store_const', const=False)
-    parser.add_argument('--benchmarks')
-    parser.add_argument('--branch')
-    parser.add_argument('--remote', required=True)
-    parser.add_argument('revision')
-
-    args = parser.parse_args()
-
-    return vars(args)
+def cmd_list_job(cfg):
+    raise NotImplementedError
 
 
-def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
-    if not cfgfile:
-        cfgfile = PortalConfig.CONFIG
-    div = '#' * 40
+def cmd_show_job(cfg, reqid=None, *, lines=None, follow=False):
+    raise NotImplementedError
 
-    print(div)
-    print('# config')
-    print()
-    print(f'# loading config from {cfgfile}')
-    cfg = PortalConfig.load(cfgfile)
 
-    #if USER != cfg.bench_user:
-    #    os.execl('sudo', '--login', '--user', cfg.bench_user, *sys.argv[1:])
+def cmd_copy_job(cfg, reqid=None):
+    raise NotImplementedError
 
-    print()
-    print(div)
+
+def cmd_remove_job(cfg, reqid):
+    raise NotImplementedError
+
+
+def cmd_run_job(cfg, reqid, *, attach=False, copy=False, force=False):
+    raise NotImplementedError
+
+
+def cmd_attach_to_job(cfg, reqid=None, *, lines=None):
+    return cmd_show_job(cfg, reqid, lines=lines, follow=True)
+
+
+def cmd_cancel_job(cfg, reqid=None):
+    raise NotImplementedError
+
+
+def cmd_request_compile_bench(cfg, reqid, **kwargs):
     print('# preparing request')
     print()
-    reqid = RequestID.generate(cfg, kind=RequestID.KIND.BENCHMARKS)
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
     logger.set_logfile(pfiles.logfile)
@@ -1671,17 +1660,11 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     print()
     for line in render_request(reqid, pfiles):
         print(f'  {line}')
-    if createonly:
-        print()
-        # XXX
-        print('To run that request...')
-        return
 
     res.set_status(res.STATUS.PENDING)
     res.save(pfiles.results_meta)
 
     print()
-    print(div)
     print('# sending request')
     print()
     # XXX
@@ -1689,12 +1672,211 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
-    if attach:
-        # XXX
-        ...
+
+COMMANDS = {
+    'list-jobs': cmd_list_job,
+    'show-job': cmd_show_job,
+    'copy-job': cmd_copy_job,
+    'remove-job': cmd_remove_job,
+    'run-job': cmd_run_job,
+    'attach-to-job': cmd_attach_to_job,
+    'cancel-job': cmd_cancel_job,
+    # Specific jobs
+    'request-job-compile-bench': cmd_request_compile_bench,
+}
+CMD_ALIASES = {
+    'list-jobs': 'list',
+    'show-job': 'show',
+    'request-job': 'add',
+    'copy-job': 'copy',
+    'remove-job': 'remove',
+    'run-job': 'run',
+    'attach-to-job': 'attach',
+    'cancel-job': 'cancel',
+}
+_CMDS_BY_ALIAS = {v: k for k, v in CMD_ALIASES.items()}
+
+
+##################################
+# the script
+
+def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
+    import argparse
+
+    ##########
+    # First, pull out the common args.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--config', dest='cfgfile')
+    args, argv = common.parse_known_args(argv)
+    cfgfile = args.cfgfile
+
+    ##########
+    # Create the top-level parser.
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        parents=[common],
+    )
+    subs = parser.add_subparsers(dest='cmd', metavar='CMD')
+
+    ##########
+    # Add the subcommands for managing jobs.
+
+    def add_cmd(name, help):
+        return subs.add_parser(
+            CMD_ALIASES[name],
+            aliases=[name],
+            parents=[common],
+            help=help,
+        )
+
+    sub = add_cmd('list-jobs', help='Print a table of all known jobs')
+
+    sub = add_cmd('show-job', help='Print a summary of the given (or current) job')
+    sub.add_argument('-n', '--lines', action='store_true',
+                     help='Show the last n lines of the job\'s output')
+    sub.add_argument('--follow', action='store_true',
+                     help='Attach stdout to the job\'s output')
+    sub.add_argument('reqid', nargs='?')
+
+    sub = add_cmd('request-job', help='Create a new job request')
+    jobs = sub.add_subparsers(dest='job')
+    # Subcommands for different jobs are added below.
+
+    sub = add_cmd('copy-job', help='Create a new copy of an existing job request')
+    sub.add_argument('reqid', nargs='?')
+
+    sub = add_cmd('remove-job', help='Delete a job request')
+    sub.add_argument('reqid')
+
+    sub = add_cmd('run-job', help='Run a previously created job request')
+    sub.add_argument('--attach', action='store_true')
+    sub.add_argument('--no-attach', dest='attach',
+                     action='store_const', const=False)
+    sub.add_argument('--copy', action='store_true',
+                     help='Run a new copy of the given job request')
+    sub.add_argument('--force', action='store_true',
+                     help='Run the job even if another is already running')
+    sub.add_argument('reqid')
+
+    sub = add_cmd('attach-to-job', help='Equivalent to show --follow')
+    sub.add_argument('-n', '--lines', action='store_true',
+                     help='Show the last n lines of the job\'s output')
+    sub.add_argument('reqid', nargs='?')
+
+    sub = add_cmd('cancel-job', help='Stop the current job (or prevent a pending one)')
+    sub.add_argument('reqid', nargs='?')
+
+    # XXX Also add export and import?
+
+    ##########
+    # Add the "add" subcommands for the different jobs.
+
+    _common = argparse.ArgumentParser(add_help=False)
+    _common.add_argument('--run', dest='after',
+                         action='store_const', const=('run-job', 'attach-to-job'))
+    _common.add_argument('--run-attached', dest='after',
+                         action='store_const', const=('run-job', 'attach-to-job'))
+    _common.add_argument('--run-detached', dest='after',
+                         action='store_const', const=('run-job',))
+    _common.add_argument('--no-run', dest='after',
+                         action='store_const', const=())
+
+    # This is the default (and the only one, for now).
+    sub = jobs.add_parser('compile-bench', parents=[common, _common],
+                          help='Request a compile-and-run-benchmarks job')
+    sub.add_argument('--optimize', dest='optimize',
+                     action='store_true')
+    sub.add_argument('--no-optimize', dest='optimize',
+                     action='store_const', const=False)
+    sub.add_argument('--debug', action='store_true')
+    sub.add_argument('--benchmarks')
+    sub.add_argument('--branch')
+    sub.add_argument('--remote', required=True)
+    sub.add_argument('revision')
+
+    ##########
+    # Finally, parse the args.
+
+    if argv:
+        # Apply the default command, if needed.
+        if argv[0] not in CMD_ALIASES and argv[0] not in _CMDS_BY_ALIAS:
+            if argv[0] not in ('-h', '--help'):
+                argv[0:0] = ['add', 'compile-bench', '--run']
+        elif argv[0] in ('add', 'request-job') and len(argv) >= 2:
+            if f'request-job-{argv[1]}' not in COMMANDS:
+                if argv[1] not in ('-h', '--help'):
+                    argv[1:1] = ['compile-bench']
+    args = parser.parse_args(argv)
+    ns = vars(args)
+
+    ns.pop('cfgfile')  # We already got it earlier.
+
+    cmd = ns.pop('cmd')
+    cmd = _CMDS_BY_ALIAS.get(cmd, cmd)
+
+    if cmd == 'request-job':
+        cmd += '-' + ns.pop('job')
+    elif cmd == 'attach-to-job':
+        cmd = 'show-job'
+        args.follow = True
+
+    if ns.get('after'):
+        args.after = tuple(_CMDS_BY_ALIAS.get(c, c) for c in args.after)
+
+    return cmd, ns, cfgfile
+
+
+def main(cmd, cmd_kwargs, cfgfile=None):
+    try:
+        run_cmd = COMMANDS[cmd]
+    except KeyError:
+        sys.exit(f'unsupported cmd {cmd!r}')
+
+    after = []
+    for _cmd in cmd_kwargs.pop('after') or ():
+        try:
+            _run_cmd = COMMANDS[_cmd]
+        except KeyError:
+            sys.exit(f'unsupported "after" cmd {_cmd!r}')
+        after.append((_cmd, _run_cmd))
+
+    # Load the config.
+    if not cfgfile:
+        cfgfile = PortalConfig.CONFIG
+    print()
+    print(f'# loading config from {cfgfile}')
+    cfg = PortalConfig.load(cfgfile)
+
+    # Resolve the request ID, if any.
+    if 'reqid' in cmd_kwargs:
+        cmd_kwargs['reqid'] = RequestID.parse(cmd_kwargs['reqid'])
+    elif cmd.startswith('request-job-'):
+        cmd_kwargs['reqid'] = RequestID.generate(cfg, kind=cmd[12:])
+    reqid = cmd_kwargs.get('reqid')
+
+    # Run the command.
+    print()
+    print('#'*40)
+    if reqid:
+        print(f'# Running {cmd!r} command for request {reqid}')
+    else:
+        print(f'# Running {cmd!r} command')
+    print()
+    run_cmd(cfg, **cmd_kwargs)
+
+    # Run "after" commands, if any
+    for cmd, run_cmd in after:
+        print()
+        print('#'*40)
+        if reqid:
+            print(f'# Running {cmd!r} command for request {reqid}')
+        else:
+            print(f'# Running {cmd!r} command')
+        print()
+        run_cmd(cfg, reqid=reqid)
 
 
 if __name__ == '__main__':
     print = logger.print
-    kwargs = parse_args()
-    main(**kwargs)
+    cmd, cmd_kwargs, cfgfile = parse_args()
+    main(cmd, cmd_kwargs, cfgfile)
