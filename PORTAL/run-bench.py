@@ -1613,6 +1613,9 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     for line in render_request(reqid, pfiles):
         print(f'  {line}')
     if createonly:
+        print()
+        # XXX
+        print('To run that request...')
         return
 
     res.set_status(res.STATUS.PENDING)
