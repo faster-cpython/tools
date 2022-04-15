@@ -970,9 +970,12 @@ def stage_request(reqid, pfiles):
     try:
         os.symlink(pfiles.reqdir, pfiles.current_request)
     except FileExistsError:
-        curid = _get_staged_request(pfiles) or '???'
         # XXX Delete the existing one if bogus?
-        raise RequestAlreadyStagedError(reqid, curid)
+        curid = _get_staged_request(pfiles) or '???'
+        if isinstance(curid, Exception):
+            raise RequestAlreadyStagedError(reqid, '???') from curid
+        else:
+            raise RequestAlreadyStagedError(reqid, curid)
 
 
 def unstage_request(reqid, pfiles):
