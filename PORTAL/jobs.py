@@ -1747,7 +1747,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
         sys.exit(f'unsupported cmd {cmd!r}')
 
     after = []
-    for _cmd in cmd_kwargs.pop('after') or ():
+    for _cmd in cmd_kwargs.pop('after', None) or ():
         try:
             _run_cmd = COMMANDS[_cmd]
         except KeyError:
