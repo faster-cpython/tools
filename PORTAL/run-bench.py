@@ -176,12 +176,12 @@ class Request(Metadata):
     FIELDS = [
         'kind',
         'id',
-        'reqdir',
+        'datadir',
         'user',
         'date',
     ]
 
-    def __init__(self, id, reqdir, *,
+    def __init__(self, id, datadir, *,
                  # These are ignored (duplicated by id):
                  kind=None, user=None, date=None,
                  ):
@@ -189,14 +189,14 @@ class Request(Metadata):
             raise ValueError('missing id')
         id = RequestID.from_raw(id)
 
-        if not reqdir:
-            raise ValueError('missing reqdir')
-        if not isinstance(reqdir, str):
-            raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
+        if not datadir:
+            raise ValueError('missing datadir')
+        if not isinstance(datadir, str):
+            raise TypeError(f'expected dirname for datadir, got {datadir!r}')
 
         super().__init__(
             id=id,
-            reqdir=reqdir,
+            datadir=datadir,
         )
 
     def __str__(self):
