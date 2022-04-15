@@ -26,59 +26,6 @@ HOME = os.path.expanduser('~')
 
 
 ##################################
-# logging for this script
-
-class MainLogger:
-
-    _print = print
-
-    def __init__(self):
-        self._filename = None
-        self._logfile = None
-        self._cache = [((msg,), None) for msg in (
-            # These initial lines will always be at the top of the log file.
-            '# log for:',
-            f'# {sys.executable} {" ".join(shlex.quote(a) for a in sys.argv)}',
-            '',
-        )]
-
-    def print(self, *msg, file=None, end=None, _print=_print):
-        """Write the message to stdout and the logfile.
-
-        if "file" is provided, the message is written there instead.
-
-        This may be used as a substitute for the builtin print().
-        """
-        if file is not None:
-            _print(*msg, file=file, end=end)
-            return
-
-        _print(*msg)
-        if self._logfile is None:
-            self._cache.append((msg, end))
-        else:
-            _print(*msg, file=self._logfile, flush=True, end=end)
-
-    def set_logfile(self, logfile, *, _print=_print):
-        if self._logfile is not None:
-            raise Exception(f'log file already set to {self._filename}')
-        if isinstance(logfile, str):
-            self._filename = filename = logfile
-            if os.path.dirname(filename):
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-            self._logfile = logfile = open(logfile, 'w')
-        else:
-            self._filename = filename = logfile.name
-            self._logfile = logfile
-
-        cached = list(self._cache)
-        self._cache.clear()
-        for msg, end in cached:
-            _print(*msg, file=logfile, flush=True, end=end)
-logger = MainLogger()
-
-
-##################################
 # requests
 
 class RequestID(namedtuple('RequestID', 'kind timestamp user')):
@@ -1651,7 +1598,6 @@ def cmd_request_compile_bench(cfg, reqid, **kwargs):
     print()
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
-    logger.set_logfile(pfiles.logfile)
     print(f'request ID: {reqid}')
     print()
     print(f'generating request files in {pfiles.reqdir}...')
@@ -1845,6 +1791,5 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
 
 if __name__ == '__main__':
-    print = logger.print
     cmd, cmd_kwargs, cfgfile = parse_args()
     main(cmd, cmd_kwargs, cfgfile)
