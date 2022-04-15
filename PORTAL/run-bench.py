@@ -953,10 +953,11 @@ def _get_staged_request(pfiles):
         reqdir = os.readlink(pfiles.current_request)
     except FileNotFoundError:
         return None
-    reqid = RequestID.parse(os.path.basename(reqdir))
+    requests, reqidstr = os.path.split(reqdir)
+    reqid = RequestID.parse(reqidstr)
     if not reqid:
         return StagedRequestResolveError(None, reqdir, 'invalid', 'target not a request ID')
-    if os.path.dirname(reqdir) != pfiles.requests:
+    if requests != pfiles.requests:
         return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
