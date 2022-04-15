@@ -25,6 +25,9 @@ SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 HOME = os.path.expanduser('~')
 
 
+##################################
+# requests
+
 class RequestID(namedtuple('RequestID', 'kind timestamp user')):
 
     KIND = types.SimpleNamespace(
@@ -100,6 +103,130 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
             self.timestamp,
             datetime.timezone.utc,
         )
+
+
+class Metadata(types.SimpleNamespace):
+
+    FIELDS = None
+    OPTIONAL = None
+
+    _extra = None
+
+    @classmethod
+    def load(cls, resfile):
+        if isinstance(resfile, str):
+            filename = resfile
+            with open(filename) as resfile:
+                return cls.load(resfile)
+        data = json.load(resfile)
+        return cls.from_jsonable(data)
+
+    @classmethod
+    def from_jsonable(cls, data):
+        kwargs = {}
+        extra = {}
+        unused = set(cls.FIELDS or ())
+        for field in data:
+            if field in unused:
+                kwargs[field] = data[field]
+                unused.remove(field)
+            elif not field.startswith('_'):
+                extra[field] = data[field]
+        unused -= set(cls.OPTIONAL or ())
+        if unused:
+            missing = ', '.join(sorted(unused))
+            raise ValueError(f'missing required data (fields: {missing})')
+        if kwargs:
+            self = cls(**kwargs)
+            if extra:
+                self._extra = extra
+        else:
+            self = cls(**extra)
+        return self
+
+    def as_jsonable(self):
+        fields = self.FIELDS
+        if not fields:
+            fields = (f for f in vars(self) if not f.startswith('_'))
+        optional = set(self.OPTIONAL or ())
+        data = {}
+        for field in fields:
+            try:
+                value = getattr(self, field)
+            except AttributeError:
+                # XXX Fail?  Warn?  Add a default?
+                continue
+            if hasattr(value, 'as_jsonable'):
+                value = value.as_jsonable()
+            data[field] = value
+        return data
+
+    def save(self, resfile):
+        if isinstance(resfile, str):
+            filename = resfile
+            with open(filename, 'w') as resfile:
+                return self.save(resfile)
+        data = self.as_jsonable()
+        json.dump(data, resfile, indent=4)
+        print(file=resfile)
+
+
+class Request(Metadata):
+
+    FIELDS = [
+        'kind',
+        'id',
+        'reqdir',
+        'user',
+        'date',
+    ]
+
+    def __init__(self, id, reqdir, *,
+                 # These are ignored (duplicated by id):
+                 kind=None, user=None, date=None,
+                 ):
+        if not id:
+            raise ValueError('missing id')
+        id = RequestID.from_raw(id)
+
+        if not reqdir:
+            raise ValueError('missing reqdir')
+        if not isinstance(reqdir, str):
+            raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
+
+        super().__init__(
+            id=id,
+            reqdir=reqdir,
+        )
+
+    def __str__(self):
+        return self.id
+
+    @property
+    def reqid(self):
+        return self.id
+
+    @property
+    def reqdir(self):
+        return self.datadir
+
+    @property
+    def kind(self):
+        return self.id.kind
+
+    @property
+    def user(self):
+        return self.id.user
+
+    @property
+    def date(self):
+        return self.id.date
+
+    def as_jsonable(self):
+        data = super().as_jsonable()
+        data['id'] = str(data['id'])
+        data['date'] = self.date.isoformat()
+        return data
 
 
 ##################################
@@ -761,7 +888,17 @@ def unstage_request(reqid, pfiles):
 ##################################
 # "compile"
 
-class BenchCompileRequest(types.SimpleNamespace):
+class BenchCompileRequest(Request):
+
+    FIELDS = Request.FIELDS + [
+        'ref',
+        'remote',
+        'branch',
+        'benchmarks',
+        'optimize',
+        'debug',
+    ]
+    OPTIONAL = ['remote', 'branch', 'benchmarks', 'optimize', 'debug']
 
     CPYTHON = GitHubTarget.origin('python', 'cpython')
     PYPERFORMANCE = GitHubTarget.origin('python', 'pyperformance')
@@ -775,6 +912,7 @@ class BenchCompileRequest(types.SimpleNamespace):
 
     def __init__(self,
                  id,
+                 reqdir,
                  ref,
                  remote=None,
                  branch=None,
@@ -788,13 +926,13 @@ class BenchCompileRequest(types.SimpleNamespace):
             if not _looks_like_git_revision(ref):
                 raise ValueError(ref)
 
-        kwargs = dict(locals())
-        del kwargs['self']
-        del kwargs['__class__']
-        super().__init__(
-            kind='bench-compile',
-            **kwargs
-        )
+        super().__init__(id, reqdir)
+        self.ref = ref
+        self.remote = remote
+        self.branch = branch
+        self.benchmarks = benchmarks
+        self.optimize = optimize
+        self.debug = debug
 
     @property
     def cpython(self):
@@ -803,13 +941,10 @@ class BenchCompileRequest(types.SimpleNamespace):
         else:
             return self.CPYTHON.copy(ref=self.ref)
 
-    def as_jsonable(self):
-        data = dict(vars(self))
-        data['id'] = str(self.id)
-        return data
 
-
-def _resolve_bench_compile_request(reqid, remote, revision, branch, benchmarks, *,
+def _resolve_bench_compile_request(reqid, reqdir, remote, revision, branch,
+                                   benchmarks,
+                                   *,
                                    optimize,
                                    debug,
                                    ):
@@ -824,6 +959,7 @@ def _resolve_bench_compile_request(reqid, remote, revision, branch, benchmarks, 
 
     meta = BenchCompileRequest(
         id=reqid,
+        reqdir=reqdir,
         # XXX Add a "commit" field and use "tag or branch" for ref.
         ref=commit,
         remote=remote,
@@ -1123,7 +1259,7 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
                                  debug=False,
                                  ):
     req = _resolve_bench_compile_request(
-        reqid, remote, revision, branch, benchmarks,
+        reqid, pfiles.reqdir, remote, revision, branch, benchmarks,
         optimize=optimize,
         debug=debug,
     )
@@ -1131,9 +1267,7 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
     os.makedirs(pfiles.reqdir, exist_ok=True)
 
     # Write metadata.
-    with open(pfiles.request_meta, 'w') as outfile:
-        json.dump(req.as_jsonable(), outfile, indent=4)
-        print(file=outfile)
+    req.save(pfiles.request_meta)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, bfiles)
