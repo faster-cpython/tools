@@ -144,6 +144,14 @@ class Metadata(types.SimpleNamespace):
             self = cls(**extra)
         return self
 
+    def refresh(self, resfile):
+        """Reload from the given file."""
+        fresh = self.load(resfile)
+        # This isn't the best way to go, but it's simple.
+        vars(self).clear()
+        self.__init__(**vars(fresh))
+        return fresh
+
     def as_jsonable(self):
         fields = self.FIELDS
         if not fields:
@@ -1511,9 +1519,12 @@ def send_bench_compile_request(reqid, result, pfiles, attach=False):
         print('...running....')
         subprocess.run(pfiles.portal_script)
     except KeyboardInterrupt:
+        # XXX Try to download the results file directly?
         result.set_status(result.STATUS.CANCELED)
         result.save(pfiles.results_meta)
         raise  # re-raise
+    else:
+        result.refresh(pfiles.results_meta)
     finally:
         print('...unstaging...')
         unstage_request(reqid, pfiles)
