@@ -1245,7 +1245,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 
         # Run the request.
         ssh -p {port} {conn} {bfiles.bench_script}
-        
+
         # Finish up.
         scp -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
         scp -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
