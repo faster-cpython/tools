@@ -1214,6 +1214,9 @@ def _build_compile_script(req, bfiles):
 
     _check_shell_str(python)
 
+    # Set this to a number to skip actually running pyperformance.
+    exitcode = ''
+
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
@@ -1221,6 +1224,21 @@ def _build_compile_script(req, bfiles):
 
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
+
+        #####################
+        # Mark the result as running.
+
+        status=$(jq -r '.status' {bfiles.results_meta})
+        if [ "$status" != 'active' ]; then
+            2>&1 echo "ERROR: expected active status, got $status"
+            2>&1 echo "       (see {bfiles.results_meta})"
+            exit 1
+        fi
+
+        ( set -x
+        jq --arg date $(date -u -Iseconds) '.history += [["running", $date]]' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+        mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+        )
 
         #####################
         # Ensure the dependencies.
@@ -1295,14 +1313,23 @@ def _build_compile_script(req, bfiles):
 
         echo "running the benchmarks..."
         echo "(logging to {bfiles.pyperformance_log})"
-        ( set -x
-        MAKEFLAGS='-j{numjobs}' \\
-            {python} {bfiles.pyperformance_repo}/dev.py compile \\
-            {bfiles.pyperformance_config} \\
-            {req.ref} {maybe_branch} \\
-            2>&1 | tee {bfiles.pyperformance_log}
-        )
-        exitcode=$?
+        exitcode='{exitcode}'
+        echo "$exitcode"
+        if [ -n "$exitcode" ]; then
+            ( set -x
+            touch {bfiles.pyperformance_log}
+            touch {bfiles.reqdir}//pyperformance-dummy-results.json.gz
+            )
+        else
+            ( set -x
+            MAKEFLAGS='-j{numjobs}' \\
+                {python} {bfiles.pyperformance_repo}/dev.py compile \\
+                {bfiles.pyperformance_config} \\
+                {req.ref} {maybe_branch} \\
+                2>&1 | tee {bfiles.pyperformance_log}
+            )
+            exitcode=$?
+        fi
 
         #####################
         # Record the results metadata.
@@ -1312,20 +1339,24 @@ def _build_compile_script(req, bfiles):
 
         echo "saving results..."
         if [ $exitcode -eq 0 -a -n "$results" ]; then
-            cat > {bfiles.results_meta} << EOF
-        {{
-            "reqid": "{req.id}",
-            "status": "success",
-            "orig_data_file": "$results_name"
-        }}
-        EOF
+            ( set -x
+            jq '.status = "success"' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+            mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+
+            jq --arg results "$results" '.pyperformance_data_orig = $results' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+            mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+
+            jq --arg date $(date -u -Iseconds) '.history += [["success", $date]]' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+            mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+            )
         else
-            cat > {bfiles.results_meta} << EOF
-        {{
-            "reqid": "{req.id}",
-            "status": "failed"
-        }}
-        EOF
+            ( set -x
+            jq '.status = "failed"' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+            mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+
+            jq --arg date $(date -u -Iseconds) '.history += [["failed", $date]]' {bfiles.results_meta} > {bfiles.results_meta}.tmp
+            mv {bfiles.results_meta}.tmp {bfiles.results_meta}
+            )
         fi
 
         if [ -n "$results" -a -e $results ]; then
@@ -1478,10 +1509,7 @@ def send_bench_compile_request(reqid, result, pfiles, attach=False):
 
     try:
         print('...running....')
-        result.set_status(result.STATUS.RUNNING)
-        result.save(pfiles.results_meta)
-        #print(_read_file(pfiles.portal_script))
-#        subprocess.run(pfiles.portal_script)
+        subprocess.run(pfiles.portal_script)
     except KeyboardInterrupt:
         result.set_status(result.STATUS.CANCELED)
         result.save(pfiles.results_meta)
