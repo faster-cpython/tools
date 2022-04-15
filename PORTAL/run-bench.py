@@ -955,13 +955,13 @@ def _get_staged_request(pfiles):
         return None
     reqid = RequestID.parse(os.path.basename(reqdir))
     if not reqid:
-        return StagedRequsetResolveError(None, reqdir, 'invalid', 'target not a request ID')
+        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not a request ID')
     if os.path.dirname(reqdir) != pfiles.requests:
         return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
-        return StagedRequsetResolveError(reqid, reqdir, 'missing', 'target request dir missing')
+        return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
-        return StagedRequsetResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
+        return StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
     # XXX Do other checks?
     return reqid
 
