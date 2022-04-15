@@ -241,12 +241,14 @@ class Result(Metadata):
     STATUS = types.SimpleNamespace(
         CREATED='created',
         PENDING='pending',
+        ACTIVE='active',
         RUNNING='running',
         SUCCESS='success',
         FAILED='failed',
-        CANCELLED='cancelled',
+        CANCELED='cancelled',
     )
-    _STATUS_BY_VALUE = {v: k for k, v in vars(STATUS).items()}
+    _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
+    CLOSED = 'closed'
 
     def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
         if not reqid:
@@ -274,7 +276,10 @@ class Result(Metadata):
                 try:
                     st = self._STATUS_BY_VALUE[st]
                 except KeyError:
-                    raise ValueError(f'unsupported history status {st!r}')
+                    if st == self.CLOSED:
+                        st = self.CLOSED
+                    else:
+                        raise ValueError(f'unsupported history status {st!r}')
                 if not date:
                     date = None
                 elif isinstance(date, str):
@@ -320,6 +325,29 @@ class Result(Metadata):
         except AttributeError:
             self._request = Request(self.reqid, self.reqdir)
             return self._request
+
+    def set_status(self, status):
+        if not status:
+            raise ValueError('missing status')
+        try:
+            status = self._STATUS_BY_VALUE[status]
+        except KeyError:
+            raise ValueError(f'unsupported status {status!r}')
+        if self.history[-1][0] is self.CLOSED:
+            raise Exception(f'req {self.reqid} is already closed')
+        # XXX Make sure it is the next possible status?
+        self.history.append(
+            (status, datetime.datetime.now(datetime.timezone.utc)),
+        )
+        self.status = status
+
+    def close(self):
+        if self.history[-1][0] is self.CLOSED:
+            # XXX Fail?
+            return
+        self.history.append(
+            (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
+        )
 
     def as_jsonable(self):
         data = super().as_jsonable()
@@ -1400,12 +1428,13 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
         optimize=optimize,
         debug=debug,
     )
+    result = req.result
 
     os.makedirs(pfiles.reqdir, exist_ok=True)
 
     # Write metadata.
     req.save(pfiles.request_meta)
-    req.result.save(pfiles.results_meta)
+    result.save(pfiles.results_meta)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, bfiles)
@@ -1429,31 +1458,41 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
         outfile.write(script)
     os.chmod(pfiles.portal_script, 0o755)
 
-    return req
+    return req, result
 
 
-def send_bench_compile_request(reqid, pfiles, attach=False):
+def send_bench_compile_request(reqid, result, pfiles, attach=False):
     print('staging...')
     try:
         stage_request(reqid, pfiles)
+
+        result.set_status(result.STATUS.ACTIVE)
+        result.save(pfiles.results_meta)
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
     except Exception:
+        result.set_status(result.STATUS.FAILED)
         shutil.rmtree(pfiles.reqdir)
         raise  # re-raise
 
     try:
         print('...running....')
+        result.set_status(result.STATUS.RUNNING)
+        result.save(pfiles.results_meta)
         #print(_read_file(pfiles.portal_script))
-        subprocess.run(pfiles.portal_script)
+#        subprocess.run(pfiles.portal_script)
     except KeyboardInterrupt:
-        # XXX Mark it as canceled.
+        result.set_status(result.STATUS.CANCELED)
+        result.save(pfiles.results_meta)
         raise  # re-raise
     finally:
         print('...unstaging...')
         unstage_request(reqid, pfiles)
         print('...done!')
+
+        result.close()
+        result.save(pfiles.results_meta)
 
         print()
         print('Results:')
@@ -1527,7 +1566,7 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     print(f'request ID: {reqid}')
     print()
     print(f'generating request files in {pfiles.reqdir}...')
-    req = create_bench_compile_request(cfg, pfiles, bfiles, reqid, **kwargs)
+    req, res = create_bench_compile_request(cfg, pfiles, bfiles, reqid, **kwargs)
     print('...done (generating request files)')
     print()
     for line in render_request(reqid, pfiles):
@@ -1535,12 +1574,15 @@ def main(*, createonly=False, attach=False, cfgfile=None, **kwargs):
     if createonly:
         return
 
+    res.set_status(res.STATUS.PENDING)
+    res.save(pfiles.results_meta)
+
     print()
     print(div)
     print('# sending request')
     print()
     # XXX
-    send_bench_compile_request(reqid, pfiles, attach=attach)
+    send_bench_compile_request(reqid, res, pfiles, attach=attach)
     #send_bench_compile_request('origin', 'master', debug=True)
     #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
