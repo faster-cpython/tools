@@ -982,9 +982,9 @@ def stage_request(reqid, pfiles):
 def unstage_request(reqid, pfiles):
     reqid = RequestID.from_raw(reqid)
     curid = _get_staged_request(pfiles)
-    if not curid or not isinstance(curid, str):
+    if not curid or not isinstance(curid, (str, RequestID)):
         raise RequestNotStagedError(reqid)
-    elif curid != reqid:
+    elif str(curid) != str(reqid):
         raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.current_request)
 
