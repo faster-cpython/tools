@@ -229,6 +229,68 @@ class Request(Metadata):
         return data
 
 
+class Result(Metadata):
+
+    FIELDS = [
+        'reqid',
+        'reqdir',
+        'status',
+        #'history',
+    ]
+
+    STATUS = types.SimpleNamespace(
+        CREATED='created',
+        PENDING='pending',
+        RUNNING='running',
+        SUCCESS='success',
+        FAILED='failed',
+        CANCELLED='cancelled',
+    )
+    _STATUS_BY_VALUE = {v: k for k, v in vars(STATUS).items()}
+
+    def __init__(self, reqid, reqdir, status=STATUS.CREATED):
+        if not reqid:
+            raise ValueError('missing reqid')
+        reqid = RequestID.from_raw(reqid)
+
+        if not reqdir:
+            raise ValueError('missing reqdir')
+        if not isinstance(reqdir, str):
+            raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
+
+        if status:
+            try:
+                status = self._STATUS_BY_VALUE[status]
+            except KeyError:
+                raise ValueError(f'unsupported status {status!r}')
+
+        super().__init__(
+            reqid=reqid,
+            reqdir=reqdir,
+            status=status or self.STATUS.CREATED,
+        )
+
+    def __str__(self):
+        return str(self.reqid)
+
+    @property
+    def short(self):
+        return f'<{self.reqid}: {self.status}>'
+
+    @property
+    def request(self):
+        try:
+            return self._request
+        except AttributeError:
+            self._request = Request(self.reqid, self.reqdir)
+            return self._request
+
+    def as_jsonable(self):
+        data = super().as_jsonable()
+        data['reqid'] = str(data['reqid'])
+        return data
+
+
 ##################################
 # minor utils
 
@@ -941,6 +1003,39 @@ class BenchCompileRequest(Request):
         else:
             return self.CPYTHON.copy(ref=self.ref)
 
+    @property
+    def result(self):
+        return BenchCompileResult(self.id, self.reqdir)
+
+
+class BenchCompileResult(Result):
+
+    FIELDS = Result.FIELDS + [
+        'pyperformance_results',
+        'pyperformance_results_orig',
+    ]
+    OPTIONAL = [
+        'pyperformance_results',
+        'pyperformance_results_orig',
+    ]
+
+    def __init__(self, reqid, reqdir, *,
+                 status=None,
+                 pyperformance_results=None,
+                 pyperformance_results_orig=None,
+                 ):
+        super().__init__(reqid, reqdir, status)
+        self.pyperformance_results = pyperformance_results
+        self.pyperformance_results_orig = pyperformance_results_orig
+
+    def as_jsonable(self):
+        data = super().as_jsonable()
+        for field in ['pyperformance_results', 'pyperformance_results_orig']:
+            if not data[field]:
+                del data[field]
+        data['reqid'] = str(data['reqid'])
+        return data
+
 
 def _resolve_bench_compile_request(reqid, reqdir, remote, revision, branch,
                                    benchmarks,
@@ -1268,6 +1363,7 @@ def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, b
 
     # Write metadata.
     req.save(pfiles.request_meta)
+    req.result.save(pfiles.results_meta)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, bfiles)
