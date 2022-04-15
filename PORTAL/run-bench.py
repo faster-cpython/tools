@@ -47,7 +47,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
     @classmethod
     def parse(cls, idstr):
         kinds = '|'.join(cls._KIND_BY_VALUE)
-        m = re.match(rf'^req-(?:({kinds})-)?(\d{10})-(\w+)$', idstr)
+        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)$', idstr)
         if not m:
             return None
         kind, timestamp, user = m.groups()
@@ -956,7 +956,7 @@ def _get_staged_request(pfiles):
     requests, reqidstr = os.path.split(reqdir)
     reqid = RequestID.parse(reqidstr)
     if not reqid:
-        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not a request ID')
+        return StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
     if requests != pfiles.requests:
         return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
