@@ -834,6 +834,11 @@ class PortalRequestFS(BaseRequestFS):
         return f'{self.reqdir}/send.sh'
 
     @property
+    def pidfile(self):
+        """The PID of the "send" script is written here."""
+        return f'{self.reqdir}/send.pid'
+
+    @property
     def logfile(self):
         """Where the job output is written."""
         return f'{self.reqdir}/job.log'
@@ -1401,6 +1406,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     #reqdir = _quote_shell_str(pfiles.current_request)
     reqdir = _quote_shell_str(pfiles.reqdir)
     results_meta = _quote_shell_str(pfiles.results_meta)
+    pidfile = _quote_shell_str(pfiles.pidfile)
     pyperformance_results = _quote_shell_str(pfiles.pyperformance_results)
     pyperformance_log = _quote_shell_str(pfiles.pyperformance_log)
 
@@ -1429,8 +1435,15 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 
         cfgfile='{cfgfile}'
 
+        # Mark the script as running.
+        echo "$$" > {pidfile}
+        echo "(the "'"'"{req.kind}"'"'" job, {req.id}, has started)"
+        echo
+
         benchuser=$(jq -r '.bench_user' {cfgfile})
         if [ "$USER" != '{benchuser}' ]; then
+            echo "(switching users from $USER to {benchuser})"
+            echo
             setfacl -m {benchuser}:x $(dirname "$SSH_AUTH_SOCK")
             setfacl -m {benchuser}:rwx "$SSH_AUTH_SOCK"
             # Stop running and re-run this script as the {benchuser} user.
