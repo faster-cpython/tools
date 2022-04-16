@@ -1580,8 +1580,6 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
         sys.exit(f'ERROR: {exc}')
     except Exception:
         result.set_status(result.STATUS.FAILED)
-        # XXX Do not delete.
-        shutil.rmtree(pfiles.reqdir)
         raise  # re-raise
 
     try:
