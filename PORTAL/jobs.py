@@ -1674,9 +1674,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 #    sub.add_argument('reqid')
 
     sub = add_cmd('run', help='Run a previously created job request')
-    sub.add_argument('--attach', action='store_true')
-    sub.add_argument('--no-attach', dest='attach',
-                     action='store_const', const=False)
+    sub.add_argument('--attach', dest='after',
+                     action='store_const', const=('attach',))
+    sub.add_argument('--no-attach', dest='after',
+                     action='store_const', const=())
 #    sub.add_argument('--copy', action='store_true',
 #                     help='Run a new copy of the given job request')
 #    sub.add_argument('--force', action='store_true',
