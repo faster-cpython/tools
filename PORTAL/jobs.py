@@ -1334,7 +1334,6 @@ def _build_compile_script(req, bfiles):
         echo "running the benchmarks..."
         echo "(logging to {bfiles.pyperformance_log})"
         exitcode='{exitcode}'
-        echo "$exitcode"
         if [ -n "$exitcode" ]; then
             ( set -x
             touch {bfiles.pyperformance_log}
@@ -1419,6 +1418,8 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     _check_shell_str(bfiles.pyperformance_results)
     _check_shell_str(bfiles.pyperformance_log)
 
+    jobs_script = _quote_shell_str(os.path.abspath(__file__))
+
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
@@ -1454,26 +1455,39 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         host=$(jq -r '.send_host' {cfgfile})
         port=$(jq -r '.send_port' {cfgfile})
 
+        exitcode=0
         if ssh -p {port} {conn} test -e {bfiles.reqdir}; then
             >&2 echo "request {req.id} was already sent"
-            exit 1
+            exitcode=1
+        else
+            ( set -x
+
+            # Set up before running.
+            ssh -p {port} {conn} mkdir -p {bfiles.requests}
+            scp -rp -P {port} {reqdir} {conn}:{bfiles.reqdir}
+            ssh -p {port} {conn} mkdir -p {bfiles.scratch_dir}
+            ssh -p {port} {conn} mkdir -p {bfiles.resdir}
+
+            # Run the request.
+            ssh -p {port} {conn} {bfiles.bench_script}
+            exitcode=$?
+
+            # Finish up.
+            scp -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
+            scp -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
+            scp -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
+            )
         fi
 
-        set -x
+        # Unstage the request.
+        {sys.executable} {jobs_script} internal-finish-run --config {cfgfile} {req.id}
 
-        # Set up before running.
-        ssh -p {port} {conn} mkdir -p {bfiles.requests}
-        scp -rp -P {port} {reqdir} {conn}:{bfiles.reqdir}
-        ssh -p {port} {conn} mkdir -p {bfiles.scratch_dir}
-        ssh -p {port} {conn} mkdir -p {bfiles.resdir}
+        # Mark the script as complete.
+        echo
+        echo "(the "'"'"{req.kind}"'"'" job, {req.id} has finished)"
+        rm -f {pidfile}
 
-        # Run the request.
-        ssh -p {port} {conn} {bfiles.bench_script}
-
-        # Finish up.
-        scp -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
-        scp -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
-        scp -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
+        exit $exitcode
     '''[1:-1])
 
 
@@ -1582,7 +1596,7 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
     result.set_status(result.STATUS.PENDING)
     result.save(resfile)
 
-    print('staging...')
+    print('# staging request')
     try:
         stage_request(reqid, pfiles)
 
@@ -1596,16 +1610,13 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
         raise  # re-raise
 
     try:
-        print('...running....')
+        # XXX Run this in the background.
         subprocess.run(pfiles.portal_script)
     except KeyboardInterrupt:
         # XXX Try to download the results file directly?
         result.set_status(result.STATUS.CANCELED)
         result.save(resfile)
-        raise  # re-raise
-    else:
-        result.refresh(resfile)
-    finally:
+
         print('...unstaging...')
         unstage_request(reqid, pfiles)
         print('...done!')
@@ -1613,18 +1624,36 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
         result.close()
         result.save(resfile)
 
-        print()
-        print('Results:')
-        for line in render_results(reqid, pfiles):
-            print(line)
+        raise  # re-raise
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
+    # XXX Cancel the job for KeyboardInterrupt?
     return cmd_show(cfg, reqid, lines=lines, follow=True)
 
 
 def cmd_cancel(cfg, reqid=None):
     raise NotImplementedError
+
+
+def cmd_finish_run(cfg, reqid):
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+
+    print(f'# unstaging request {reqid}')
+    unstage_request(reqid, pfiles)
+    print('# done unstaging request')
+
+    resfile = pfiles.results_meta
+    # XXX Use the correct type for the request.
+    result = BenchCompileResult.load(resfile)
+
+    result.close()
+    result.save(resfile)
+
+    print()
+    print('Results:')
+    for line in render_results(reqid, pfiles):
+        print(line)
 
 
 COMMANDS = {
@@ -1635,8 +1664,10 @@ COMMANDS = {
     'run': cmd_run,
     'attach': cmd_attach,
     'cancel': cmd_cancel,
-    # Specific jobs
+    # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
+    # internal-only
+    'internal-finish-run': cmd_finish_run,
 }
 
 
@@ -1732,6 +1763,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('--branch')
     sub.add_argument('--remote', required=True)
     sub.add_argument('revision')
+
+    ##########
+    # Add internal commands.
+
+    sub = add_cmd('internal-finish-run', help='(internal-only; do not use)')
+    sub.add_argument('reqid')
 
     ##########
     # Finally, parse the args.
