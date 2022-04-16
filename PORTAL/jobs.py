@@ -1464,88 +1464,6 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     '''[1:-1])
 
 
-def create_bench_compile_request(cfg, pfiles, bfiles, reqid, remote, revision, branch=None, *,
-                                 benchmarks=None,
-                                 optimize=False,
-                                 debug=False,
-                                 ):
-    req = _resolve_bench_compile_request(
-        reqid, pfiles.reqdir, remote, revision, branch, benchmarks,
-        optimize=optimize,
-        debug=debug,
-    )
-    result = req.result
-
-    os.makedirs(pfiles.reqdir, exist_ok=True)
-
-    # Write metadata.
-    req.save(pfiles.request_meta)
-    result.save(pfiles.results_meta)
-
-    # Write the benchmarks manifest.
-    manifest = _build_manifest(req, bfiles)
-    with open(pfiles.manifest, 'w') as outfile:
-        outfile.write(manifest)
-
-    # Write the config.
-    ini = _build_pyperformance_config(req, pfiles, bfiles)
-    with open(pfiles.pyperformance_config, 'w') as outfile:
-        ini.write(outfile)
-
-    # Write the commands to execute remotely.
-    script = _build_compile_script(req, bfiles)
-    with open(pfiles.bench_script, 'w') as outfile:
-        outfile.write(script)
-    os.chmod(pfiles.bench_script, 0o755)
-
-    # Write the commands to execute locally.
-    script = _build_send_script(cfg, req, pfiles, bfiles)
-    with open(pfiles.portal_script, 'w') as outfile:
-        outfile.write(script)
-    os.chmod(pfiles.portal_script, 0o755)
-
-    return req, result
-
-
-def send_bench_compile_request(reqid, result, pfiles):
-    print('staging...')
-    try:
-        stage_request(reqid, pfiles)
-
-        result.set_status(result.STATUS.ACTIVE)
-        result.save(pfiles.results_meta)
-    except RequestAlreadyStagedError as exc:
-        # XXX Offer to clear CURRENT?
-        sys.exit(f'ERROR: {exc}')
-    except Exception:
-        result.set_status(result.STATUS.FAILED)
-        shutil.rmtree(pfiles.reqdir)
-        raise  # re-raise
-
-    try:
-        print('...running....')
-        subprocess.run(pfiles.portal_script)
-    except KeyboardInterrupt:
-        # XXX Try to download the results file directly?
-        result.set_status(result.STATUS.CANCELED)
-        result.save(pfiles.results_meta)
-        raise  # re-raise
-    else:
-        result.refresh(pfiles.results_meta)
-    finally:
-        print('...unstaging...')
-        unstage_request(reqid, pfiles)
-        print('...done!')
-
-        result.close()
-        result.save(pfiles.results_meta)
-
-        print()
-        print('Results:')
-        for line in render_results(reqid, pfiles):
-            print(line)
-
-
 def render_request(reqid, pfiles):
     yield f'(from {pfiles.request_meta}):'
     yield ''
@@ -1573,6 +1491,60 @@ def cmd_show(cfg, reqid=None, *, lines=None, follow=False):
     raise NotImplementedError
 
 
+def cmd_request_compile_bench(cfg, reqid, revision, *,
+                              remote=None,
+                              branch=None,
+                              benchmarks=None,
+                              optimize=False,
+                              debug=False,
+                              ):
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
+
+    print(f'generating request files in {pfiles.reqdir}...')
+
+    req = _resolve_bench_compile_request(
+        reqid, pfiles.reqdir, remote, revision, branch, benchmarks,
+        optimize=optimize,
+        debug=debug,
+    )
+    result = req.result
+    resfile = pfiles.results_meta
+
+    os.makedirs(pfiles.reqdir, exist_ok=True)
+
+    # Write metadata.
+    req.save(pfiles.request_meta)
+    result.save(resfile)
+
+    # Write the benchmarks manifest.
+    manifest = _build_manifest(req, bfiles)
+    with open(pfiles.manifest, 'w') as outfile:
+        outfile.write(manifest)
+
+    # Write the config.
+    ini = _build_pyperformance_config(req, pfiles, bfiles)
+    with open(pfiles.pyperformance_config, 'w') as outfile:
+        ini.write(outfile)
+
+    # Write the commands to execute remotely.
+    script = _build_compile_script(req, bfiles)
+    with open(pfiles.bench_script, 'w') as outfile:
+        outfile.write(script)
+    os.chmod(pfiles.bench_script, 0o755)
+
+    # Write the commands to execute locally.
+    script = _build_send_script(cfg, req, pfiles, bfiles)
+    with open(pfiles.portal_script, 'w') as outfile:
+        outfile.write(script)
+    os.chmod(pfiles.portal_script, 0o755)
+
+    print('...done (generating request files)')
+    print()
+    for line in render_request(reqid, pfiles):
+        print(f'  {line}')
+
+
 def cmd_copy(cfg, reqid=None):
     raise NotImplementedError
 
@@ -1582,7 +1554,58 @@ def cmd_remove(cfg, reqid):
 
 
 def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
-    raise NotImplementedError
+    if copy:
+        raise NotImplementedError
+    if force:
+        raise NotImplementedError
+
+    print('# sending request')
+    print()
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+
+    resfile = pfiles.results_meta
+    result = BenchCompileResult.load(resfile)
+
+    result.set_status(result.STATUS.PENDING)
+    result.save(resfile)
+
+    print('staging...')
+    try:
+        stage_request(reqid, pfiles)
+
+        result.set_status(result.STATUS.ACTIVE)
+        result.save(resfile)
+    except RequestAlreadyStagedError as exc:
+        # XXX Offer to clear CURRENT?
+        sys.exit(f'ERROR: {exc}')
+    except Exception:
+        result.set_status(result.STATUS.FAILED)
+        # XXX Do not delete.
+        shutil.rmtree(pfiles.reqdir)
+        raise  # re-raise
+
+    try:
+        print('...running....')
+        subprocess.run(pfiles.portal_script)
+    except KeyboardInterrupt:
+        # XXX Try to download the results file directly?
+        result.set_status(result.STATUS.CANCELED)
+        result.save(resfile)
+        raise  # re-raise
+    else:
+        result.refresh(resfile)
+    finally:
+        print('...unstaging...')
+        unstage_request(reqid, pfiles)
+        print('...done!')
+
+        result.close()
+        result.save(resfile)
+
+        print()
+        print('Results:')
+        for line in render_results(reqid, pfiles):
+            print(line)
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
@@ -1591,32 +1614,6 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
 
 def cmd_cancel(cfg, reqid=None):
     raise NotImplementedError
-
-
-def cmd_request_compile_bench(cfg, reqid, **kwargs):
-    print('# preparing request')
-    print()
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
-    print(f'request ID: {reqid}')
-    print()
-    print(f'generating request files in {pfiles.reqdir}...')
-    req, res = create_bench_compile_request(cfg, pfiles, bfiles, reqid, **kwargs)
-    print('...done (generating request files)')
-    print()
-    for line in render_request(reqid, pfiles):
-        print(f'  {line}')
-
-    res.set_status(res.STATUS.PENDING)
-    res.save(pfiles.results_meta)
-
-    print()
-    print('# sending request')
-    print()
-    # XXX
-    send_bench_compile_request(reqid, res, pfiles)
-    #send_bench_compile_request('origin', 'master', debug=True)
-    #send_bench_compile_request('origin', 'deadbeef', 'master', debug=True)
 
 
 COMMANDS = {
