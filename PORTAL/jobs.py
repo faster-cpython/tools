@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import types
@@ -652,6 +653,36 @@ class Version(namedtuple('Version', 'major minor micro level serial')):
 def _read_file(filename):
     with open(filename) as infile:
         return infile.read()
+
+
+def read_pidfile(pidfile):
+    if isinstance(pidfile, str):
+        filename = pidfile
+        try:
+            pidfile = open(filename)
+        except OSError as exc:
+            if os.path.exists(filename):
+                # XXX Use a logger.
+                print(f'WARNING: could not load PID file {filename!r}')
+            return None
+        with pidfile:
+            return read_pidfile(pidfile)
+    text = pidfile.read().strip()
+    if not text:
+        return None
+    return int(text)
+
+
+def tail_file(filename, nlines, *, follow=None):
+    tail_args = []
+    if lines:
+        tail_args.extend(['-n', f'{lines}' if lines > 0 else '+0'])
+    if follow:
+        tail_args.append('--follow')
+        if follow is not True:
+            pid = follow
+            tail_args.extend(['--pid', f'{pid}'])
+    subprocess.run([shutil.which('tail'), *tail_args, pfiles.logfile])
 
 
 ##################################
@@ -1628,7 +1659,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         # Mark the script as complete.
         echo
         echo "(the "'"'"{req.kind}"'"'" job, {req.id} has finished)"
-        rm -f {pidfile}
+        #rm -f {pidfile}
 
         exit $exitcode
     '''[1:-1])
@@ -1657,8 +1688,24 @@ def cmd_list(cfg):
     raise NotImplementedError
 
 
-def cmd_show(cfg, reqid=None, *, lines=None, follow=False):
-    raise NotImplementedError
+def cmd_show(cfg, reqid=None, *, summarize=True, lines=None, follow=False):
+    if not reqid:
+        # XXX Get the current job, if any.
+        raise NotImplementedError
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+
+    req = BenchCompileRequest.load(pfiles.request_meta)
+    res = BenchCompileResult.load(pfiles.results_meta)
+    pid = read_pidfile(pfiles.pidfile)
+
+    if summarize:
+        # XXX Print a summary of the job.
+        ...
+
+    if follow and pid:
+        tail_file(pfiles.logfile, lines, follow=pid)
+    elif lines:
+        tail_file(pfiles.logfile, lines, follow=False)
 
 
 def cmd_request_compile_bench(cfg, reqid, revision, *,
@@ -1752,9 +1799,28 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
         result.set_status(result.STATUS.FAILED)
         raise  # re-raise
 
+    # Run the send.sh script in the background.
     try:
-        # XXX Run this in the background.
-        subprocess.run(pfiles.portal_script)
+        script = textwrap.dedent(f"""
+            #!/usr/bin/env bash
+            "{pfiles.portal_script}" > "{pfiles.logfile}" 2>&1 &
+        """).lstrip()
+        scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
+        try:
+            with scriptfile:
+                scriptfile.write(script)
+            os.chmod(scriptfile.name, 0o755)
+            subprocess.run(scriptfile.name)
+        finally:
+            os.unlink(scriptfile.name)
+    except Exception as exc:
+        result.set_status(result.STATUS.CANCELED)
+        result.save(resfile)
+
+        result.close()
+        result.save(resfile)
+
+        raise  # re-raise
     except KeyboardInterrupt:
         # XXX Try to download the results file directly?
         result.set_status(result.STATUS.CANCELED)
@@ -1772,7 +1838,7 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
     # XXX Cancel the job for KeyboardInterrupt?
-    return cmd_show(cfg, reqid, lines=lines, follow=True)
+    return cmd_show(cfg, reqid, summarize=False, lines=lines, follow=True)
 
 
 def cmd_cancel(cfg, reqid=None):
@@ -1852,7 +1918,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 #    sub = add_cmd('list', help='Print a table of all known jobs')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
-    sub.add_argument('-n', '--lines', type=int, default=-1,
+    sub.add_argument('-n', '--lines', type=int, default=0,
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('--follow', action='store_true',
                      help='Attach stdout to the job\'s output')
@@ -1880,7 +1946,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('reqid')
 
     sub = add_cmd('attach', help='Equivalent to show --follow')
-    sub.add_argument('-n', '--lines', type=int, default=-1,
+    sub.add_argument('-n', '--lines', type=int, default=0,
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('reqid', nargs='?')
 
@@ -1991,6 +2057,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
         else:
             print(f'# Running {cmd!r} command')
         print()
+        # XXX Add --lines='-1' for attach.
         run_cmd(cfg, reqid=reqid)
 
 
