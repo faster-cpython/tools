@@ -39,8 +39,12 @@ class Config(types.SimpleNamespace):
     CONFIG = 'benchmarking.json'
     ALT_CONFIG = None
 
+    # XXX Get FIELDS from the __init__() signature?
+    FIELDS = ()
+    OPTIONAL = ()
+
     @classmethod
-    def load(cls, filename=None):
+    def load(cls, filename=None, *, preserveorig=True):
         if not filename:
             for dirname in cls.CONFIG_DIRS:
                 filename = f'{dirname}/{cls.CONFIG}'
@@ -52,11 +56,65 @@ class Config(types.SimpleNamespace):
                     if os.path.exists(filename):
                         return cls.load(filename)
                 raise FileNotFoundError('could not find config file')
+
         with open(filename) as infile:
             data = json.load(infile)
+        if preserveorig:
+            loaded = dict(data, _filename=filename)
+
+        includes = data.pop('include', None) or ()
+        if includes:
+            includes = list(cls._load_includes(includes, set()))
+            for field in cls.FIELDS:
+                if data.get(field):
+                    continue
+                if field in cls.OPTIONAL:
+                    continue
+                for included in includes:
+                    value = included.get(field)
+                    if value:
+                        data[field] = value
+                        break
+
         self = cls(**data)
         self._filename = os.path.abspath(os.path.expanduser(filename))
+        if preserveorig:
+            self._loaded = loaded
+            self._includes = includes
         return self
+
+    @classmethod
+    def _load_includes(cls, includes, seen):
+        if isinstance(includes, str):
+            includes = [includes]
+        for i, filename in enumerate(includes):
+            if not filename:
+                continue
+            if filename in seen:
+                continue
+            seen.add(filename)
+            try:
+                cfgfile = open(filename)
+            except OSError as exc:
+                # XXX Use a logger.
+                print(f'WARNING: error loading included config file {filename!r} ({exc})')
+                continue
+            with cfgfile:
+                included = json.load(cfgfile)
+            included['_filename'] = filename
+            yield included
+
+            subincludes = included.get('include')
+            if subincludes:
+                yield from cls._load_includes(subincludes, seen)
+
+    def __init__(self, **kwargs):
+        for name in list(kwargs):
+            value = kwargs[name]
+            if not value:
+                if name in self.OPTIONAL:
+                    del kwargs[name]
+        super().__init__(**kwargs)
 
     def __str__(self):
         if not self.filename:
@@ -70,11 +128,30 @@ class Config(types.SimpleNamespace):
         except AttributeError:
             return None
 
+    def as_jsonable(self, *, withmissingoptional=True):
+        # XXX Hide sensitive data?
+        data = {k: v
+                for k, v in vars(self).items()
+                if not k.startswith('_')}
+        if withmissingoptional:
+            for name in self.OPTIONAL:
+                if name not in data:
+                    data[name] = None
+        return data
+
+    def render(self):
+        data = self.as_jsonable()
+        text = json.dumps(data, indent=4)
+        yield from text.splitlines()
+
 
 class PortalConfig(Config):
 
     CONFIG = 'benchmarking-portal.json'
     ALT_CONFIG = 'portal.json'
+
+    FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
+    OPTIONAL = ['data_dir']
 
     def __init__(self,
                  bench_user,
@@ -106,6 +183,8 @@ class PortalConfig(Config):
 #
 #    CONFIG = f'benchmarking-bench.json'
 #    ALT_CONFIG = f'bench.json'
+#
+#    FIELDS = ['portal']
 #
 #    def __init__(self,
 #                 portal,
