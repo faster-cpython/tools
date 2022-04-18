@@ -175,7 +175,7 @@ class PortalConfig(Config):
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
-            data_dir = '/home/{send_user}/BENCH'  # This matches DATA_ROOT.
+            data_dir = f'/home/{send_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
             bench_user=bench_user,
             send_user=send_user,
