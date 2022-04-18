@@ -1754,7 +1754,13 @@ def cmd_finish_run(cfg, reqid):
         print(line)
 
 
+def cmd_config_show(cfg):
+    for line in cfg.render():
+        print(line)
+
+
 COMMANDS = {
+    # job management
     'list': cmd_list,
     'show': cmd_show,
     'copy': cmd_copy,
@@ -1764,6 +1770,8 @@ COMMANDS = {
     'cancel': cmd_cancel,
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
+    # other public commands
+    'config-show': cmd_config_show,
     # internal-only
     'internal-finish-run': cmd_finish_run,
 }
@@ -1863,6 +1871,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('revision')
 
     ##########
+    # Add other public commands.
+
+    sub = add_cmd('config', help='show the config')
+
+    ##########
     # Add internal commands.
 
     sub = add_cmd('internal-finish-run', help='(internal-only; do not use)')
@@ -1880,6 +1893,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     if cmd in ('add', 'request'):
         cmd = 'request-' + ns.pop('job')
+    elif cmd == 'config':
+        cmd = 'config-show'
 
     return cmd, ns, cfgfile
 
