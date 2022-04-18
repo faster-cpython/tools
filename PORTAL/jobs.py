@@ -7,6 +7,7 @@ import os.path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1830,17 +1831,7 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
 
         raise  # re-raise
     except KeyboardInterrupt:
-        # XXX Try to download the results file directly?
-        result.set_status(result.STATUS.CANCELED)
-        result.save(resfile)
-
-        print('...unstaging...')
-        unstage_request(reqid, pfiles)
-        print('...done!')
-
-        result.close()
-        result.save(resfile)
-
+        cmd_cancel(cfg, reqid)
         raise  # re-raise
 
 
@@ -1871,14 +1862,51 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
 
 
 def cmd_cancel(cfg, reqid=None):
-    raise NotImplementedError
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    current = _get_staged_request(pfiles)
+    if not reqid:
+        if not current:
+            sys.exit('ERROR: no current request to cancel')
+        reqid = current
+        pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    # XXX Use the right result type.
+    resfile = pfiles.results_meta
+    result = BenchCompileResult.load(resfile)
+
+    result.set_status(result.STATUS.CANCELED)
+    result.close()
+    result.save(resfile)
+
+    if reqid == current:
+        print(f'# unstaging request {reqid}')
+        try:
+            unstage_request(reqid, pfiles)
+        except RequestNotStagedError:
+            pass
+        print('# done unstaging request')
+
+        # Kill the process.
+        pid = read_pidfile(pfiles.pidfile)
+        if pid:
+            print(f'# killing PID {pid}')
+            os.kill(pid, signal.SIGKILL)
+
+    # XXX Try to download the results directly?
+
+    print()
+    print('Results:')
+    for line in render_results(reqid, pfiles):
+        print(line)
 
 
 def cmd_finish_run(cfg, reqid):
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
 
     print(f'# unstaging request {reqid}')
-    unstage_request(reqid, pfiles)
+    try:
+        unstage_request(reqid, pfiles)
+    except RequestNotStagedError:
+        pass
     print('# done unstaging request')
 
     resfile = pfiles.results_meta
