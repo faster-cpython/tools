@@ -1504,7 +1504,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         user = _check_shell_str(cfg.send_user)
         host = _check_shell_str(cfg.send_host)
         port = cfg.send_port
-    conn = f'{user}@{host}'
+    conn = f'{benchuser}@{host}'
 
     #reqdir = _quote_shell_str(pfiles.current_request)
     reqdir = _quote_shell_str(pfiles.reqdir)
@@ -1536,7 +1536,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 
         # This script only runs on the portal host.
         # It does 4 things:
-        #   1. switch to the {benchuser} user, if necessary
+        #   1. switch to the {user} user, if necessary
         #   2. prepare the bench host, including sending all
         #      the request files to the bench host (over SSH)
         #   3. run the job (e.g. run the benchmarks)
@@ -1552,17 +1552,15 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         echo "(the "'"'"{req.kind}"'"'" job, {req.id}, has started)"
         echo
 
-        benchuser=$(jq -r '.bench_user' {cfgfile})
-        if [ "$USER" != '{benchuser}' ]; then
-            echo "(switching users from $USER to {benchuser})"
-            echo
-            setfacl -m {benchuser}:x $(dirname "$SSH_AUTH_SOCK")
-            setfacl -m {benchuser}:rwx "$SSH_AUTH_SOCK"
-            # Stop running and re-run this script as the {benchuser} user.
-            exec sudo --login --user {benchuser} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
-        fi
-
         user=$(jq -r '.send_user' {cfgfile})
+        if [ "$USER" != '{user}' ]; then
+            echo "(switching users from $USER to {user})"
+            echo
+            setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
+            setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
+            # Stop running and re-run this script as the {user} user.
+            exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
+        fi
         host=$(jq -r '.send_host' {cfgfile})
         port=$(jq -r '.send_port' {cfgfile})
 
