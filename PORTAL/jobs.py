@@ -997,7 +997,7 @@ class BaseRequestFS(types.SimpleNamespace):
         return cls(reqid, topdata)
 
     def __init__(self, reqid, topdata=DATA_ROOT):
-        reqid = RequestID.from_raw(reqid)
+        reqid = RequestID.from_raw(reqid) if reqid else None
         if topdata:
             # XXX Leaving this as-is may be more user-friendly.
             topdata = os.path.abspath(os.path.expanduser(topdata))
@@ -1700,11 +1700,13 @@ def cmd_list(cfg):
 
 
 def cmd_show(cfg, reqid=None, *, lines=None):
-    if not reqid:
-        # XXX Get the current job, if any.
-        raise NotImplementedError
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
-
+    if not reqid:
+        reqid = _get_staged_request(pfiles)
+        if not reqid:
+            # XXX Use the last finished?
+            raise NotImplementedError
+        pfiles = PortalRequestFS(reqid, cfg.data_dir)
     req = BenchCompileRequest.load(pfiles.request_meta)
     res = BenchCompileResult.load(pfiles.results_meta)
 
@@ -1843,11 +1845,12 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
-    if not reqid:
-        # XXX Get the current job, if any.
-        raise NotImplementedError
-
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    if not reqid:
+        reqid = _get_staged_request(pfiles)
+        if not reqid:
+            sys.exit('ERROR: no current request to attach')
+        pfiles = PortalRequestFS(reqid, cfg.data_dir)
 
     # Wait for the request to start.
     pid = read_pidfile(pfiles.pidfile)
@@ -2057,7 +2060,10 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
-        cmd_kwargs['reqid'] = RequestID.parse(cmd_kwargs['reqid'])
+        if cmd_kwargs['reqid']:
+            cmd_kwargs['reqid'] = RequestID.parse(cmd_kwargs['reqid'])
+        else:
+            cmd_kwargs['reqid'] = None
     elif cmd.startswith('request-'):
         cmd_kwargs['reqid'] = RequestID.generate(cfg, kind=cmd[8:])
     reqid = cmd_kwargs.get('reqid')
