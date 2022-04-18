@@ -1524,6 +1524,13 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 
     jobs_script = _quote_shell_str(os.path.abspath(__file__))
 
+    if cfg.send_host == 'localhost':
+        ssh = 'ssh -o StrictHostKeyChecking=no'
+        scp = 'scp -o StrictHostKeyChecking=no'
+    else:
+        ssh = 'ssh'
+        scp = 'scp'
+
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
@@ -1567,19 +1574,19 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
             ( set -x
 
             # Set up before running.
-            ssh -p {port} {conn} mkdir -p {bfiles.requests}
-            scp -rp -P {port} {reqdir} {conn}:{bfiles.reqdir}
-            ssh -p {port} {conn} mkdir -p {bfiles.scratch_dir}
-            ssh -p {port} {conn} mkdir -p {bfiles.resdir}
+            {ssh} -p {port} {conn} mkdir -p {bfiles.requests}
+            {scp} -rp -P {port} {reqdir} {conn}:{bfiles.reqdir}
+            {ssh} -p {port} {conn} mkdir -p {bfiles.scratch_dir}
+            {ssh} -p {port} {conn} mkdir -p {bfiles.resdir}
 
             # Run the request.
-            ssh -p {port} {conn} {bfiles.bench_script}
+            {ssh} -p {port} {conn} {bfiles.bench_script}
             exitcode=$?
 
             # Finish up.
-            scp -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
-            scp -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
-            scp -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
+            {scp} -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
+            {scp} -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
+            {scp} -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
             )
         fi
 
