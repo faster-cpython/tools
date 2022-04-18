@@ -1145,6 +1145,14 @@ class StagedRequestError(Exception):
     pass
 
 
+class RequestNotPendingError(StagedRequestError):
+
+    def __init__(self, reqid, status=None):
+        super().__init__(f'could not stage {reqid} (expected pending, got {status or "???"} status)')
+        self.reqid = reqid
+        self.status = status
+
+
 class RequestAlreadyStagedError(StagedRequestError):
 
     def __init__(self, reqid, curid):
@@ -1193,6 +1201,9 @@ def _get_staged_request(pfiles):
 
 
 def stage_request(reqid, pfiles):
+    status = Result.read_status(pfiles.results_meta)
+    if status is not Result.STATUS.PENDING:
+        raise RequestNotPendingError(reqid, status)
     try:
         os.symlink(pfiles.reqdir, pfiles.current_request)
     except FileExistsError:
