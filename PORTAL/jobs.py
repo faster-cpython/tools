@@ -274,10 +274,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
 
     @property
     def date(self):
-        return datetime.datetime.fromtimestamp(
-            self.timestamp,
-            datetime.timezone.utc,
-        )
+        return get_utc_datetime(self.timestamp)
 
 
 class Metadata(types.SimpleNamespace):
@@ -466,9 +463,9 @@ class Result(Metadata):
                 if not date:
                     date = None
                 elif isinstance(date, str):
-                    date = datetime.datetime.fromisoformat(date)
+                    date = get_utc_datetime(date)
                 elif isinstance(date, int):
-                    date = datetime.datetime.utcfromtimestamp(date)
+                    date = get_utc_datetime(date)
                 elif not isinstance(date, datetime.datetime):
                     raise TypeError(f'unsupported history date {date!r}')
                 h.append((st, date))
@@ -547,6 +544,39 @@ def _utcnow():
     if time.tzname[0] == 'UTC':
         return time.time()
     return time.mktime(time.gmtime())
+
+
+def get_utc_datetime(timestamp):
+    if isinstance(timestamp, datetime.datetime):
+        pass
+    elif isinstance(timestamp, int):
+        return datetime.datetime.fromtimestamp(
+            timestamp,
+            datetime.timezone.utc,
+        )
+    elif isinstance(timestamp, str):
+        if hasattr(datetime.datetime, 'fromisoformat'):  # 3.7+
+            timestamp = datetime.datetime.fromisoformat(timestamp)
+        else:
+            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
+            if not m:
+                raise NotImplementedError
+            body, sep, subzero, tz = m.groups()
+            timestamp = body
+            fmt = f'%Y-%m-%d{sep}%H:%M:%S'
+            if subzero:
+                if len(subzero) == 4:
+                    subzero += '000'
+                timestamp += subzero
+                fmt += '.%f'
+            if tz:
+                timestamp += tz.replace(':', '')
+                fmt += '%z'
+            timestamp = datetime.datetime.strptime(timestamp, fmt)
+    else:
+        raise TypeError(f'unsupported timestamp {timestamp!r}')
+    # XXX Treat naive as UTC?
+    return timestamp.astimezone(datetime.timezone.utc)
 
 
 def _resolve_user(cfg, user=None):
