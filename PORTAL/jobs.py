@@ -99,14 +99,10 @@ class Config(types.SimpleNamespace):
             if filename in seen:
                 continue
             seen.add(filename)
-            try:
-                cfgfile = open(filename)
-            except OSError as exc:
-                # XXX Use a logger.
-                print(f'WARNING: error loading included config file {filename!r} ({exc})')
+            text = _read_file(filename, fail=False)
+            if not text:
                 continue
-            with cfgfile:
-                included = json.load(cfgfile)
+            included = json.loads(text)
             included['_filename'] = filename
             yield included
 
@@ -650,24 +646,26 @@ class Version(namedtuple('Version', 'major minor micro level serial')):
         return f'v{self.major}.{self.minor}{micro}{release}'
 
 
-def _read_file(filename):
-    with open(filename) as infile:
-        return infile.read()
+def _read_file(filename, *, fail=True):
+    try:
+        with open(filename) as infile:
+            return infile.read()
+    except OSError as exc:
+        if fail:
+            raise  # re-raise
+        if os.path.exists(filename):
+            # XXX Use a logger.
+            print(f'WARNING: could not load PID file {filename!r}')
+        return None
 
 
 def read_pidfile(pidfile):
     if isinstance(pidfile, str):
         filename = pidfile
-        try:
-            pidfile = open(filename)
-        except OSError as exc:
-            if os.path.exists(filename):
-                # XXX Use a logger.
-                print(f'WARNING: could not load PID file {filename!r}')
-            return None
-        with pidfile:
-            return read_pidfile(pidfile)
-    text = pidfile.read().strip()
+        text = _read_file(pidfile, fail=False) or ''
+    else:
+        text = pidfile.read()
+    text = text.strip()
     if not text:
         return None
     return int(text)
