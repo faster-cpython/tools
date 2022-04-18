@@ -426,7 +426,20 @@ class Result(Metadata):
         CANCELED='cancelled',
     )
     _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
+    FINISHED = frozenset([
+        STATUS.SUCCESS,
+        STATUS.FAILED,
+        STATUS.CANCELED,
+    ])
     CLOSED = 'closed'
+
+    @classmethod
+    def read_status(cls, metafile):
+       text = _read_file(metafile, fail=False)
+       if not text:
+           return None
+       data = json.loads(text)
+       return cls._STATUS_BY_VALUE.get(data.get('status'))
 
     def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
         if not reqid:
@@ -673,14 +686,14 @@ def read_pidfile(pidfile):
 
 def tail_file(filename, nlines, *, follow=None):
     tail_args = []
-    if lines:
-        tail_args.extend(['-n', f'{lines}' if lines > 0 else '+0'])
+    if nlines:
+        tail_args.extend(['-n', f'{lines}' if nlines > 0 else '+0'])
     if follow:
         tail_args.append('--follow')
         if follow is not True:
             pid = follow
             tail_args.extend(['--pid', f'{pid}'])
-    subprocess.run([shutil.which('tail'), *tail_args, pfiles.logfile])
+    subprocess.run([shutil.which('tail'), *tail_args, filename])
 
 
 ##################################
@@ -1686,7 +1699,7 @@ def cmd_list(cfg):
     raise NotImplementedError
 
 
-def cmd_show(cfg, reqid=None, *, summarize=True, lines=None, follow=False):
+def cmd_show(cfg, reqid=None, *, lines=None):
     if not reqid:
         # XXX Get the current job, if any.
         raise NotImplementedError
@@ -1694,15 +1707,10 @@ def cmd_show(cfg, reqid=None, *, summarize=True, lines=None, follow=False):
 
     req = BenchCompileRequest.load(pfiles.request_meta)
     res = BenchCompileResult.load(pfiles.results_meta)
-    pid = read_pidfile(pfiles.pidfile)
 
-    if summarize:
-        # XXX Print a summary of the job.
-        ...
+    # XXX Print a summary of the job.
 
-    if follow and pid:
-        tail_file(pfiles.logfile, lines, follow=pid)
-    elif lines:
+    if lines:
         tail_file(pfiles.logfile, lines, follow=False)
 
 
@@ -1835,8 +1843,28 @@ def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
+    if not reqid:
+        # XXX Get the current job, if any.
+        raise NotImplementedError
+
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+
+    # Wait for the request to start.
+    pid = read_pidfile(pfiles.pidfile)
+    while pid is None:
+        status = Result.read_status(pfiles.results_meta)
+        if status is Result.FINISHED:
+            # XXX Use a logger.
+            print(f'WARNING: job not started')
+            return
+        time.sleep(0.01)
+        pid = read_pidfile(pfiles.pidfile)
+
     # XXX Cancel the job for KeyboardInterrupt?
-    return cmd_show(cfg, reqid, summarize=False, lines=lines, follow=True)
+    if pid:
+        tail_file(pfiles.logfile, lines, follow=pid)
+    elif lines:
+        tail_file(pfiles.logfile, lines, follow=False)
 
 
 def cmd_cancel(cfg, reqid=None):
@@ -1918,8 +1946,6 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=0,
                      help='Show the last n lines of the job\'s output')
-    sub.add_argument('--follow', action='store_true',
-                     help='Attach stdout to the job\'s output')
     sub.add_argument('reqid', nargs='?')
 
     sub = add_cmd('request', aliases=['add'], help='Create a new job request')
@@ -1943,7 +1969,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 #                     help='Run the job even if another is already running')
     sub.add_argument('reqid')
 
-    sub = add_cmd('attach', help='Equivalent to show --follow')
+    sub = add_cmd('attach', help='Tail the job log file')
     sub.add_argument('-n', '--lines', type=int, default=0,
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('reqid', nargs='?')
