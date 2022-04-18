@@ -94,6 +94,7 @@ class Config(types.SimpleNamespace):
         for i, filename in enumerate(includes):
             if not filename:
                 continue
+            filename = os.path.abspath(os.path.expanduser(filename))
             if filename in seen:
                 continue
             seen.add(filename)
