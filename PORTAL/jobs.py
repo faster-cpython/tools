@@ -1198,13 +1198,14 @@ class BenchCompileRequest(Request):
 
     def __init__(self,
                  id,
-                 reqdir,
+                 datadir,
                  ref,
                  remote=None,
                  branch=None,
                  benchmarks=None,
                  optimize=True,
                  debug=False,
+                 **kwargs
                  ):
         if branch and not _looks_like_git_branch(branch):
             raise ValueError(branch)
@@ -1212,7 +1213,7 @@ class BenchCompileRequest(Request):
             if not _looks_like_git_revision(ref):
                 raise ValueError(ref)
 
-        super().__init__(id, reqdir)
+        super().__init__(id, datadir, **kwargs)
         self.ref = ref
         self.remote = remote
         self.branch = branch
@@ -1279,7 +1280,7 @@ def _resolve_bench_compile_request(reqid, reqdir, remote, revision, branch,
 
     meta = BenchCompileRequest(
         id=reqid,
-        reqdir=reqdir,
+        datadir=reqdir,
         # XXX Add a "commit" field and use "tag or branch" for ref.
         ref=commit,
         remote=remote,
