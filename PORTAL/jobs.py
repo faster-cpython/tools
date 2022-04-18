@@ -381,7 +381,7 @@ class Request(Metadata):
         )
 
     def __str__(self):
-        return self.id
+        return str(self.id)
 
     @property
     def reqid(self):
