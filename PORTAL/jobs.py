@@ -174,6 +174,8 @@ class PortalConfig(Config):
             raise ValueError('missing send_port')
         if data_dir:
             datadir = os.path.abspath(os.path.expanduser(data_dir))
+        else:
+            datadir = '/home/{send_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
             bench_user=bench_user,
             send_user=send_user,
