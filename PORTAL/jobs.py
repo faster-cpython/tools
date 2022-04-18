@@ -44,18 +44,22 @@ class Config(types.SimpleNamespace):
     OPTIONAL = ()
 
     @classmethod
+    def find_config(cls):
+        for dirname in cls.CONFIG_DIRS:
+            filename = f'{dirname}/{cls.CONFIG}'
+            if os.path.exists(filename):
+                return filename
+        else:
+            if cls.ALT_CONFIG:
+                filename = f'{HOME}/BENCH/{cls.ALT_CONFIG}'
+                if os.path.exists(filename):
+                    return filename
+            raise FileNotFoundError('could not find config file')
+
+    @classmethod
     def load(cls, filename=None, *, preserveorig=True):
         if not filename:
-            for dirname in cls.CONFIG_DIRS:
-                filename = f'{dirname}/{cls.CONFIG}'
-                if os.path.exists(filename):
-                    return cls.load(filename)
-            else:
-                if ALT_CONFIG:
-                    filename = f'{HOME}/BENCH/{ALT_CONFIG}'
-                    if os.path.exists(filename):
-                        return cls.load(filename)
-                raise FileNotFoundError('could not find config file')
+            filename = cls.find_config()
 
         with open(filename) as infile:
             data = json.load(infile)
@@ -1487,7 +1491,9 @@ def _build_compile_script(req, bfiles):
 
 
 def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
-    cfgfile = _quote_shell_str(cfg.filename or cfg.CONFIG)
+    if not cfg.filename:
+        raise NotImplementedError(cfg)
+    cfgfile = _quote_shell_str(cfg.filename)
     if hidecfg:
         benchuser = '$benchuser'
         user = '$user'
@@ -1915,7 +1921,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
     # Load the config.
     if not cfgfile:
-        cfgfile = PortalConfig.CONFIG
+        cfgfile = PortalConfig.find_config()
     print()
     print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
