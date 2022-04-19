@@ -1259,6 +1259,19 @@ class JobQueue:
     def __getitem__(self, idx):
         ...
 
+    def __enter__(self):
+        self._lock()
+        return self
+
+    def __exit__(self, *args):
+        self._unlock()
+
+    def _lock(self):
+        ...
+
+    def _unlock(self):
+        ...
+
     def add(self, reqid):
         ...
 
