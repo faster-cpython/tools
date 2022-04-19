@@ -1246,6 +1246,9 @@ class JobQueue:
 
     def __init__(self, cfg):
         self.cfg = cfg
+        self._locked = 0
+        pfiles = PortalRequestFS(None, self.cfg.data_dir)
+        self._lockfile = f'{pfiles.requests}/queue.lock'
 
     def __iter__(self):
         with self:
@@ -1270,10 +1273,20 @@ class JobQueue:
         self._unlock()
 
     def _lock(self):
-        ...  # XXX
+        if self._locked == 0:
+            while True:
+                try:
+                    with open(self._lockfile, 'x') as outfile:
+                        outfile.write(f'{os.getpid()}')
+                    break
+                except FileExistsError:
+                    pass
+        self._locked += 1
 
     def _unlock(self):
-        ...  # XXX
+        self._locked -= 1
+        if self._locked == 0:
+            os.unlink(self._lockfile)
 
     def _load(self):
         return []  # XXX
