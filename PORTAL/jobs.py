@@ -1248,6 +1248,7 @@ class JobQueue:
         self.cfg = cfg
         self._locked = 0
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
+        self._filename = f'{pfiles.requests}/queue.json'
         self._lockfile = f'{pfiles.requests}/queue.lock'
 
     def __iter__(self):
@@ -1289,10 +1290,20 @@ class JobQueue:
             os.unlink(self._lockfile)
 
     def _load(self):
-        return []  # XXX
+        text = _read_file(self._filename, fail=False)
+        if not text:
+            return []
+        jobs = [RequestID.parse(v) for v in json.loads(text)]
+        if any(not j for j in jobs):
+            # XXX Use a logger.
+            print(f'WARNING: job queue at {self._filename} has bad entries')
+            jobs = [r for r in jobs if r]
+        return jobs
 
     def _save(self, jobs):
-        ...  # XXX
+        data = [str(r) for r in jobs]
+        with open(self._filename, 'w') as outfile:
+            json.dump(data, outfile, indent=4)
 
     def add(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
