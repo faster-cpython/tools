@@ -1245,19 +1245,22 @@ def unstage_request(reqid, pfiles):
 class JobQueue:
 
     def __init__(self, cfg):
-        ...
+        self.cfg = cfg
 
     def __iter__(self):
-        if False:
-            yield
-        ...
+        with self:
+            jobs = self._load()
+        yield from jobs
 
     def __len__(self):
-        return 0
-        ...
+        with self:
+            jobs = self._load()
+        return len(jobs)
 
     def __getitem__(self, idx):
-        ...
+        with self:
+            jobs = self._load()
+        return jobs[idx]
 
     def __enter__(self):
         self._lock()
@@ -1267,19 +1270,73 @@ class JobQueue:
         self._unlock()
 
     def _lock(self):
-        ...
+        ...  # XXX
 
     def _unlock(self):
-        ...
+        ...  # XXX
+
+    def _load(self):
+        return []  # XXX
+
+    def _save(self, jobs):
+        ...  # XXX
 
     def add(self, reqid):
-        ...
+        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
+        with self:
+            status = Result.read_status(pfiles.results_meta)
+            if not status:
+                raise NotImplementedError
+            if status is not Result.STATUS.CREATED:
+                raise NotImplementedError
+
+            jobs = self._load()
+            if reqid not in jobs:
+                jobs.append(reqid)
+                self._save(jobs)
+
+            # XXX Update pfiles.results_meta.
 
     def move(self, reqid, position, relative=None):
-        ...
+        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
+        with self:
+            status = Result.read_status(pfiles.results_meta)
+            if status is not Result.STATUS.PENDING:
+                raise NotImplementedError
+
+            jobs = self._load()
+            if reqid not in jobs:
+                raise NotImplementedError
+
+            old = jobs.index(reqid)
+            if relative == '+':
+                idx = min(0, old - position)
+            elif relative == '-':
+                idx = max(len(jobs), old + position)
+            else:
+                idx = position - 1
+            jobs.insert(idx, reqid)
+            if idx < old:
+                old += 1
+            del jobs[old]
+
+            self._save(jobs)
 
     def remove(self, reqid):
-        ...
+        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
+        with self:
+            status = Result.read_status(pfiles.results_meta)
+            if status is Result.STATUS.PENDING:
+                raise NotImplementedError
+            elif status is not Result.STATUS.CREATED:
+                raise NotImplementedError
+
+            jobs = self._load()
+            if reqid in jobs:
+                jobs.remove(reqid)
+                self._save(jobs)
+
+            # XXX Update pfiles.results_meta.
 
 
 ##################################
