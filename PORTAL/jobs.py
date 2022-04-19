@@ -1249,6 +1249,14 @@ class JobQueueError(Exception):
         super().__init__(msg or self.MSG)
 
 
+class JobQueueAlreadyPausedError(JobQueueError):
+    MSG = 'job queue already paused'
+
+
+class JobQueueNotPausedError(JobQueueError):
+    MSG = 'job queue not paused'
+
+
 class JobError(JobQueueError):
     MSG = 'some problem with job {reqid}'
 
@@ -1280,6 +1288,7 @@ class JobQueue:
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         self._filename = f'{pfiles.requests}/queue.json'
         self._lockfile = f'{pfiles.requests}/queue.lock'
+        self._data = None
 
     def __iter__(self):
         with self:
@@ -1321,39 +1330,95 @@ class JobQueue:
 
     def _load(self):
         text = _read_file(self._filename, fail=False)
-        if not text:
-            return []
-        jobs = [RequestID.parse(v) for v in json.loads(text)]
-        if any(not j for j in jobs):
-            # XXX Use a logger.
-            print(f'WARNING: job queue at {self._filename} has bad entries')
-            jobs = [r for r in jobs if r]
-        return jobs
+        data = (json.loads(text) if text else None) or {}
+        # Normalize.
+        fixed = False
+        if 'paused' not in data:
+            data['paused'] = False
+            fixed = True
+        elif data['paused'] not in (True, False):
+            data['paused'] = bool(data['paused'])
+            fixed = True
+        if 'jobs' not in data:
+            data['jobs'] = []
+            fixed = True
+        else:
+            jobs = [RequestID.parse(v) for v in data['jobs']]
+            if any(not j for j in jobs):
+                # XXX Use a logger.
+                print(f'WARNING: job queue at {self._filename} has bad entries')
+                fixed = True
+            data['jobs'] = [r for r in jobs if r]
+        # Save and return the data.
+        if fixed:
+            with open(self._filename, 'w') as outfile:
+                json.dump(data, outfile, indent=4)
+        data = self._data = types.SimpleNamespace(**data)
+        return data
 
-    def _save(self, jobs):
-        data = [str(r) for r in jobs]
+    def _save(self, data=None):
+        if not data:
+            data = self._data
+        elif data is not self._data:
+            raise NotImplementedError
+        self._data = None
+        if not data:
+            # Nothing to save.
+            return
+        if isinstance(data, types.SimpleNamespace):
+            data = vars(data)
+        # Validate.
+        if 'paused' not in data or data['paused'] not in (True, False):
+            raise NotImplementedError
+        if 'jobs' not in data:
+            raise NotImplementedError
+        elif any(not isinstance(v, RequestID) for v in data['jobs']):
+            raise NotImplementedError
+        # Write to the queue file.
         with open(self._filename, 'w') as outfile:
             json.dump(data, outfile, indent=4)
 
     @property
     def paused(self):
-        return False  # XXX
+        with self:
+            data = self._load()
+            return data.paused
+
+    def pause(self):
+        with self:
+            data = self._load()
+            if data.paused:
+                raise JobQueueAlreadyPausedError()
+            data.paused = True
+            self._save(data)
+
+    def unpause(self):
+        with self:
+            data = self._load()
+            if not data.paused:
+                raise JobQueueNotPausedError()
+            data.paused = False
+            self._save(data)
 
     def add(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
+            data = self._load()
+            if reqid in data.jobs:
+                raise JobAlreadyQueuedError(reqid)
+
             status = Result.read_status(pfiles.results_meta)
             if not status:
                 raise JobNotFoundError(reqid)
             elif status is not Result.STATUS.CREATED:
                 raise NotImplementedError
 
-            jobs = self._load()
-            if reqid in jobs:
-                raise JobAlreadyQueuedError(reqid)
-            else:
-                jobs.append(reqid)
-                self._save(jobs)
+            if data.paused:
+                # Use a logger.
+                print('WARNING: job queue is paused')
+
+            data.jobs.append(reqid)
+            self._save(data)
 
             # XXX Update pfiles.results_meta.
         return len(jobs)
@@ -1367,23 +1432,27 @@ class JobQueue:
             elif status is not Result.STATUS.PENDING:
                 raise NotImplementedError
 
-            jobs = self._load()
-            if reqid not in jobs:
+            data = self._load()
+            if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
 
-            old = jobs.index(reqid)
+            if data.paused:
+                # Use a logger.
+                print('WARNING: job queue is paused')
+
+            old = data.jobs.index(reqid)
             if relative == '+':
                 idx = min(0, old - position)
             elif relative == '-':
                 idx = max(len(jobs), old + position)
             else:
                 idx = position - 1
-            jobs.insert(idx, reqid)
+            data.jobs.insert(idx, reqid)
             if idx < old:
                 old += 1
-            del jobs[old]
+            del data.jobs[old]
 
-            self._save(jobs)
+            self._save(data)
         return idx + 1
 
     def remove(self, reqid):
@@ -1397,20 +1466,19 @@ class JobQueue:
             elif status is not Result.STATUS.CREATED:
                 raise NotImplementedError
 
-            jobs = self._load()
-            if reqid in jobs:
-                jobs.remove(reqid)
-                self._save(jobs)
-            else:
+            data= self._load()
+
+            if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
 
+            if data.paused:
+                # Use a logger.
+                print('WARNING: job queue is paused')
+
+            dta.jobs.remove(reqid)
+            self._save(data)
+
             # XXX Update pfiles.results_meta.
-
-    def run(self, *, failifrunning=False):
-        ...  # XXX
-
-    def pause(self):
-        ...  # XXX
 
 
 ##################################
@@ -2256,14 +2324,20 @@ def cmd_queue_remove(cfg, reqid):
     print('...done!')
 
 
-def cmd_queue_run(cfg):
-    queue = JobQueue(cfg)
-    queue.run()
-
-
 def cmd_queue_pause(cfg):
     queue = JobQueue(cfg)
-    queue.pause()
+    try:
+       queue.pause()
+    except JobQueueAlreadyPausedError:
+        print('WARNING: job queue was already paused')
+
+
+def cmd_queue_unpause(cfg):
+    queue = JobQueue(cfg)
+    try:
+       queue.unpause()
+    except JobQueueNotPausedError:
+        print('WARNING: job queue was not paused')
 
 
 def cmd_config_show(cfg):
@@ -2287,8 +2361,8 @@ COMMANDS = {
     'queue-add': cmd_queue_add,
     'queue-move': cmd_queue_move,
     'queue-remove': cmd_queue_remove,
-    'queue-run': cmd_queue_run,
     'queue-pause': cmd_queue_pause,
+    'queue-unpause': cmd_queue_unpause,
     # other public commands
     'config-show': cmd_config_show,
     # internal-only
@@ -2406,9 +2480,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('remove', queue, help='Remove a job from the queue')
     sub.add_argument('reqid')
 
-    sub = add_cmd('run', queue, help='Run the jobs in the queue')
+    sub = add_cmd('pause', queue, help='Do not let queued jobs run')
 
-    sub = add_cmd('pause', queue, help='Do not run any more queued jobs')
+    sub = add_cmd('unpause', queue, help='Let queued jobs run')
 
     ##########
     # Add other public commands.
