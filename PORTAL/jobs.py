@@ -2257,7 +2257,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add the subcommands for managing jobs.
 
-    def add_cmd(name, **kwargs):
+    def add_cmd(name, subs=subs, **kwargs):
         return subs.add_parser(name, parents=[common], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
@@ -2331,21 +2331,21 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add the "queue" subcomamnds.
 
-    sub = queue.add_parser('list', help='List the queued jobs')
+    sub = add_cmd('list', queue, help='List the queued jobs')
 
-    sub = queue.add_parser('add', help='Add a job to the queue')
+    sub = add_cmd('add', queue, help='Add a job to the queue')
     sub.add_argument('reqid')
 
-    sub = queue.add_parser('move', help='Move a job up or down in the queue')
+    sub = add_cmd('move', queue, help='Move a job up or down in the queue')
     sub.add_argument('reqid')
     sub.add_argument('position')
 
-    sub = queue.add_parser('remove', help='Remove a job from the queue')
+    sub = add_cmd('remove', queue, help='Remove a job from the queue')
     sub.add_argument('reqid')
 
-    sub = queue.add_parser('run', help='Run the jobs in the queue')
+    sub = add_cmd('run', queue, help='Run the jobs in the queue')
 
-    sub = queue.add_parser('pause', help='Do not run any more queued jobs')
+    sub = add_cmd('pause', queue, help='Do not run any more queued jobs')
 
     ##########
     # Add other public commands.
