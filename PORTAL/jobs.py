@@ -360,6 +360,22 @@ class Request(Metadata):
         'date',
     ]
 
+    @classmethod
+    def read_kind(cls, metafile):
+        text = _read_file(metafile, fail=False)
+        if not text:
+            return None
+        data = json.loads(text)
+        if not data:
+            return None
+        kind = data.get('kind')
+        if not kind:
+            return None
+        try:
+            return RequestID._KIND_BY_VALUE[kind]
+        except KeyError:
+            raise ValueError(f'unsupported kind {kind!r}')
+
     def __init__(self, id, datadir, *,
                  # These are ignored (duplicated by id):
                  kind=None, user=None, date=None,
@@ -424,9 +440,10 @@ class Result(Metadata):
         RUNNING='running',
         SUCCESS='success',
         FAILED='failed',
-        CANCELED='cancelled',
+        CANCELED='canceled',
     )
     _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
+    _STATUS_BY_VALUE['cancelled'] = STATUS.CANCELED
     FINISHED = frozenset([
         STATUS.SUCCESS,
         STATUS.FAILED,
@@ -1711,7 +1728,10 @@ def cmd_list(cfg):
     raise NotImplementedError
 
 
-def cmd_show(cfg, reqid=None, *, lines=None):
+def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
+    if not fmt:
+        fmt = 'summary'
+
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     if not reqid:
         reqid = _get_staged_request(pfiles)
@@ -1719,10 +1739,72 @@ def cmd_show(cfg, reqid=None, *, lines=None):
             # XXX Use the last finished?
             raise NotImplementedError
         pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    req = BenchCompileRequest.load(pfiles.request_meta)
-    res = BenchCompileResult.load(pfiles.results_meta)
+    reqfs_fields = [
+        'bench_script',
+        'portal_script',
+    ]
+    resfs_fields = [
+        'pidfile',
+        'logfile',
+    ]
+    kind = Request.read_kind(pfiles.request_meta)
+    if kind is RequestID.KIND.BENCHMARKS:
+        req_cls = BenchCompileRequest
+        res_cls = BenchCompileResult
+        reqfs_fields.extend([
+            'manifest',
+            'pyperformance_config',
+        ])
+        resfs_fields.extend([
+            'pyperformance_log',
+            'pyperformance_results',
+        ])
+    else:
+        raise NotImplementedError(kind)
+    req = req_cls.load(pfiles.request_meta)
+    res = res_cls.load(pfiles.results_meta)
+    pid = read_pidfile(pfiles.pidfile)
 
-    # XXX Print a summary of the job.
+    if fmt == 'summary':
+        print(f'Request {reqid}:')
+        print(f'  {"kind:":20} {req.kind}')
+        print(f'  {"user:":20} {req.user}')
+        if pid:
+            print(f'  {"PID:":20} {pid}')
+        print(f'  {"status:":20} {res.status}')
+        print()
+        print('Details:')
+        for field in req_cls.FIELDS:
+            if field in ('id', 'reqid', 'kind', 'user', 'date', 'datadir'):
+                continue
+            value = getattr(req, field)
+            if isinstance(value, str) and value.strip() != value:
+                value = repr(value)
+            print(f'  {field + ":":20} {value}')
+        print()
+        print('History:')
+        for st, ts in res.history:
+            print(f'  {st + ":":20} {ts:%Y-%m-%d %H:%M:%S}')
+        print()
+        print('Request files:')
+        print(f'  {"data root:":20} {req.reqdir}')
+        print(f'  {"metadata:":20} {pfiles.request_meta}')
+        for field in reqfs_fields:
+            value = getattr(pfiles, field, None)
+            if value and not os.path.exists(value):
+                value = None
+            print(f'  {field + ":":20} {value or "---"}')
+        print()
+        print('Result files:')
+        print(f'  {"data root:":20} {pfiles.resdir}')
+        print(f'  {"metadata:":20} {pfiles.results_meta}')
+        for field in resfs_fields:
+            value = getattr(pfiles, field, None)
+            if value and not os.path.exists(value):
+                value = None
+            print(f'  {field + ":":20} {value or "---"}')
+    else:
+        raise ValueError(f'unsupported fmt {fmt!r}')
 
     if lines:
         tail_file(pfiles.logfile, lines, follow=False)
