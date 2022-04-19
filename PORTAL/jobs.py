@@ -1156,7 +1156,7 @@ class BenchRequestFS(BaseRequestFS):
 
 
 ##################################
-# staging requests
+# job queue
 
 class StagedRequestError(Exception):
     pass
@@ -1240,6 +1240,33 @@ def unstage_request(reqid, pfiles):
     elif str(curid) != str(reqid):
         raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.current_request)
+
+
+class JobQueue:
+
+    def __init__(self, cfg):
+        ...
+
+    def __iter__(self):
+        if False:
+            yield
+        ...
+
+    def __len__(self):
+        return 0
+        ...
+
+    def __getitem__(self, idx):
+        ...
+
+    def add(self, reqid):
+        ...
+
+    def move(self, reqid, position, relative=None):
+        ...
+
+    def remove(self, reqid):
+        ...
 
 
 ##################################
