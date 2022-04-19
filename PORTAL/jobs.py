@@ -1242,6 +1242,34 @@ def unstage_request(reqid, pfiles):
     os.unlink(pfiles.current_request)
 
 
+class JobQueueError(Exception):
+    MSG = 'some problem with the job queue'
+
+    def __init__(self, msg=None):
+        super().__init__(msg or self.MSG)
+
+
+class JobError(JobQueueError):
+    MSG = 'some problem with job {reqid}'
+
+    def __init__(self, reqid, msg=None):
+        msg = (msg or self.MSG).format(reqid=str(reqid))
+        super().__init__(msg)
+        self.reqid = reqid
+
+
+class JobNotFoundError(JobError):
+    MSG = 'request {reqid} does not exist'
+
+
+class JobNotQueuedError(JobError):
+    MSG = 'job {reqid} is not in the queue'
+
+
+class JobAlreadyQueuedError(JobError):
+    MSG = 'job {reqid} is already in the queue'
+
+
 class JobQueue:
 
     # XXX Add maxsize.
@@ -1316,12 +1344,14 @@ class JobQueue:
         with self:
             status = Result.read_status(pfiles.results_meta)
             if not status:
-                raise NotImplementedError
-            if status is not Result.STATUS.CREATED:
+                raise JobNotFoundError(reqid)
+            elif status is not Result.STATUS.CREATED:
                 raise NotImplementedError
 
             jobs = self._load()
-            if reqid not in jobs:
+            if reqid in jobs:
+                raise JobAlreadyQueuedError(reqid)
+            else:
                 jobs.append(reqid)
                 self._save(jobs)
 
@@ -1331,12 +1361,14 @@ class JobQueue:
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
             status = Result.read_status(pfiles.results_meta)
-            if status is not Result.STATUS.PENDING:
+            if not status:
+                raise JobNotFoundError(reqid)
+            elif status is not Result.STATUS.PENDING:
                 raise NotImplementedError
 
             jobs = self._load()
             if reqid not in jobs:
-                raise NotImplementedError
+                raise JobNotQueuedError(reqid)
 
             old = jobs.index(reqid)
             if relative == '+':
@@ -1356,7 +1388,9 @@ class JobQueue:
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
             status = Result.read_status(pfiles.results_meta)
-            if status is Result.STATUS.PENDING:
+            if not status:
+                raise JobNotFoundError(reqid)
+            elif status is Result.STATUS.PENDING:
                 raise NotImplementedError
             elif status is not Result.STATUS.CREATED:
                 raise NotImplementedError
@@ -1365,6 +1399,8 @@ class JobQueue:
             if reqid in jobs:
                 jobs.remove(reqid)
                 self._save(jobs)
+            else:
+                raise JobNotQueuedError(reqid)
 
             # XXX Update pfiles.results_meta.
 
@@ -2178,7 +2214,10 @@ def cmd_queue_add(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     queue = JobQueue(cfg)
     print(f'Adding job {reqid} to the queue...')
-    pos = queue.add(reqid)
+    try:
+        pos = queue.add(reqid)
+    except JobAlreadyQueuedError:
+        pass
     print(f'...added at position {pos}')
 
 
@@ -2203,7 +2242,10 @@ def cmd_queue_remove(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     queue = JobQueue(cfg)
     print(f'Removing job {reqid} from the queue...')
-    queue.remove(reqid)
+    try:
+        queue.remove(reqid)
+    except JobNotQueuedError:
+        pass
     print('...done!')
 
 
