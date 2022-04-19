@@ -1725,7 +1725,18 @@ def render_results(reqid, pfiles):
 # commands
 
 def cmd_list(cfg):
-    raise NotImplementedError
+    print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
+    print(f'{"-"*48} {"-"*10} {"-"*19}')
+    total = 0
+    pfiles = PortalRequestFS(None, cfg.data_dir)
+    requests = (RequestID.parse(n) for n in os.listdir(pfiles.requests))
+    for reqid in sorted(r for r in requests if r):
+        pfiles = PortalRequestFS(reqid, cfg.data_dir)
+        status = Result.read_status(pfiles.results_meta)
+        total += 1
+        print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
+    print()
+    print(f'(total: {total})')
 
 
 def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
@@ -2065,7 +2076,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     def add_cmd(name, **kwargs):
         return subs.add_parser(name, parents=[common], **kwargs)
 
-#    sub = add_cmd('list', help='Print a table of all known jobs')
+    sub = add_cmd('list', help='Print a table of all known jobs')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=0,
