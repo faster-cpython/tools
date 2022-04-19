@@ -1244,6 +1244,8 @@ def unstage_request(reqid, pfiles):
 
 class JobQueue:
 
+    # XXX Add maxsize.
+
     def __init__(self, cfg):
         self.cfg = cfg
         self._locked = 0
