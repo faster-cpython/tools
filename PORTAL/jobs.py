@@ -2026,6 +2026,22 @@ def cmd_finish_run(cfg, reqid):
         print(line)
 
 
+def cmd_queue_list(cfg):
+    ...
+
+
+def cmd_queue_add(cfg, reqid):
+    ...
+
+
+def cmd_queue_move(cfg, reqid, position):
+    ...
+
+
+def cmd_queue_remove(cfg, reqid):
+    ...
+
+
 def cmd_config_show(cfg):
     for line in cfg.render():
         print(line)
@@ -2042,6 +2058,11 @@ COMMANDS = {
     'cancel': cmd_cancel,
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
+    # queue management
+    'queue-list': cmd_queue_list,
+    'queue-add': cmd_queue_add,
+    'queue-move': cmd_queue_move,
+    'queue-remove': cmd_queue_remove,
     # other public commands
     'config-show': cmd_config_show,
     # internal-only
@@ -2114,6 +2135,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     # XXX Also add export and import?
 
+    sub = add_cmd('queue', help='Manage the job queue')
+    queue = sub.add_subparsers(dest='action')
+    # Subcommands for different actions are added below.
+
     ##########
     # Add the "add" subcommands for the different jobs.
 
@@ -2141,6 +2166,21 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('revision')
 
     ##########
+    # Add the "queue" subcomamnds.
+
+    sub = queue.add_parser('list', help='List the queued jobs')
+
+    sub = queue.add_parser('add', help='Add a job to the queue')
+    sub.add_argument('reqid')
+
+    sub = queue.add_parser('move', help='Move a job up or down in the queue')
+    sub.add_argument('reqid')
+    sub.add_argument('position')
+
+    sub = queue.add_parser('remove', help='Remove a job from the queue')
+    sub.add_argument('reqid')
+
+    ##########
     # Add other public commands.
 
     sub = add_cmd('config', help='show the config')
@@ -2165,6 +2205,25 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         cmd = 'request-' + ns.pop('job')
     elif cmd == 'config':
         cmd = 'config-show'
+    elif cmd == 'queue':
+        action = ns.pop('action')
+        cmd = f'queue-{action}'
+        if action == 'move':
+            pos = args.position
+            if pos == '+':
+                pos = '+1'
+            elif pos == '-':
+                pos = '-1'
+            elif pos.startswith('+'):
+                pos = int(pos[1:])
+                pos = f'+{pos}'
+            elif pos.startswith('-'):
+                pos = int(pos[1:])
+                pos = f'-{pos}'
+            else:
+                # an absolute move
+                pos = int(pos)
+            args.position = pos
 
     return cmd, ns, cfgfile
 
