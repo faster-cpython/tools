@@ -1305,6 +1305,10 @@ class JobQueue:
         with open(self._filename, 'w') as outfile:
             json.dump(data, outfile, indent=4)
 
+    @property
+    def paused(self):
+        return False  # XXX
+
     def add(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
@@ -1361,6 +1365,12 @@ class JobQueue:
                 self._save(jobs)
 
             # XXX Update pfiles.results_meta.
+
+    def run(self, *, failifrunning=False):
+        ...  # XXX
+
+    def pause(self):
+        ...  # XXX
 
 
 ##################################
@@ -2196,11 +2206,13 @@ def cmd_queue_remove(cfg, reqid):
 
 
 def cmd_queue_run(cfg):
-    raise NotImplementedError
+    queue = JobQueue(cfg)
+    queue.run()
 
 
 def cmd_queue_pause(cfg):
-    raise NotImplementedError
+    queue = JobQueue(cfg)
+    queue.pause()
 
 
 def cmd_config_show(cfg):
