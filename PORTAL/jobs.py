@@ -2195,6 +2195,14 @@ def cmd_queue_remove(cfg, reqid):
     print('...done!')
 
 
+def cmd_queue_run(cfg):
+    raise NotImplementedError
+
+
+def cmd_queue_pause(cfg):
+    raise NotImplementedError
+
+
 def cmd_config_show(cfg):
     for line in cfg.render():
         print(line)
@@ -2216,6 +2224,8 @@ COMMANDS = {
     'queue-add': cmd_queue_add,
     'queue-move': cmd_queue_move,
     'queue-remove': cmd_queue_remove,
+    'queue-run': cmd_queue_run,
+    'queue-pause': cmd_queue_pause,
     # other public commands
     'config-show': cmd_config_show,
     # internal-only
@@ -2332,6 +2342,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = queue.add_parser('remove', help='Remove a job from the queue')
     sub.add_argument('reqid')
+
+    sub = queue.add_parser('run', help='Run the jobs in the queue')
+
+    sub = queue.add_parser('pause', help='Do not run any more queued jobs')
 
     ##########
     # Add other public commands.
