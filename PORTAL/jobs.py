@@ -1356,6 +1356,7 @@ class JobQueue:
                 self._save(jobs)
 
             # XXX Update pfiles.results_meta.
+        return len(jobs)
 
     def move(self, reqid, position, relative=None):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
@@ -1383,6 +1384,7 @@ class JobQueue:
             del jobs[old]
 
             self._save(jobs)
+        return idx + 1
 
     def remove(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
@@ -2217,8 +2219,13 @@ def cmd_queue_add(cfg, reqid):
     try:
         pos = queue.add(reqid)
     except JobAlreadyQueuedError:
-        pass
-    print(f'...added at position {pos}')
+        for pos, queued in enumerate(queue, 1):
+            if queued == reqid:
+                print(f'WARNING: {reqid} was already queued')
+                break
+        else:
+            raise NotImplementedError
+    print(f'...at position {pos}')
 
 
 def cmd_queue_move(cfg, reqid, position, relative=None):
@@ -2245,7 +2252,7 @@ def cmd_queue_remove(cfg, reqid):
     try:
         queue.remove(reqid)
     except JobNotQueuedError:
-        pass
+        print(f'WARNING: {reqid} was not queued')
     print('...done!')
 
 
