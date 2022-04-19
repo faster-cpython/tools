@@ -2054,19 +2054,51 @@ def cmd_finish_run(cfg, reqid):
 
 
 def cmd_queue_list(cfg):
-    ...
+    queue = JobQueue(cfg)
+    if not queue:
+        print('no jobs queued')
+        return
+    print('Queued jobs:')
+    print()
+    total = 0
+    for reqid in queue:
+        print(f'{i:>3} {reqid}')
+        total += 1
+    print()
+    print(f'(total: {total})')
 
 
 def cmd_queue_add(cfg, reqid):
-    ...
+    reqid = RequestID.from_raw(reqid)
+    queue = JobQueue(cfg)
+    print(f'Adding job {reqid} to the queue...')
+    pos = queue.add(reqid)
+    print(f'...added at position {pos}')
 
 
-def cmd_queue_move(cfg, reqid, position):
-    ...
+def cmd_queue_move(cfg, reqid, position, relative=None):
+    reqid = RequestID.from_raw(reqid)
+    position = int(position)
+    if position <= 0:
+        raise ValueError(f'expected positive position, got {position}')
+    if relative and relative not in '+-':
+        raise ValueError(f'expected relative of + or -, got {relative}')
+
+    queue = JobQueue(cfg)
+    if relative:
+        print(f'Moving job {reqid} {relative}{position} in the queue...')
+    else:
+        print(f'Moving job {reqid} to position {position} in the queue...')
+    pos = queue.move(reqid, position, relative)
+    print(f'...moved to position {pos}')
 
 
 def cmd_queue_remove(cfg, reqid):
-    ...
+    reqid = RequestID.from_raw(reqid)
+    queue = JobQueue(cfg)
+    print(f'Removing job {reqid} from the queue...')
+    queue.remove(reqid)
+    print('...done!')
 
 
 def cmd_config_show(cfg):
@@ -2238,19 +2270,27 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         if action == 'move':
             pos = args.position
             if pos == '+':
-                pos = '+1'
+                pos = '1'
+                relative = '+'
             elif pos == '-':
-                pos = '-1'
+                pos = '1'
+                relative = '-'
             elif pos.startswith('+'):
-                pos = int(pos[1:])
-                pos = f'+{pos}'
+                pos = pos[1:]
+                relative = '+'
             elif pos.startswith('-'):
-                pos = int(pos[1:])
-                pos = f'-{pos}'
+                pos = pos[1:]
+                relative = '-'
             else:
                 # an absolute move
-                pos = int(pos)
+                relative = None
+            if not pos.isdigit():
+                parser.error('position must be positive int')
+            pos = int(pos)
+            if pos == 0:
+                parser.error('position must be positive int')
             args.position = pos
+            args.relative = relative
 
     return cmd, ns, cfgfile
 
