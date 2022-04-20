@@ -2678,13 +2678,10 @@ def cmd_queue_list(cfg):
         return
 
     print('Queued jobs:')
-    print()
-    total = 0
-    for reqid in queue:
+    for i, reqid in enumerate(queue, 1):
         print(f'{i:>3} {reqid}')
-        total += 1
     print()
-    print(f'(total: {total})')
+    print(f'(total: {i})')
 
 
 def cmd_queue_push(cfg, reqid):
