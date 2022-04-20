@@ -1257,6 +1257,10 @@ class JobQueueNotPausedError(JobQueueError):
     MSG = 'job queue not paused'
 
 
+class JobQueueEmptyError(JobQueueError):
+    MSG = 'job queue is empty'
+
+
 class JobError(JobQueueError):
     MSG = 'some problem with job {reqid}'
 
@@ -1400,7 +1404,7 @@ class JobQueue:
             data.paused = False
             self._save(data)
 
-    def add(self, reqid):
+    def push(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
             data = self._load()
@@ -1422,6 +1426,21 @@ class JobQueue:
 
             # XXX Update pfiles.results_meta.
         return len(jobs)
+
+    def pop(self):
+        pfiles = PortalRequestFS(None, self.cfg.data_dir)
+        with self:
+            data = self._load()
+            if not data.jobs:
+                raise JobQueueEmptyError()
+
+            if data.paused:
+                # Use a logger.
+                print('WARNING: job queue is paused')
+
+            reqid = data.jobs.pop(0)
+            self._save(data)
+        return reqid
 
     def move(self, reqid, position, relative=None):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
@@ -2265,6 +2284,22 @@ def cmd_finish_run(cfg, reqid):
         print(line)
 
 
+def cmd_queue_pause(cfg):
+    queue = JobQueue(cfg)
+    try:
+       queue.pause()
+    except JobQueueAlreadyPausedError:
+        print('WARNING: job queue was already paused')
+
+
+def cmd_queue_unpause(cfg):
+    queue = JobQueue(cfg)
+    try:
+       queue.unpause()
+    except JobQueueNotPausedError:
+        print('WARNING: job queue was not paused')
+
+
 def cmd_queue_list(cfg):
     queue = JobQueue(cfg)
     if not queue:
@@ -2280,12 +2315,12 @@ def cmd_queue_list(cfg):
     print(f'(total: {total})')
 
 
-def cmd_queue_add(cfg, reqid):
+def cmd_queue_push(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     queue = JobQueue(cfg)
     print(f'Adding job {reqid} to the queue...')
     try:
-        pos = queue.add(reqid)
+        pos = queue.push(reqid)
     except JobAlreadyQueuedError:
         for pos, queued in enumerate(queue, 1):
             if queued == reqid:
@@ -2294,6 +2329,13 @@ def cmd_queue_add(cfg, reqid):
         else:
             raise NotImplementedError
     print(f'...at position {pos}')
+
+
+def cmd_queue_pop(cfg):
+    queue = JobQueue(cfg)
+    print(f'Popping the next job from the queue...')
+    reqid = queue.pop()
+    print(reqid)
 
 
 def cmd_queue_move(cfg, reqid, position, relative=None):
@@ -2324,22 +2366,6 @@ def cmd_queue_remove(cfg, reqid):
     print('...done!')
 
 
-def cmd_queue_pause(cfg):
-    queue = JobQueue(cfg)
-    try:
-       queue.pause()
-    except JobQueueAlreadyPausedError:
-        print('WARNING: job queue was already paused')
-
-
-def cmd_queue_unpause(cfg):
-    queue = JobQueue(cfg)
-    try:
-       queue.unpause()
-    except JobQueueNotPausedError:
-        print('WARNING: job queue was not paused')
-
-
 def cmd_config_show(cfg):
     for line in cfg.render():
         print(line)
@@ -2357,12 +2383,13 @@ COMMANDS = {
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
     # queue management
-    'queue-list': cmd_queue_list,
-    'queue-add': cmd_queue_add,
-    'queue-move': cmd_queue_move,
-    'queue-remove': cmd_queue_remove,
     'queue-pause': cmd_queue_pause,
     'queue-unpause': cmd_queue_unpause,
+    'queue-list': cmd_queue_list,
+    'queue-push': cmd_queue_push,
+    'queue-pop': cmd_queue_pop,
+    'queue-move': cmd_queue_move,
+    'queue-remove': cmd_queue_remove,
     # other public commands
     'config-show': cmd_config_show,
     # internal-only
@@ -2468,10 +2495,16 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add the "queue" subcomamnds.
 
+    sub = add_cmd('pause', queue, help='Do not let queued jobs run')
+
+    sub = add_cmd('unpause', queue, help='Let queued jobs run')
+
     sub = add_cmd('list', queue, help='List the queued jobs')
 
-    sub = add_cmd('add', queue, help='Add a job to the queue')
+    sub = add_cmd('push', queue, help='Add a job to the queue')
     sub.add_argument('reqid')
+
+    sub = add_cmd('pop', queue, help='Get the next job from the queue')
 
     sub = add_cmd('move', queue, help='Move a job up or down in the queue')
     sub.add_argument('reqid')
@@ -2479,10 +2512,6 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = add_cmd('remove', queue, help='Remove a job from the queue')
     sub.add_argument('reqid')
-
-    sub = add_cmd('pause', queue, help='Do not let queued jobs run')
-
-    sub = add_cmd('unpause', queue, help='Let queued jobs run')
 
     ##########
     # Add other public commands.
