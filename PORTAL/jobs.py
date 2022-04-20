@@ -1156,7 +1156,7 @@ class BenchRequestFS(BaseRequestFS):
 
 
 ##################################
-# job queue
+# the current job
 
 class StagedRequestError(Exception):
     pass
@@ -1241,6 +1241,9 @@ def unstage_request(reqid, pfiles):
         raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.current_request)
 
+
+##################################
+# the job queue
 
 class JobQueueError(Exception):
     MSG = 'some problem with the job queue'
