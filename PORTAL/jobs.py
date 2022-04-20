@@ -2106,13 +2106,17 @@ def cmd_run(cfg, reqid, *, copy=False, force=False):
     if force:
         raise NotImplementedError
 
-    print('# sending request')
-    print()
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
 
     resfile = pfiles.results_meta
     result = BenchCompileResult.load(resfile)
 
+    queue = JobQueue(cfg)
+    if not queue.paused:
+        cmd_queue_push(cfg, reqid)
+        return
+
+    # Try staging it directly.
     result.set_status(result.STATUS.PENDING)
     result.save(resfile)
 
@@ -2280,7 +2284,7 @@ def cmd_queue_list(cfg):
 
 def cmd_queue_push(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
-    print(f'Adding job {reqid} to the queue...')
+    print(f'Adding job {reqid} to the queue')
 
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     status = Result.read_status(pfiles.results_meta)
@@ -2308,7 +2312,7 @@ def cmd_queue_push(cfg, reqid):
     result.set_status(result.STATUS.PENDING)
     result.save(resfile)
 
-    print(f'...at position {pos}')
+    print(f'{reqid} added to the job queue at position {pos}')
 
 
 def cmd_queue_pop(cfg):
