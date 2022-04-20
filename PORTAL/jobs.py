@@ -2631,7 +2631,7 @@ def cmd_queue_info(cfg, *, withlog=True):
     print()
     print('Top 5:')
     if jobs:
-        for i in range(max(5, len(jobs))):
+        for i in range(min(5, len(jobs))):
             print(f'  {i+1} {jobs[i]}')
     else:
         print('  (queue is empty)')
