@@ -26,6 +26,7 @@ USER = os.environ.get('USER', '').strip()
 SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 
 HOME = os.path.expanduser('~')
+PID = os.getpid()
 
 
 ##################################
@@ -729,6 +730,112 @@ def tail_file(filename, nlines, *, follow=None):
             pid = follow
             tail_args.extend(['--pid', f'{pid}'])
     subprocess.run([shutil.which('tail'), *tail_args, filename])
+
+
+##################################
+# locks
+
+class RLock:
+    """A base class for objects like threading.RLock."""
+
+    def __init__(self):
+        self._recursion_level = 0
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+    def _acquire(self, blocking, timeout):
+        raise NotImplementedError
+
+    def _release(self):
+        raise NotImplementedError
+
+    def locked(self):
+        return self._recursion_level > 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self._recursion_level == 0:
+            self._acquire(blocking, timeout)
+        self._recursion_level += 1
+
+    def release(self):
+        if self._recursion_level == 0:
+            raise RuntimeError('lock not held')
+        self._recursion_level -= 1
+        if self._recursion_level == 0:
+            self._release()
+
+
+class InvalidLockFileError(Exception):
+
+    def __init__(self, filename):
+        super().__init__(f'lockfile {filename!r} is not valid')
+        self.filename = filename
+
+
+class LockFile(RLock):
+    """A multi-process equivalent to threading.RLock."""
+
+    def __init__(self, filename):
+        super().__init__()
+        self._filename = filename
+        self._recursion_level = 0
+
+    @property
+    def filename(self):
+        return self._filename
+
+    def _acquire(self, blocking, timeout):
+        while True:
+            try:
+                with open(self._filename, 'x') as outfile:
+                    outfile.write(f'{PID}')
+                break
+            except FileExistsError:
+                pass
+
+    def _release(self):
+        os.unlink(self._filename)
+
+    def locked(self):
+        if super().locked():
+            return True
+        try:
+            return self.owner() is not None
+        except InvalidLockFileError:
+            return True
+
+    def owner(self):
+        """Return the PID of the process that is holding the lock."""
+        if self._recursion_level > 0:
+            return PID
+        else:
+            try:
+                with open(self._filename) as lockfile:
+                    text = lockfile.read()
+            except FileNotFoundError:
+                return None
+            text = text.strip()
+            if not text or not text.isdigit():
+                raise InvalidLockFileError(self._filename)
+            return int(text)
+
+
+class DummyLockFile(RLock):
+
+    def _acquire(self, blocking, timeout):
+        return
+
+    def _release(self):
+        return
+
+    def owner(self):
+        """Return the PID of the process that is holding the lock."""
+        return PID
 
 
 ##################################
