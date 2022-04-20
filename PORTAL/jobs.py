@@ -1125,6 +1125,14 @@ class PortalRequestFS(BaseRequestFS):
         """Where the job output is written."""
         return f'{self.reqdir}/job.log'
 
+    @property
+    def queue_data(self):
+        return f'{self.requests}/queue.json'
+
+    @property
+    def queue_lock(self):
+        return f'{self.requests}/queue.lock'
+
 
 class BenchRequestFS(BaseRequestFS):
     """Files on the bench host."""
@@ -1305,8 +1313,8 @@ class JobQueue:
         self.cfg = cfg
         self._locked = 0
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
-        self._filename = f'{pfiles.requests}/queue.json'
-        self._lockfile = f'{pfiles.requests}/queue.lock'
+        self._filename = pfiles.queue_data
+        self._lockfile = pfiles.queue_lock
         self._data = None
 
     def __iter__(self):
