@@ -607,7 +607,7 @@ def get_utc_datetime(timestamp):
         else:
             m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
             if not m:
-                raise NotImplementedError
+                raise NotImplementedError(repr(timestamp))
             body, sep, subzero, tz = m.groups()
             timestamp = body
             fmt = f'%Y-%m-%d{sep}%H:%M:%S'
@@ -1441,6 +1441,7 @@ class JobQueue:
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         self._filename = pfiles.queue_data
         self._lock = LockFile(pfiles.queue_lock) if uselock else DummyLockFile()
+        self._logfile = pfiles.queue_log
         self._data = None
 
     def __iter__(self):
@@ -1604,6 +1605,108 @@ class JobQueue:
 
             data.jobs.remove(reqid)
             self._save(data)
+
+    def read_log(self):
+        try:
+            logfile = open(self._logfile)
+        except FileNotFoundError:
+            return
+        with logfile:
+            yield from JobQueueLogEntry.read_logfile(logfile)
+
+
+class JobQueueLogEntry(types.SimpleNamespace):
+
+    @classmethod
+    def read_logfile(cls, logfile):
+        if isinstance(logfile, str):
+            filename = logfile
+            with open(filename) as logfile:
+                yield from cls.read_logfile(logfile)
+                return
+        lines = iter(logfile)
+        entry, next_header = cls.parse(lines)
+        while entry is not None:
+            yield entry
+            entry, next_header = cls.parse(lines, next_header)
+
+    @classmethod
+    def parse(cls, lines, next_header=None):
+        if isinstance(lines, str):
+            lines = lines.splitlines()
+        if not next_header:
+            # Ignore everything up to the next header.
+            for value in cls._iter_lines_and_headers(lines):
+                if not isinstance(value, str):
+                    next_header = value
+                    break
+            else:
+                return None, None
+        _, title, _, timestamp = next_header
+        self = cls(title[2:], timestamp[2:].strip())
+        for value in cls._iter_lines_and_headers(lines):
+            if not isinstance(value, str):
+                return self, value
+            self.add_lines(value)
+        else:
+            return self, None
+
+    @classmethod
+    def _iter_lines_and_headers(cls, lines):
+        header = None
+        for line in lines:
+            if line.endswith('\n'):
+                # XXX Windows?
+                line = line[:-1]
+            if header:
+                matched = False
+                if len(header) == 1:
+                    if line.startswith('# ') and line[2:].strip():
+                        header.append(line)
+                        matched = True
+                elif len(header) == 2:
+                    if not line:
+                        header.append(line)
+                        matched = True
+                elif re.match(r'^# \d{4}-\d\d-\d\d \d\d:\d\d:\d\d$', line):
+                    header.append(line)
+                    yield header
+                    header = None
+                    matched = True
+                if not matched:
+                    yield from header
+                    header = None
+            elif line == ('#'*40):
+                header = [line]
+            else:
+                yield line
+
+    def __init__(self, title, timestamp=None, body=()):
+        if not title or not title.strip():
+            raise ValueError('missing title')
+        if not timestamp:
+            timestamp = _utcnow()
+        else:
+            timestamp = get_utc_datetime(timestamp)
+
+        self.title = title.strip()
+        self.timestamp = timestamp
+        self.body = []
+        if body:
+            self.add_lines(body)
+
+    def add_lines(self, lines):
+        if isinstance(lines, str):
+            lines = lines.splitlines()
+        self.body.extend(lines)
+
+    def render(self):
+        yield '#' * 40
+        yield f'# {self.title}'
+        yield ''
+        yield '#', self.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        for line in self.body:
+            yield line
 
 
 ##################################
@@ -2426,11 +2529,10 @@ def cmd_finish_run(cfg, reqid):
 
 
 def cmd_run_next(cfg):
+    logentry = JobQueueLogEntry('Running next queued job')
     print()
-    print('#' * 40)
-    print('# Running next queued job')
-    print()
-    print('#', datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+    for line in logentry.render():
+        print(line)
     print()
 
     queue = JobQueue(cfg)
