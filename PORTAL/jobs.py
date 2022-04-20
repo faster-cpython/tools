@@ -2117,9 +2117,6 @@ def cmd_run(cfg, reqid, *, copy=False, force=False):
         return
 
     # Try staging it directly.
-    result.set_status(result.STATUS.PENDING)
-    result.save(resfile)
-
     print('# staging request')
     try:
         stage_request(reqid, pfiles)
