@@ -1981,6 +1981,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     pidfile = _quote_shell_str(pfiles.pidfile)
     pyperformance_results = _quote_shell_str(pfiles.pyperformance_results)
     pyperformance_log = _quote_shell_str(pfiles.pyperformance_log)
+    queue_log = _quote_shell_str(pfiles.queue_log)
 
     _check_shell_str(bfiles.reqdir)
     _check_shell_str(bfiles.requests)
@@ -2066,7 +2067,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         #rm -f {pidfile}
 
         # Trigger the next job.
-        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {pfiles.queue_log} 2>&1 &
+        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {queue_log} 2>&1 &
 
         exit $exitcode
     '''[1:-1])
