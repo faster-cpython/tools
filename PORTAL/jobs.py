@@ -1556,7 +1556,7 @@ class JobQueue:
 
             data.jobs.append(reqid)
             self._save(data)
-        return len(jobs)
+        return len(data.jobs)
 
     def pop(self):
         if isinstance(self._lock, DummyLockFile):
@@ -1584,7 +1584,7 @@ class JobQueue:
             if relative == '+':
                 idx = min(0, old - position)
             elif relative == '-':
-                idx = max(len(jobs), old + position)
+                idx = max(len(data.jobs), old + position)
             else:
                 idx = position - 1
             data.jobs.insert(idx, reqid)
