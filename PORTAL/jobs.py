@@ -566,6 +566,22 @@ class Result(Metadata):
         return data
 
 
+def render_request(reqid, pfiles):
+    yield f'(from {pfiles.request_meta}):'
+    yield ''
+    # XXX Show something better?
+    text = _read_file(pfiles.request_meta)
+    yield from text.splitlines()
+
+
+def render_results(reqid, pfiles):
+    yield f'(from {pfiles.results_meta}):'
+    yield ''
+    # XXX Show something better?
+    text = _read_file(pfiles.results_meta)
+    yield from text.splitlines()
+
+
 ##################################
 # minor utils
 
@@ -1920,22 +1936,6 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 
         exit $exitcode
     '''[1:-1])
-
-
-def render_request(reqid, pfiles):
-    yield f'(from {pfiles.request_meta}):'
-    yield ''
-    # XXX Show something better?
-    text = _read_file(pfiles.request_meta)
-    yield from text.splitlines()
-
-
-def render_results(reqid, pfiles):
-    yield f'(from {pfiles.results_meta}):'
-    yield ''
-    # XXX Show something better?
-    text = _read_file(pfiles.results_meta)
-    yield from text.splitlines()
 
 
 ##################################
