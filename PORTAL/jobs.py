@@ -1324,18 +1324,18 @@ class JobQueue:
 
     def __iter__(self):
         with self:
-            jobs = self._load()
-        yield from jobs
+            data = self._load()
+        yield from data.jobs
 
     def __len__(self):
         with self:
-            jobs = self._load()
-        return len(jobs)
+            data = self._load()
+        return len(data.jobs)
 
     def __getitem__(self, idx):
         with self:
-            jobs = self._load()
-        return jobs[idx]
+            data = self._load()
+        return data.jobs[idx]
 
     def __enter__(self):
         self._lock()
@@ -1957,6 +1957,32 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 ##################################
 # commands
 
+def _ensure_next_job(cfg):
+    pfiles = PortalRequestFS(None, cfg.data_dir)
+    if _get_staged_request(pfiles) is not None:
+        return
+    queue = JobQueue(cfg)
+    if queue.paused:
+        return
+    if not queue:
+        return
+
+    # Run in the background.
+    jobs_script = os.path.abspath(__file__)
+    script = textwrap.dedent(f"""
+        #!/usr/bin/env bash
+        "{sys.executable}" "{jobs_script}" internal-run-next > "{pfiles.queue_log}" 2>&1 &
+    """).lstrip()
+    scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
+    try:
+        with scriptfile:
+            scriptfile.write(script)
+        os.chmod(scriptfile.name, 0o755)
+        subprocess.run(scriptfile.name)
+    finally:
+        os.unlink(scriptfile.name)
+
+
 def cmd_list(cfg):
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
@@ -2352,6 +2378,8 @@ def cmd_queue_unpause(cfg):
        queue.unpause()
     except JobQueueNotPausedError:
         print('WARNING: job queue was not paused')
+    else:
+        _ensure_next_job(cfg)
 
 
 def cmd_queue_list(cfg):
@@ -2718,6 +2746,10 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     print()
     print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
+
+    # In some cases the mechanism to run jobs from the queue may
+    # get interrupted, so we re-start it manually here if necessary.
+    _ensure_next_job(cfg)
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
