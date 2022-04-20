@@ -550,7 +550,7 @@ class Result(Metadata):
         self.history.append(
             (status, datetime.datetime.now(datetime.timezone.utc)),
         )
-        self.status = status
+        self.status = None if status is self.STATUS.CREATED else status
 
     def close(self):
         if self.history[-1][0] is self.CLOSED:
@@ -562,6 +562,8 @@ class Result(Metadata):
 
     def as_jsonable(self):
         data = super().as_jsonable()
+        if self.status is None:
+            data['status'] = self.STATUS.CREATED
         data['reqid'] = str(data['reqid'])
         data['history'] = [(st, d.isoformat() if d else None)
                            for st, d in data['history']]
