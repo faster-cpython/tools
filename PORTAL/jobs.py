@@ -1410,10 +1410,6 @@ class JobQueue:
             if reqid in data.jobs:
                 raise JobAlreadyQueuedError(reqid)
 
-            if data.paused:
-                # Use a logger.
-                print('WARNING: job queue is paused')
-
             data.jobs.append(reqid)
             self._save(data)
 
@@ -1427,10 +1423,6 @@ class JobQueue:
             if not data.jobs:
                 raise JobQueueEmptyError()
 
-            if data.paused:
-                # Use a logger.
-                print('WARNING: job queue is paused')
-
             reqid = data.jobs.pop(0)
             self._save(data)
         return reqid
@@ -1441,10 +1433,6 @@ class JobQueue:
             data = self._load()
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
-
-            if data.paused:
-                # Use a logger.
-                print('WARNING: job queue is paused')
 
             old = data.jobs.index(reqid)
             if relative == '+':
@@ -1468,10 +1456,6 @@ class JobQueue:
 
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
-
-            if data.paused:
-                # Use a logger.
-                print('WARNING: job queue is paused')
 
             dta.jobs.remove(reqid)
             self._save(data)
@@ -2281,9 +2265,13 @@ def cmd_queue_unpause(cfg):
 
 def cmd_queue_list(cfg):
     queue = JobQueue(cfg)
+    if queue.paused:
+        print('WARNING: job queue is paused')
+
     if not queue:
         print('no jobs queued')
         return
+
     print('Queued jobs:')
     print()
     total = 0
@@ -2306,6 +2294,9 @@ def cmd_queue_push(cfg, reqid):
         sys.exit(f'ERROR: request {reqid} has already been used')
 
     queue = JobQueue(cfg)
+    if queue.paused:
+        print('WARNING: job queue is paused')
+
     try:
         pos = queue.push(reqid)
     except JobAlreadyQueuedError:
@@ -2319,8 +2310,12 @@ def cmd_queue_push(cfg, reqid):
 
 
 def cmd_queue_pop(cfg):
-    queue = JobQueue(cfg)
     print(f'Popping the next job from the queue...')
+
+    queue = JobQueue(cfg)
+    if queue.paused:
+        print('WARNING: job queue is paused')
+
     try:
         reqid = queue.pop()
     except JobQueueEmptyError:
@@ -2337,12 +2332,21 @@ def cmd_queue_pop(cfg):
 
 
 def cmd_queue_move(cfg, reqid, position, relative=None):
-    reqid = RequestID.from_raw(reqid)
     position = int(position)
     if position <= 0:
         raise ValueError(f'expected positive position, got {position}')
     if relative and relative not in '+-':
         raise ValueError(f'expected relative of + or -, got {relative}')
+
+    reqid = RequestID.from_raw(reqid)
+    if relative:
+        print(f'Moving job {reqid} {relative}{position} in the queue...')
+    else:
+        print(f'Moving job {reqid} to position {position} in the queue...')
+
+    queue = JobQueue(cfg)
+    if queue.paused:
+        print('WARNING: job queue is paused')
 
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     status = Result.read_status(pfiles.results_meta)
@@ -2351,19 +2355,17 @@ def cmd_queue_move(cfg, reqid, position, relative=None):
     elif status is not Result.STATUS.PENDING:
         print(f'WARNING: request {reqid} has been updated since queued')
 
-    queue = JobQueue(cfg)
-    if relative:
-        print(f'Moving job {reqid} {relative}{position} in the queue...')
-    else:
-        print(f'Moving job {reqid} to position {position} in the queue...')
     pos = queue.move(reqid, position, relative)
     print(f'...moved to position {pos}')
 
 
 def cmd_queue_remove(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
-    queue = JobQueue(cfg)
     print(f'Removing job {reqid} from the queue...')
+
+    queue = JobQueue(cfg)
+    if queue.paused:
+        print('WARNING: job queue is paused')
 
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     status = Result.read_status(pfiles.results_meta)
