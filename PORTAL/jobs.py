@@ -217,8 +217,14 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
             return raw
         elif isinstance(raw, str):
             return cls.parse(raw)
-        else:
+        elif not raw:
             raise NotImplementedError(raw)
+        else:
+            try:
+                args = tuple(raw)
+            except TypeError:
+                raise NotImplementedError(raw)
+            return cls(*args)
 
     @classmethod
     def parse(cls, idstr):
