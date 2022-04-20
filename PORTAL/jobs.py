@@ -2590,7 +2590,7 @@ def cmd_run_next(cfg):
         raise  # re-raise
 
 
-def cmd_queue_info(cfg):
+def cmd_queue_info(cfg, *, withlog=True):
     pfiles = PortalRequestFS(None, cfg.data_dir)
     queue = JobQueue(cfg, uselock=False)
     paused = queue.paused
@@ -2600,6 +2600,8 @@ def cmd_queue_info(cfg):
     except InvalidLockFileError:
         pid = '???'
     pid_running = _is_proc_running(pid) if pid and pid != '???' else False
+    if withlog:
+        log = list(queue.read_log())
 
     print('Job Queue:')
     print(f'  size:     {len(jobs)}')
@@ -2623,6 +2625,19 @@ def cmd_queue_info(cfg):
             print(f'  {i+1} {jobs[i]}')
     else:
         print('  (queue is empty)')
+    if withlog:
+        print()
+        print(f'Log size:    {len(log)}')
+        print('Last log entry:')
+        if log:
+            print('-'*30)
+            print()
+            for line in log[-1].render():
+                print(line)
+            print()
+            print('-'*30)
+        else:
+            print('  (log is empty)')
 
 
 def cmd_queue_pause(cfg):
@@ -2913,6 +2928,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     # Add the "queue" subcomamnds.
 
     sub = add_cmd('info', queue, help='Print a summary of the state of the jobs queue')
+    sub.add_argument('--without-log', dest='withlog', action='store_false')
+    sub.add_argument('--with-log', dest='withlog',
+                     action='store_const', const=True)
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
 
