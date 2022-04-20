@@ -13,6 +13,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import traceback
 import types
 
 '''
@@ -1133,6 +1134,10 @@ class PortalRequestFS(BaseRequestFS):
     def queue_lock(self):
         return f'{self.requests}/queue.lock'
 
+    @property
+    def queue_log(self):
+        return f'{self.requests}/queue.log'
+
 
 class BenchRequestFS(BaseRequestFS):
     """Files on the bench host."""
@@ -1942,6 +1947,9 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         echo "(the "'"'"{req.kind}"'"'" job, {req.id} has finished)"
         #rm -f {pidfile}
 
+        # Trigger the next job.
+        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} > {pfiles.queue_log} 2>&1 &
+
         exit $exitcode
     '''[1:-1])
 
@@ -2108,7 +2116,7 @@ def cmd_remove(cfg, reqid):
     raise NotImplementedError
 
 
-def cmd_run(cfg, reqid, *, copy=False, force=False):
+def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
     if copy:
         raise NotImplementedError
     if force:
@@ -2119,10 +2127,11 @@ def cmd_run(cfg, reqid, *, copy=False, force=False):
     resfile = pfiles.results_meta
     result = BenchCompileResult.load(resfile)
 
-    queue = JobQueue(cfg)
-    if not queue.paused:
-        cmd_queue_push(cfg, reqid)
-        return
+    if _usequeue:
+        queue = JobQueue(cfg)
+        if not queue.paused:
+            cmd_queue_push(cfg, reqid)
+            return
 
     # Try staging it directly.
     print('# staging request')
@@ -2135,7 +2144,12 @@ def cmd_run(cfg, reqid, *, copy=False, force=False):
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
     except Exception:
+        print('ERROR: Could not stage request')
+        print()
         result.set_status(result.STATUS.FAILED)
+        result.save(resfile)
+        result.close()
+        result.save(resfile)
         raise  # re-raise
 
     # Run the send.sh script in the background.
@@ -2145,24 +2159,28 @@ def cmd_run(cfg, reqid, *, copy=False, force=False):
             "{pfiles.portal_script}" > "{pfiles.logfile}" 2>&1 &
         """).lstrip()
         scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
-        try:
-            with scriptfile:
-                scriptfile.write(script)
-            os.chmod(scriptfile.name, 0o755)
-            subprocess.run(scriptfile.name)
-        finally:
-            os.unlink(scriptfile.name)
     except Exception as exc:
-        result.set_status(result.STATUS.CANCELED)
+        result.set_status(result.STATUS.FAILED)
         result.save(resfile)
-
         result.close()
         result.save(resfile)
-
+        raise  # re-raise
+    try:
+        with scriptfile:
+            scriptfile.write(script)
+        os.chmod(scriptfile.name, 0o755)
+        subprocess.run(scriptfile.name)
+    except Exception as exc:
+        result.set_status(result.STATUS.FAILED)
+        result.save(resfile)
+        result.close()
+        result.save(resfile)
         raise  # re-raise
     except KeyboardInterrupt:
-        cmd_cancel(cfg, reqid)
+        cmd_cancel(cfg, reqid, _status=result.STATUS.ACTIVE)
         raise  # re-raise
+    finally:
+        os.unlink(scriptfile.name)
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
@@ -2191,7 +2209,7 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
         tail_file(pfiles.logfile, lines, follow=False)
 
 
-def cmd_cancel(cfg, reqid=None):
+def cmd_cancel(cfg, reqid=None, *, _status=None):
     pfiles = PortalRequestFS(reqid, cfg.data_dir)
     current = _get_staged_request(pfiles)
     if not reqid:
@@ -2202,6 +2220,11 @@ def cmd_cancel(cfg, reqid=None):
     # XXX Use the right result type.
     resfile = pfiles.results_meta
     result = BenchCompileResult.load(resfile)
+    status = result.status
+
+    if _status is not None:
+        if result.status not in (Result.STATUS.CREATED, _status):
+            return
 
     result.set_status(result.STATUS.CANCELED)
     result.close()
@@ -2250,6 +2273,69 @@ def cmd_finish_run(cfg, reqid):
     print('Results:')
     for line in render_results(reqid, pfiles):
         print(line)
+
+
+def cmd_run_next(cfg):
+    print()
+    print('#' * 40)
+    print('# Running next queued job')
+    print()
+    print('#', datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+    print()
+
+    queue = JobQueue(cfg)
+    if queue.paused:
+        print('done (job queue is paused)')
+        return
+
+    try:
+        reqid = queue.pop()
+    except JobQueueEmptyError:
+        print('done (job queue is empty)')
+        return
+
+    try:
+        try:
+            pfiles = PortalRequestFS(reqid, cfg.data_dir)
+
+            resfile = pfiles.results_meta
+            result = BenchCompileResult.load(resfile)
+            status = result.status
+        except Exception:
+            print(f'ERROR: Could not load results metadata')
+            print(f'WARNING: {reqid} status could not be updated (to "failed")')
+            print()
+            traceback.print_exc()
+            print()
+            print('trying next job...')
+            cmd_run_next(cfg)
+            return
+
+        if not status:
+            print(f'WARNING: queued request ({reqid}) not found')
+            print('trying next job...')
+            cmd_run_next(cfg)
+            return
+        elif status is not Result.STATUS.PENDING:
+            print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
+            # XXX Give the option to force the status to "active"?
+            print('trying next job...')
+            cmd_run_next(cfg)
+            return
+
+        # We're okay to run the job.
+        print(f'Running next job from queue ({reqid})')
+        print()
+        try:
+            cmd_run(cfg, reqid, _usequeue=False)
+        except RequestAlreadyStagedError:
+            print(f'another job is already running, adding {reqid} back to the queue')
+            queue.push(reqid)
+            queue.move(reqid, 1)
+            return
+    except KeyboardInterrupt:
+        cmd_cancel(cfg, reqid, _status=Result.STATUS.PENDING)
+        raise  # re-raise
 
 
 def cmd_queue_pause(cfg):
@@ -2434,6 +2520,7 @@ COMMANDS = {
     'config-show': cmd_config_show,
     # internal-only
     'internal-finish-run': cmd_finish_run,
+    'internal-run-next': cmd_run_next,
 }
 
 
@@ -2563,6 +2650,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = add_cmd('internal-finish-run', help='(internal-only; do not use)')
     sub.add_argument('reqid')
+
+    sub = add_cmd('internal-run-next', help='(internal-only; do not use)')
 
     ##########
     # Finally, parse the args.
