@@ -1412,8 +1412,6 @@ class JobQueue:
 
             data.jobs.append(reqid)
             self._save(data)
-
-            # XXX Update pfiles.results_meta.
         return len(jobs)
 
     def pop(self):
@@ -1459,8 +1457,6 @@ class JobQueue:
 
             dta.jobs.remove(reqid)
             self._save(data)
-
-            # XXX Update pfiles.results_meta.
 
 
 ##################################
@@ -2306,6 +2302,12 @@ def cmd_queue_push(cfg, reqid):
                 break
         else:
             raise NotImplementedError
+
+    resfile = pfiles.results_meta
+    result = BenchCompileResult.load(resfile)
+    result.set_status(result.STATUS.PENDING)
+    result.save(resfile)
+
     print(f'...at position {pos}')
 
 
@@ -2325,8 +2327,15 @@ def cmd_queue_pop(cfg):
     status = Result.read_status(pfiles.results_meta)
     if not status:
         print(f'WARNING: queued request ({reqid}) not found')
-    elif status is not Result.STATUS.CREATED:
-        print(f'WARNING: queued request {reqid} has already been used')
+    elif status is not Result.STATUS.PENDING:
+        print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
+        # XXX Give the option to force the status to "active"?
+    else:
+        resfile = pfiles.results_meta
+        result = BenchCompileResult.load(resfile)
+        # XXX Is "active" the right status?
+        result.set_status(result.STATUS.ACTIVE)
+        result.save(resfile)
 
     print(reqid)
 
@@ -2378,6 +2387,13 @@ def cmd_queue_remove(cfg, reqid):
         queue.remove(reqid)
     except JobNotQueuedError:
         print(f'WARNING: {reqid} was not queued')
+
+    if status is Result.STATUS.PENDING:
+        resfile = pfiles.results_meta
+        result = BenchCompileResult.load(resfile)
+        result.set_status(result.STATUS.CREATED)
+        result.save(resfile)
+
     print('...done!')
 
 
