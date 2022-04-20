@@ -720,6 +720,21 @@ def read_pidfile(pidfile):
     return int(text)
 
 
+def _is_proc_running(pid):
+    try:
+        if os.name == 'nt':
+            os.waitpid(pid, os.WNOHANG)
+        else:
+            os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # XXX Does this *always* mean there's a proc?
+        return True
+    else:
+        return True
+
+
 def tail_file(filename, nlines, *, follow=None):
     tail_args = []
     if nlines:
@@ -1421,51 +1436,27 @@ class JobQueue:
 
     # XXX Add maxsize.
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, *, uselock=True):
         self.cfg = cfg
-        self._locked = 0
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         self._filename = pfiles.queue_data
-        self._lockfile = pfiles.queue_lock
+        self._lock = LockFile(pfiles.queue_lock) if uselock else DummyLockFile()
         self._data = None
 
     def __iter__(self):
-        with self:
+        with self._lock:
             data = self._load()
         yield from data.jobs
 
     def __len__(self):
-        with self:
+        with self._lock:
             data = self._load()
         return len(data.jobs)
 
     def __getitem__(self, idx):
-        with self:
+        with self._lock:
             data = self._load()
         return data.jobs[idx]
-
-    def __enter__(self):
-        self._lock()
-        return self
-
-    def __exit__(self, *args):
-        self._unlock()
-
-    def _lock(self):
-        if self._locked == 0:
-            while True:
-                try:
-                    with open(self._lockfile, 'x') as outfile:
-                        outfile.write(f'{os.getpid()}')
-                    break
-                except FileExistsError:
-                    pass
-        self._locked += 1
-
-    def _unlock(self):
-        self._locked -= 1
-        if self._locked == 0:
-            os.unlink(self._lockfile)
 
     def _load(self):
         text = _read_file(self._filename, fail=False)
@@ -1516,15 +1507,25 @@ class JobQueue:
         # Write to the queue file.
         with open(self._filename, 'w') as outfile:
             json.dump(data, outfile, indent=4)
+            print(file=outfile)
+
+    @property
+    def locked(self):
+        if self._lock.locked():
+            return self._lock.owner()
+        else:
+            return None
 
     @property
     def paused(self):
-        with self:
+        with self._lock:
             data = self._load()
             return data.paused
 
     def pause(self):
-        with self:
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
+        with self._lock:
             data = self._load()
             if data.paused:
                 raise JobQueueAlreadyPausedError()
@@ -1532,7 +1533,9 @@ class JobQueue:
             self._save(data)
 
     def unpause(self):
-        with self:
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
+        with self._lock:
             data = self._load()
             if not data.paused:
                 raise JobQueueNotPausedError()
@@ -1540,8 +1543,10 @@ class JobQueue:
             self._save(data)
 
     def push(self, reqid):
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
-        with self:
+        with self._lock:
             data = self._load()
             if reqid in data.jobs:
                 raise JobAlreadyQueuedError(reqid)
@@ -1551,8 +1556,10 @@ class JobQueue:
         return len(jobs)
 
     def pop(self):
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
-        with self:
+        with self._lock:
             data = self._load()
             if not data.jobs:
                 raise JobQueueEmptyError()
@@ -1562,8 +1569,10 @@ class JobQueue:
         return reqid
 
     def move(self, reqid, position, relative=None):
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
-        with self:
+        with self._lock:
             data = self._load()
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
@@ -1584,8 +1593,10 @@ class JobQueue:
         return idx + 1
 
     def remove(self, reqid):
+        if isinstance(self._lock, DummyLockFile):
+            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
-        with self:
+        with self._lock:
             data= self._load()
 
             if reqid not in data.jobs:
@@ -2069,6 +2080,11 @@ def _ensure_next_job(cfg):
     if _get_staged_request(pfiles) is not None:
         return
     queue = JobQueue(cfg)
+    try:
+        if queue.locked:
+            return
+    except InvalidLockFileError:
+        queue = JobQueue(cfg, uselock=False)
     if queue.paused:
         return
     if not queue:
@@ -2472,18 +2488,31 @@ def cmd_run_next(cfg):
 
 
 def cmd_queue_info(cfg):
-    queue = JobQueue(cfg)
+    pfiles = PortalRequestFS(None, cfg.data_dir)
+    queue = JobQueue(cfg, uselock=False)
     paused = queue.paused
     jobs = list(queue)
+    try:
+        pid = JobQueue(cfg).locked
+    except InvalidLockFileError:
+        pid = '???'
+    pid_running = _is_proc_running(pid) if pid and pid != '???' else False
 
     print('Job Queue:')
     print(f'  size:     {len(jobs)}')
     print(f'  paused:   {paused}')
+    if pid == '???':
+        print(f'  lock:     held by process ??? (maybe running)')
+    elif pid:
+        running = '' if pid_running else ' (not running)'
+        print(f'  lock:     held by process {pid}{running}')
+    else:
+        print('  lock:     (not locked)')
     print()
     print('Files:')
-    print('  data:      {pfiles.queue_data}')
-    print('  lock:      {pfiles.queue_lock}')
-    print('  log:       {pfiles.queue_log}')
+    print(f'  data:      {pfiles.queue_data}')
+    print(f'  lock:      {pfiles.queue_lock}')
+    print(f'  log:       {pfiles.queue_log}')
     print()
     print('Top 5:')
     if jobs:
