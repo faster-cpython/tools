@@ -1476,7 +1476,7 @@ class JobQueue:
             data['jobs'] = []
             fixed = True
         else:
-            jobs = [RequestID.parse(v) for v in data['jobs']]
+            jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
                 # XXX Use a logger.
                 print(f'WARNING: job queue at {self._filename} has bad entries')
