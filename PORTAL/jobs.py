@@ -601,8 +601,13 @@ def _utcnow():
     return time.mktime(time.gmtime())
 
 
-def get_utc_datetime(timestamp):
-    if isinstance(timestamp, datetime.datetime):
+def get_utc_datetime(timestamp=None):
+    if timestamp is None:
+        return datetime.datetime.fromtimestamp(
+            int(_utcnow()),
+            datetime.timezone.utc,
+        )
+    elif isinstance(timestamp, datetime.datetime):
         pass
     elif isinstance(timestamp, int):
         return datetime.datetime.fromtimestamp(
@@ -1692,10 +1697,7 @@ class JobQueueLogEntry(types.SimpleNamespace):
     def __init__(self, title, timestamp=None, body=()):
         if not title or not title.strip():
             raise ValueError('missing title')
-        if not timestamp:
-            timestamp = _utcnow()
-        else:
-            timestamp = get_utc_datetime(timestamp)
+        timestamp = get_utc_datetime(timestamp or None)
 
         self.title = title.strip()
         self.timestamp = timestamp
