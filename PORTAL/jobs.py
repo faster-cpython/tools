@@ -1273,10 +1273,6 @@ class JobError(JobQueueError):
         self.reqid = reqid
 
 
-class JobNotFoundError(JobError):
-    MSG = 'request {reqid} does not exist'
-
-
 class JobNotQueuedError(JobError):
     MSG = 'job {reqid} is not in the queue'
 
@@ -1414,12 +1410,6 @@ class JobQueue:
             if reqid in data.jobs:
                 raise JobAlreadyQueuedError(reqid)
 
-            status = Result.read_status(pfiles.results_meta)
-            if not status:
-                raise JobNotFoundError(reqid)
-            elif status is not Result.STATUS.CREATED:
-                raise NotImplementedError
-
             if data.paused:
                 # Use a logger.
                 print('WARNING: job queue is paused')
@@ -1448,12 +1438,6 @@ class JobQueue:
     def move(self, reqid, position, relative=None):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
-            status = Result.read_status(pfiles.results_meta)
-            if not status:
-                raise JobNotFoundError(reqid)
-            elif status is not Result.STATUS.PENDING:
-                raise NotImplementedError
-
             data = self._load()
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
@@ -1480,14 +1464,6 @@ class JobQueue:
     def remove(self, reqid):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self:
-            status = Result.read_status(pfiles.results_meta)
-            if not status:
-                raise JobNotFoundError(reqid)
-            elif status is Result.STATUS.PENDING:
-                raise NotImplementedError
-            elif status is not Result.STATUS.CREATED:
-                raise NotImplementedError
-
             data= self._load()
 
             if reqid not in data.jobs:
@@ -2320,8 +2296,16 @@ def cmd_queue_list(cfg):
 
 def cmd_queue_push(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
-    queue = JobQueue(cfg)
     print(f'Adding job {reqid} to the queue...')
+
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    status = Result.read_status(pfiles.results_meta)
+    if not status:
+        sys.exit(f'ERROR: request {reqid} not found')
+    elif status is not Result.STATUS.CREATED:
+        sys.exit(f'ERROR: request {reqid} has already been used')
+
+    queue = JobQueue(cfg)
     try:
         pos = queue.push(reqid)
     except JobAlreadyQueuedError:
@@ -2337,7 +2321,18 @@ def cmd_queue_push(cfg, reqid):
 def cmd_queue_pop(cfg):
     queue = JobQueue(cfg)
     print(f'Popping the next job from the queue...')
-    reqid = queue.pop()
+    try:
+        reqid = queue.pop()
+    except JobQueueEmptyError:
+        sys.exit('ERROR: job queue is empty')
+
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    status = Result.read_status(pfiles.results_meta)
+    if not status:
+        print(f'WARNING: queued request ({reqid}) not found')
+    elif status is not Result.STATUS.CREATED:
+        print(f'WARNING: queued request {reqid} has already been used')
+
     print(reqid)
 
 
@@ -2348,6 +2343,13 @@ def cmd_queue_move(cfg, reqid, position, relative=None):
         raise ValueError(f'expected positive position, got {position}')
     if relative and relative not in '+-':
         raise ValueError(f'expected relative of + or -, got {relative}')
+
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    status = Result.read_status(pfiles.results_meta)
+    if not status:
+        sys.exit(f'ERROR: request {reqid} not found')
+    elif status is not Result.STATUS.PENDING:
+        print(f'WARNING: request {reqid} has been updated since queued')
 
     queue = JobQueue(cfg)
     if relative:
@@ -2362,6 +2364,14 @@ def cmd_queue_remove(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     queue = JobQueue(cfg)
     print(f'Removing job {reqid} from the queue...')
+
+    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    status = Result.read_status(pfiles.results_meta)
+    if not status:
+        print(f'WARNING: request {reqid} not found')
+    elif status is not Result.STATUS.PENDING:
+        print(f'WARNING: request {reqid} has been updated since queued')
+
     try:
         queue.remove(reqid)
     except JobNotQueuedError:
