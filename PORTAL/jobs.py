@@ -2100,7 +2100,7 @@ def cmd_remove(cfg, reqid):
     raise NotImplementedError
 
 
-def cmd_run(cfg, reqid, *, attach=False, copy=False, force=False):
+def cmd_run(cfg, reqid, *, copy=False, force=False):
     if copy:
         raise NotImplementedError
     if force:
