@@ -1602,7 +1602,7 @@ class JobQueue:
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
 
-            dta.jobs.remove(reqid)
+            data.jobs.remove(reqid)
             self._save(data)
 
 
