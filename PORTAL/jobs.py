@@ -2595,6 +2595,7 @@ def cmd_queue_info(cfg, *, withlog=True):
     queue = JobQueue(cfg, uselock=False)
     paused = queue.paused
     jobs = list(queue)
+    #maxsize = queue.maxsize
     try:
         pid = JobQueue(cfg).locked
     except InvalidLockFileError:
@@ -2605,6 +2606,7 @@ def cmd_queue_info(cfg, *, withlog=True):
 
     print('Job Queue:')
     print(f'  size:     {len(jobs)}')
+    #print(f'  max size: {maxsize}')
     print(f'  paused:   {paused}')
     if pid == '???':
         print(f'  lock:     held by process ??? (maybe running)')
