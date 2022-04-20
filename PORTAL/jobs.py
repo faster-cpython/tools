@@ -2364,6 +2364,28 @@ def cmd_run_next(cfg):
         raise  # re-raise
 
 
+def cmd_queue_info(cfg):
+    queue = JobQueue(cfg)
+    paused = queue.paused
+    jobs = list(queue)
+
+    print('Job Queue:')
+    print(f'  size:     {len(jobs)}')
+    print(f'  paused:   {paused}')
+    print()
+    print('Files:')
+    print('  data:      {pfiles.queue_data}')
+    print('  lock:      {pfiles.queue_lock}')
+    print('  log:       {pfiles.queue_log}')
+    print()
+    print('Top 5:')
+    if jobs:
+        for i in range(max(5, len(jobs))):
+            print(f'  {i+1} {jobs[i]}')
+    else:
+        print('  (queue is empty)')
+
+
 def cmd_queue_pause(cfg):
     queue = JobQueue(cfg)
     try:
@@ -2537,6 +2559,7 @@ COMMANDS = {
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
     # queue management
+    'queue-info': cmd_queue_info,
     'queue-pause': cmd_queue_pause,
     'queue-unpause': cmd_queue_unpause,
     'queue-list': cmd_queue_list,
@@ -2649,6 +2672,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     ##########
     # Add the "queue" subcomamnds.
+
+    sub = add_cmd('info', queue, help='Print a summary of the state of the jobs queue')
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
 
