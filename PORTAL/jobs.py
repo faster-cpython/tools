@@ -1948,7 +1948,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         #rm -f {pidfile}
 
         # Trigger the next job.
-        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} > {pfiles.queue_log} 2>&1 &
+        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {pfiles.queue_log} 2>&1 &
 
         exit $exitcode
     '''[1:-1])
@@ -1971,7 +1971,7 @@ def _ensure_next_job(cfg):
     jobs_script = os.path.abspath(__file__)
     script = textwrap.dedent(f"""
         #!/usr/bin/env bash
-        "{sys.executable}" "{jobs_script}" internal-run-next > "{pfiles.queue_log}" 2>&1 &
+        "{sys.executable}" "{jobs_script}" internal-run-next >> "{pfiles.queue_log}" 2>&1 &
     """).lstrip()
     scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
     try:
