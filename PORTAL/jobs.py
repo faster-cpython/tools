@@ -2,6 +2,7 @@ from collections import namedtuple
 import configparser
 import datetime
 import json
+import logging
 import os
 import os.path
 import re
@@ -867,6 +868,162 @@ class DummyLockFile(RLock):
 
 
 ##################################
+# logging
+
+
+class LogSection(types.SimpleNamespace):
+    """A titled, grouped sequence of log entries."""
+
+    @classmethod
+    def read_logfile(cls, logfile):
+        # Currently only a "simple" format is supported.
+        if isinstance(logfile, str):
+            filename = logfile
+            with open(filename) as logfile:
+                yield from cls.read_logfile(logfile)
+                return
+        lines = iter(logfile)
+        entry, next_header = cls.parse(lines)
+        while entry is not None:
+            yield entry
+            entry, next_header = cls.parse(lines, next_header)
+
+    @classmethod
+    def parse(cls, lines, next_header=None):
+        # Currently only a "simple" format is supported.
+        if isinstance(lines, str):
+            lines = lines.splitlines()
+        if not next_header:
+            # Ignore everything up to the next header.
+            for value in cls._iter_lines_and_headers(lines):
+                if not isinstance(value, str):
+                    next_header = value
+                    break
+            else:
+                return None, None
+        _, title, _, timestamp = next_header
+        self = cls.from_title(title[2:], timestamp[2:].strip())
+        for value in cls._iter_lines_and_headers(lines):
+            if not isinstance(value, str):
+                return self, value
+            self.add_lines(value)
+        else:
+            return self, None
+
+    @classmethod
+    def _iter_lines_and_headers(cls, lines):
+        header = None
+        for line in lines:
+            if line.endswith('\n'):
+                # XXX Windows?
+                line = line[:-1]
+            if header:
+                matched = False
+                if len(header) == 1:
+                    if line.startswith('# ') and line[2:].strip():
+                        header.append(line)
+                        matched = True
+                elif len(header) == 2:
+                    if not line:
+                        header.append(line)
+                        matched = True
+                elif re.match(r'^# \d{4}-\d\d-\d\d \d\d:\d\d:\d\d$', line):
+                    header.append(line)
+                    yield header
+                    header = None
+                    matched = True
+                if not matched:
+                    yield from header
+                    header = None
+            elif line == ('#'*40):
+                header = [line]
+            else:
+                yield line
+
+    @classmethod
+    def from_title(cls, title, timestamp=None, **logrecord_kwargs):
+        if not title or not title.strip():
+            raise ValueError('missing title')
+        timestamp = get_utc_datetime(timestamp or None)
+
+        logrecord_kwargs.setdefault('name', None)
+        logrecord_kwargs.setdefault('level', None)
+        # These could be extrapolated:
+        logrecord_kwargs.setdefault('pathname', None)
+        logrecord_kwargs.setdefault('lineno', None)
+        logrecord_kwargs.setdefault('exc_info', None)
+        logrecord_kwargs.setdefault('func', None)
+
+        header = logging.LogRecord(
+            msg=title.strip(),
+            args=None,
+            **logrecord_kwargs,
+        )
+        header.created = timestamp.timestamp()
+        header.msecs = 0
+        self = cls(header)
+        self._timestamp = timestamp
+        return self
+
+    def __init__(self, header):
+        if not header:
+            raise ValueError('missing header')
+        elif not isinstance(header, logging.LogRecord):
+            raise TypeError(f'expected logging.LogRecord, got {header!r}')
+        super().__init__(
+            header=header,
+            body=[],
+        )
+
+    @property
+    def title(self):
+        return self.header.getMessage()
+
+    @property
+    def timestamp(self):
+        try:
+            return self._timestamp
+        except AttributeError:
+            self._timestamp = get_utc_timestamp(self.header.created)
+            return self._timestamp
+
+    def add_record(self, record):
+        if isinstance(record, str):
+            msg = record
+            record = logging.LogRecord(
+                msg=msg,
+                args=None,
+                name=self.header.name,
+                level=self.header.levelname,
+                # XXX Conditionally extrapolate the rest?
+                pathname=self.header.pathname,
+                lineno=self.header.lineno,
+                exc_info=self.header.exc_info,
+                func=self.header.funcName,
+            )
+            record.created = self.header.created
+            record.msecs = 0
+        elif not isinstance(header, logging.LogRecord):
+            raise TypeError(f'expected logging.LogRecord, got {record!r}')
+        self.body.append(record)
+
+    def add_lines(self, lines):
+        if isinstance(lines, str):
+            lines = lines.splitlines()
+        for line in lines:
+            self.add_record(line)
+
+    def render(self):
+        # Currently only a "simple" format is supported.
+        yield '#' * 40
+        yield f'# {self.title}'
+        yield ''
+        yield f'# {self.timestamp.strftime("%Y-%m-%d %H:%M:%S")}'
+        for rec in self.body:
+            yield rec.getMessage()
+
+
+##################################
 # git utils
 
 def git(*args, GIT=shutil.which('git')):
@@ -1625,98 +1782,7 @@ class JobQueue:
         except FileNotFoundError:
             return
         with logfile:
-            yield from JobQueueLogEntry.read_logfile(logfile)
-
-
-class JobQueueLogEntry(types.SimpleNamespace):
-
-    @classmethod
-    def read_logfile(cls, logfile):
-        if isinstance(logfile, str):
-            filename = logfile
-            with open(filename) as logfile:
-                yield from cls.read_logfile(logfile)
-                return
-        lines = iter(logfile)
-        entry, next_header = cls.parse(lines)
-        while entry is not None:
-            yield entry
-            entry, next_header = cls.parse(lines, next_header)
-
-    @classmethod
-    def parse(cls, lines, next_header=None):
-        if isinstance(lines, str):
-            lines = lines.splitlines()
-        if not next_header:
-            # Ignore everything up to the next header.
-            for value in cls._iter_lines_and_headers(lines):
-                if not isinstance(value, str):
-                    next_header = value
-                    break
-            else:
-                return None, None
-        _, title, _, timestamp = next_header
-        self = cls(title[2:], timestamp[2:].strip())
-        for value in cls._iter_lines_and_headers(lines):
-            if not isinstance(value, str):
-                return self, value
-            self.add_lines(value)
-        else:
-            return self, None
-
-    @classmethod
-    def _iter_lines_and_headers(cls, lines):
-        header = None
-        for line in lines:
-            if line.endswith('\n'):
-                # XXX Windows?
-                line = line[:-1]
-            if header:
-                matched = False
-                if len(header) == 1:
-                    if line.startswith('# ') and line[2:].strip():
-                        header.append(line)
-                        matched = True
-                elif len(header) == 2:
-                    if not line:
-                        header.append(line)
-                        matched = True
-                elif re.match(r'^# \d{4}-\d\d-\d\d \d\d:\d\d:\d\d$', line):
-                    header.append(line)
-                    yield header
-                    header = None
-                    matched = True
-                if not matched:
-                    yield from header
-                    header = None
-            elif line == ('#'*40):
-                header = [line]
-            else:
-                yield line
-
-    def __init__(self, title, timestamp=None, body=()):
-        if not title or not title.strip():
-            raise ValueError('missing title')
-        timestamp = get_utc_datetime(timestamp or None)
-
-        self.title = title.strip()
-        self.timestamp = timestamp
-        self.body = []
-        if body:
-            self.add_lines(body)
-
-    def add_lines(self, lines):
-        if isinstance(lines, str):
-            lines = lines.splitlines()
-        self.body.extend(lines)
-
-    def render(self):
-        yield '#' * 40
-        yield f'# {self.title}'
-        yield ''
-        yield f'# {self.timestamp.strftime("%Y-%m-%d %H:%M:%S")}'
-        for line in self.body:
-            yield line
+            yield from LogSection.read_logfile(logfile)
 
 
 ##################################
@@ -2539,7 +2605,7 @@ def cmd_finish_run(cfg, reqid):
 
 
 def cmd_run_next(cfg):
-    logentry = JobQueueLogEntry('Running next queued job')
+    logentry = LogSection.from_title('Running next queued job')
     print()
     for line in logentry.render():
         print(line)
