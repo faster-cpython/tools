@@ -709,32 +709,9 @@ class Version(namedtuple('Version', 'major minor micro level serial')):
         return f'v{self.major}.{self.minor}{micro}{release}'
 
 
-def _read_file(filename, *, fail=True):
-    try:
-        with open(filename) as infile:
-            return infile.read()
-    except OSError as exc:
-        if fail:
-            raise  # re-raise
-        if os.path.exists(filename):
-            # XXX Use a logger.
-            print(f'WARNING: could not load PID file {filename!r}')
-        return None
-
-
-def read_pidfile(pidfile):
-    if isinstance(pidfile, str):
-        filename = pidfile
-        text = _read_file(pidfile, fail=False) or ''
-    else:
-        text = pidfile.read()
-    text = text.strip()
-    if not text:
-        return None
-    return int(text)
-
-
 def _is_proc_running(pid):
+    if pid == PID:
+        return True
     try:
         if os.name == 'nt':
             os.waitpid(pid, os.WNOHANG)
@@ -749,6 +726,22 @@ def _is_proc_running(pid):
         return True
 
 
+##################################
+# files
+
+def _read_file(filename, *, fail=True):
+    try:
+        with open(filename) as infile:
+            return infile.read()
+    except OSError as exc:
+        if fail:
+            raise  # re-raise
+        if os.path.exists(filename):
+            # XXX Use a logger.
+            print(f'WARNING: could not load PID file {filename!r}')
+        return None
+
+
 def tail_file(filename, nlines, *, follow=None):
     tail_args = []
     if nlines:
@@ -761,14 +754,118 @@ def tail_file(filename, nlines, *, follow=None):
     subprocess.run([shutil.which('tail'), *tail_args, filename])
 
 
-##################################
-# locks
+class InvalidPIDFileError(RuntimeError):
 
-class RLock:
-    """A base class for objects like threading.RLock."""
+    def __init__(self, filename, text, reason=None):
+        msg = f'PID file {filename!r} is not valid'
+        if reason:
+            msg = f'{msg} ({reason})'
+        super().__init__(msg)
+        self.filename = filename
+        self.text = text
+        self.reason = reason
 
-    def __init__(self):
-        self._recursion_level = 0
+
+class OrphanedPIDFileError(InvalidPIDFileError):
+
+    def __init__(self, filename, pid):
+        super().__init__(filename, str(pid), f'proc {pid} not running')
+        self.pid = pid
+
+
+class PIDFile:
+
+    def __init__(self, filename):
+        self._filename = filename
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._filename!r})'
+
+    @property
+    def filename(self):
+        return self._filename
+
+    def read(self, *, invalid='fail', orphaned=None):
+        """Return the PID recorded in the file."""
+        if invalid is None:
+            def handle_invalid(text):
+                return text
+        if invalid == 'fail':
+            def handle_invalid(text):
+                raise InvalidPIDFileError(self._filename, text)
+        elif invalid == 'remove':
+            def handle_invalid(text):
+                # XXX Use a logger.
+                print(f'WARNING: Removing invalid PID file ({self._filename})')
+                self.remove()
+                return None
+        else:
+            raise ValueError(f'unsupported invalid handler {invalid!r}')
+
+        #text = _read_file(self._filename, fail=False) or ''
+        try:
+            with open(self._filename) as pidfile:
+                text = pidfile.read()
+        except FileNotFoundError:
+            return None
+
+        text = text.strip()
+        if not text or not text.isdigit():
+            return handle_invalid(text)
+        pid = int(text)
+        if pid <= 0:
+            return handle_invalid(text)
+
+        if orphaned is not None and not _is_proc_running(pid):
+            if orphaned == 'fail':
+                raise OrphanedPIDFileError(self._filename, pid)
+            elif orphaned == 'remove':
+                # XXX Use a logger.
+                print(f'WARNING: Removing orphaned PID file ({self._filename})')
+                self.remove()
+                return None
+            else:
+                raise ValueError(f'unsupported orphaned handler {orphaned!r}')
+        return pid
+
+    def write(self, pid=PID, *, exclusive=True, **read_kwargs):
+        """Return True for success after trying to create the file."""
+        pid = int(pid) if pid else PID
+        assert pid > 0, pid
+        try:
+            if exclusive:
+                try:
+                    pidfile = open(self._filename, 'x')
+                except FileExistsError:
+                    if self.read(**read_kwargs) is not None:
+                        return None
+                    # Looks like there was a race or invalid files.
+                    #  Try one more time.
+                    pidfile = open(self._filename, 'x')
+            else:
+                pidfile = open(self._filename, 'w')
+            with pidfile:
+                pidfile.write(f'{pid}')
+            return pid
+        except OSError as exc:
+            # XXX Use a logger.
+            print(f'WARNING: Failed to create PID file ({self._filename}): {exc}')
+            return None
+
+    def remove(self):
+        try:
+            os.unlink(self._filename)
+        except FileNotFoundError:
+            # XXX Use a logger.
+            print(f'WARNING: lock file not found ({self._filename})')
+
+
+class LockFile:
+    """A multi-process equivalent to threading.RLock."""
+
+    def __init__(self, filename):
+        self._pidfile = PIDFile(filename)
+        self._count = 0
 
     def __enter__(self):
         self.acquire()
@@ -777,99 +874,64 @@ class RLock:
     def __exit__(self, *args):
         self.release()
 
-    def _acquire(self, blocking, timeout):
-        raise NotImplementedError
-
-    def _release(self):
-        raise NotImplementedError
-
-    def locked(self):
-        return self._recursion_level > 0
-
-    def acquire(self, blocking=True, timeout=-1):
-        if self._recursion_level == 0:
-            self._acquire(blocking, timeout)
-        self._recursion_level += 1
-
-    def release(self):
-        if self._recursion_level == 0:
-            raise RuntimeError('lock not held')
-        self._recursion_level -= 1
-        if self._recursion_level == 0:
-            self._release()
-
-
-class InvalidLockFileError(Exception):
-
-    def __init__(self, filename):
-        super().__init__(f'lockfile {filename!r} is not valid')
-        self.filename = filename
-
-
-class LockFile(RLock):
-    """A multi-process equivalent to threading.RLock."""
-
-    def __init__(self, filename):
-        super().__init__()
-        self._filename = filename
-        self._recursion_level = 0
-
     @property
     def filename(self):
-        return self._filename
+        return self._pidfile.filename
 
-    def _acquire(self, blocking, timeout):
-        while True:
-            try:
-                with open(self._filename, 'x') as outfile:
-                    outfile.write(f'{PID}')
-                break
-            except FileExistsError:
-                pass
+    def read(self):
+        return self._pidfile.read(invalid='fail', orphaned='fail')
 
-    def _release(self):
-        os.unlink(self._filename)
+    def owned(self):
+        """Return True if the current process holds the lock."""
+        owner = self.owner()
+        if owner is None:
+            return False
+        return owner == PID
+
+    def owner(self):
+        """Return the PID of the process that is holding the lock."""
+        if self._count > 0:
+            return PID
+        pid = self._pidfile.read(invalid='remove', orphaned='remove')
+        if pid == PID:
+            assert self._count == 0, self._count
+            raise NotImplementedError
+        return pid
+
+    ###################
+    # threading.Lock API
 
     def locked(self):
-        if super().locked():
-            return True
-        try:
-            return self.owner() is not None
-        except InvalidLockFileError:
-            return True
+        return self.owner() is not None
 
-    def owner(self):
-        """Return the PID of the process that is holding the lock."""
-        if self._recursion_level > 0:
-            return PID
-        else:
-            try:
-                with open(self._filename) as lockfile:
-                    text = lockfile.read()
-            except FileNotFoundError:
-                return None
-            text = text.strip()
-            if not text or not text.isdigit():
-                raise InvalidLockFileError(self._filename)
-            return int(text)
+    def acquire(self, blocking=True, timeout=-1):
+        if self._count == 0:
+            if timeout is not None and timeout >= 0:
+                raise NotImplementedError
+            while True:
+                pid = self._pidfile.write(
+                    PID,
+                    invalid='remove',
+                    orphaned='remove',
+                )
+                if pid is not None:
+                    break
+                if not blocking:
+                    return False
+        self._count += 1
+        return True
 
-
-class DummyLockFile(RLock):
-
-    def _acquire(self, blocking, timeout):
-        return
-
-    def _release(self):
-        return
-
-    def owner(self):
-        """Return the PID of the process that is holding the lock."""
-        return PID
+    def release(self):
+        if self._count == 0:
+            # XXX double-check the file?
+            raise RuntimeError('lock not held')
+        self._count -= 1
+        if self._count != 0:
+            self._pidfile.remove()
 
 
 ##################################
 # logging
-
 
 class LogSection(types.SimpleNamespace):
     """A titled, grouped sequence of log entries."""
@@ -2336,7 +2398,7 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
         raise NotImplementedError(kind)
     req = req_cls.load(pfiles.request_meta)
     res = res_cls.load(pfiles.results_meta)
-    pid = read_pidfile(pfiles.pidfile)
+    pid = PIDFile(pfiles.pidfile).read()
 
     if fmt == 'summary':
         print(f'Request {reqid}:')
@@ -2521,7 +2583,8 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
         pfiles = PortalRequestFS(reqid, cfg.data_dir)
 
     # Wait for the request to start.
-    pid = read_pidfile(pfiles.pidfile)
+    pidfile = PIDFile(pfiles.pidfile)
+    pid = pidfile.read()
     while pid is None:
         status = Result.read_status(pfiles.results_meta)
         if status is Result.FINISHED:
@@ -2529,7 +2592,7 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
             print(f'WARNING: job not started')
             return
         time.sleep(0.01)
-        pid = read_pidfile(pfiles.pidfile)
+        pid = pidfile.read()
 
     # XXX Cancel the job for KeyboardInterrupt?
     if pid:
@@ -2568,7 +2631,7 @@ def cmd_cancel(cfg, reqid=None, *, _status=None):
         print('# done unstaging request')
 
         # Kill the process.
-        pid = read_pidfile(pfiles.pidfile)
+        pid = PIDFile(pfiles.pidfile).read()
         if pid:
             print(f'# killing PID {pid}')
             os.kill(pid, signal.SIGKILL)
