@@ -1714,7 +1714,7 @@ class JobQueueLogEntry(types.SimpleNamespace):
         yield '#' * 40
         yield f'# {self.title}'
         yield ''
-        yield '#', self.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        yield f'# {self.timestamp.strftime("%Y-%m-%d %H:%M:%S")}'
         for line in self.body:
             yield line
 
