@@ -3208,9 +3208,10 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
 
-    # In some cases the mechanism to run jobs from the queue may
-    # get interrupted, so we re-start it manually here if necessary.
-    _ensure_next_job(cfg)
+    if cmd != 'queue-info' or not cmd.startswith('internal-'):
+        # In some cases the mechanism to run jobs from the queue may
+        # get interrupted, so we re-start it manually here if necessary.
+        _ensure_next_job(cfg)
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
