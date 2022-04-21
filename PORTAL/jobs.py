@@ -754,6 +754,17 @@ def tail_file(filename, nlines, *, follow=None):
     subprocess.run([shutil.which('tail'), *tail_args, filename])
 
 
+def _render_file(filename):
+    if not filename:
+        return '---'
+    elif not os.path.exists(filename):
+        return f'({filename})'
+    elif filename[0].isspace() or filename[-1].isspace():
+        return repr(filename)
+    else:
+        return filename
+
+
 class InvalidPIDFileError(RuntimeError):
 
     def __init__(self, filename, text, reason=None):
@@ -2466,13 +2477,11 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
             print(f'  {st + ":":20} {ts:%Y-%m-%d %H:%M:%S}')
         print()
         print('Request files:')
-        print(f'  {"data root:":20} {req.reqdir}')
-        print(f'  {"metadata:":20} {pfiles.request_meta}')
+        print(f'  {"data root:":20} {_render_file(req.reqdir)}')
+        print(f'  {"metadata:":20} {_render_file(pfiles.request_meta)}')
         for field in reqfs_fields:
-            value = getattr(pfiles, field, None)
-            if value and not os.path.exists(value):
-                value = None
-            print(f'  {field + ":":20} {value or "---"}')
+            value = _render_file(getattr(pfiles, field, None))
+            print(f'  {field + ":":20} {value}')
         print()
         print('Result files:')
         print(f'  {"data root:":20} {pfiles.resdir}')
@@ -2797,9 +2806,9 @@ def cmd_queue_info(cfg, *, withlog=True):
         print('  lock:     (not locked)')
     print()
     print('Files:')
-    print(f'  data:      {queue.datafile}')
-    print(f'  lock:      {queue.lockfile}')
-    print(f'  log:       {queue.logfile}')
+    print(f'  data:      {_render_file(queue.datafile)}')
+    print(f'  lock:      {_render_file(queue.lockfile)}')
+    print(f'  log:       {_render_file(queue.logfile)}')
     print()
     print('Top 5:')
     if jobs:
