@@ -1664,15 +1664,51 @@ class JobAlreadyQueuedError(JobError):
     MSG = 'job {reqid} is already in the queue'
 
 
+class JobQueueData(types.SimpleNamespace):
+
+    def __init__(self, jobs, paused):
+        super().__init__(
+            jobs=tuple(jobs),
+            paused=paused,
+        )
+
+    def __iter__(self):
+        yield from self.jobs
+
+    def __len__(self):
+        return len(self.jobs)
+
+    def __getitem__(self, idx):
+        return self.jobs[idx]
+
+
+class JobQueueSnapshot(JobQueueData):
+
+    def __init__(self, jobs, paused, locked, datafile, lockfile, logfile):
+        super().__init__(jobs, paused)
+        self.locked = locked
+        self.datafile = datafile
+        self.lockfile = lockfile
+        self.logfile = logfile
+
+    def read_log(self):
+        try:
+            logfile = open(self.logfile)
+        except FileNotFoundError:
+            return
+        with logfile:
+            yield from LogSection.read_logfile(logfile)
+
+
 class JobQueue:
 
     # XXX Add maxsize.
 
-    def __init__(self, cfg, *, uselock=True):
+    def __init__(self, cfg):
         self.cfg = cfg
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         self._filename = pfiles.queue_data
-        self._lock = LockFile(pfiles.queue_lock) if uselock else DummyLockFile()
+        self._lock = LockFile(pfiles.queue_lock)
         self._logfile = pfiles.queue_log
         self._data = None
 
@@ -1716,7 +1752,7 @@ class JobQueue:
         if fixed:
             with open(self._filename, 'w') as outfile:
                 json.dump(data, outfile, indent=4)
-        data = self._data = types.SimpleNamespace(**data)
+        data = self._data = JobQueueData(**data)
         return data
 
     def _save(self, data=None):
@@ -1743,11 +1779,23 @@ class JobQueue:
             print(file=outfile)
 
     @property
-    def locked(self):
-        if self._lock.locked():
-            return self._lock.owner()
+    def snapshot(self):
+        data = self._load()
+        try:
+            pid = self._lock.read()
+        except OrphanedPIDFileError as exc:
+            locked = (exc.pid, False)
+        except InvalidPIDFileError as exc:
+            locked = (exc.text, None)
         else:
-            return None
+            locked = (pid, bool(pid))
+        return JobQueueSnapshot(
+            datafile=self._filename,
+            lockfile=self._lock.filename,
+            logfile=self._logfile,
+            locked=locked,
+            **vars(data),
+        )
 
     @property
     def paused(self):
@@ -2320,13 +2368,9 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 def _ensure_next_job(cfg):
     pfiles = PortalRequestFS(None, cfg.data_dir)
     if _get_staged_request(pfiles) is not None:
+        # The running job will kick off the next one.
         return
-    queue = JobQueue(cfg)
-    try:
-        if queue.locked:
-            return
-    except InvalidLockFileError:
-        queue = JobQueue(cfg, uselock=False)
+    queue = JobQueue(cfg).snapshot
     if queue.paused:
         return
     if not queue:
@@ -2731,15 +2775,11 @@ def cmd_run_next(cfg):
 
 def cmd_queue_info(cfg, *, withlog=True):
     pfiles = PortalRequestFS(None, cfg.data_dir)
-    queue = JobQueue(cfg, uselock=False)
+    queue = JobQueue(cfg).snapshot
+
+    jobs = queue.jobs
     paused = queue.paused
-    jobs = list(queue)
-    #maxsize = queue.maxsize
-    try:
-        pid = JobQueue(cfg).locked
-    except InvalidLockFileError:
-        pid = '???'
-    pid_running = _is_proc_running(pid) if pid and pid != '???' else False
+    pid, pid_running = queue.locked
     if withlog:
         log = list(queue.read_log())
 
@@ -2747,8 +2787,9 @@ def cmd_queue_info(cfg, *, withlog=True):
     print(f'  size:     {len(jobs)}')
     #print(f'  max size: {maxsize}')
     print(f'  paused:   {paused}')
-    if pid == '???':
-        print(f'  lock:     held by process ??? (maybe running)')
+    if isinstance(pid, str):
+        assert pid_running is None, repr(pid_running)
+        print(f'  lock:     bad PID file (content: {pid!r})')
     elif pid:
         running = '' if pid_running else ' (not running)'
         print(f'  lock:     held by process {pid}{running}')
@@ -2756,9 +2797,9 @@ def cmd_queue_info(cfg, *, withlog=True):
         print('  lock:     (not locked)')
     print()
     print('Files:')
-    print(f'  data:      {pfiles.queue_data}')
-    print(f'  lock:      {pfiles.queue_lock}')
-    print(f'  log:       {pfiles.queue_log}')
+    print(f'  data:      {queue.datafile}')
+    print(f'  lock:      {queue.lockfile}')
+    print(f'  log:       {queue.logfile}')
     print()
     print('Top 5:')
     if jobs:
