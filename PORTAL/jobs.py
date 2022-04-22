@@ -2343,6 +2343,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
             exitcode=$?
 
             # Finish up.
+            # XXX Push from the bench host in run.sh instead of pulling here?
             {scp} -p -P {port} {conn}:{bfiles.results_meta} {results_meta}
             {scp} -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
             {scp} -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
