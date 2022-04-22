@@ -2549,6 +2549,8 @@ def cmd_copy(cfg, reqid=None):
 
 def cmd_remove(cfg, reqid):
     raise NotImplementedError
+    reqids = _find_all_requests(reqid)
+    ...
 
 
 def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
@@ -2980,6 +2982,10 @@ def cmd_config_show(cfg):
         print(line)
 
 
+def cmd_bench_host_clean(cfg):
+    raise NotImplementedError
+
+
 COMMANDS = {
     # job management
     'list': cmd_list,
@@ -3002,6 +3008,7 @@ COMMANDS = {
     'queue-remove': cmd_queue_remove,
     # other public commands
     'config-show': cmd_config_show,
+    'bench-host-clean': cmd_bench_host_clean,
     # internal-only
     'internal-finish-run': cmd_finish_run,
     'internal-run-next': cmd_run_next,
@@ -3050,7 +3057,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 #    sub.add_argument('reqid', nargs='?')
 
 #    sub = add_cmd('remove', help='Delete a job request')
-#    sub.add_argument('reqid')
+#    sub.add_argument('reqid', nargs='+', help='the requests to delete (globs okay)')
 
     sub = add_cmd('run', help='Run a previously created job request')
     sub.add_argument('--attach', dest='after',
@@ -3134,6 +3141,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     sub = add_cmd('config', help='show the config')
 
+#    sub = add_cmd('bench-host', help='manage the host where benchmarks run')
+#    benchhost = sub.add_subparsers(dest='action')
+#
+#    sub = add_cmd('clean', benchhost, help='clean up old files')
+
     ##########
     # Add internal commands.
 
@@ -3183,6 +3195,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                 parser.error('position must be positive int')
             args.position = pos
             args.relative = relative
+    elif cmd == 'bench-host':
+        action = ns.pop('action')
+        cmd = f'bench-host-{action}'
 
     return cmd, ns, cfgfile
 
