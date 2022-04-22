@@ -958,38 +958,33 @@ class LogSection(types.SimpleNamespace):
             with open(filename) as logfile:
                 yield from cls.read_logfile(logfile)
                 return
-        lines = iter(logfile)
-        entry, next_header = cls.parse(lines)
-        while entry is not None:
-            yield entry
-            entry, next_header = cls.parse(lines, next_header)
 
-    @classmethod
-    def parse(cls, lines, next_header=None):
-        # Currently only a "simple" format is supported.
-        if isinstance(lines, str):
-            lines = lines.splitlines()
-        if not next_header:
-            # Ignore everything up to the next header.
-            for value in cls._iter_lines_and_headers(lines):
-                if not isinstance(value, str):
-                    next_header = value
-                    break
-            else:
-                return None, None
-        _, title, _, timestamp = next_header
-        self = cls.from_title(title[2:], timestamp[2:].strip())
-        for value in cls._iter_lines_and_headers(lines):
+        parsed = cls._iter_lines_and_headers(logfile)
+        # Ignore everything up to the first header.
+        for value in parsed:
             if not isinstance(value, str):
-                return self, value
-            self.add_lines(value)
+                _, title, _, timestamp = value
+                section = cls.from_title(title[2:], timestamp[2:].strip())
+                break
         else:
-            return self, None
+            return
+        # Yield a LogSection for each header found.
+        for value in parsed:
+            if isinstance(value, str):
+                section.add_lines(value)
+            else:
+                yield section
+                _, title, _, timestamp = value
+                section = cls.from_title(title[2:], timestamp[2:].strip())
+        yield section
 
     @classmethod
     def _iter_lines_and_headers(cls, lines):
         header = None
+        i = 0
         for line in lines:
+            i += 1
+            print(i, line)
             if line.endswith('\n'):
                 # XXX Windows?
                 line = line[:-1]
