@@ -1682,7 +1682,7 @@ class JobQueueData(types.SimpleNamespace):
 
     def __init__(self, jobs, paused):
         super().__init__(
-            jobs=tuple(jobs),
+            jobs=jobs,
             paused=paused,
         )
 
@@ -1699,7 +1699,7 @@ class JobQueueData(types.SimpleNamespace):
 class JobQueueSnapshot(JobQueueData):
 
     def __init__(self, jobs, paused, locked, datafile, lockfile, logfile):
-        super().__init__(jobs, paused)
+        super().__init__(tuple(jobs), paused)
         self.locked = locked
         self.datafile = datafile
         self.lockfile = lockfile
