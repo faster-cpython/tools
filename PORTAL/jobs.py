@@ -2458,13 +2458,11 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
             print(f'  {field + ":":20} {value}')
         print()
         print('Result files:')
-        print(f'  {"data root:":20} {pfiles.resdir}')
-        print(f'  {"metadata:":20} {pfiles.results_meta}')
+        print(f'  {"data root:":20} {_render_file(pfiles.resdir)}')
+        print(f'  {"metadata:":20} {_render_file(pfiles.results_meta)}')
         for field in resfs_fields:
-            value = getattr(pfiles, field, None)
-            if value and not os.path.exists(value):
-                value = None
-            print(f'  {field + ":":20} {value or "---"}')
+            value = _render_file(getattr(pfiles, field, None))
+            print(f'  {field + ":":20} {value}')
     else:
         raise ValueError(f'unsupported fmt {fmt!r}')
 
