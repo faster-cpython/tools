@@ -25,9 +25,10 @@ sudo --login --user <username> ssh-import-id gh:<username>
 
 USER = os.environ.get('USER', '').strip()
 SUDO_USER = os.environ.get('SUDO_USER', '').strip()
-
 HOME = os.path.expanduser('~')
 PID = os.getpid()
+
+JOBS_SCRIPT = os.path.abspath(__file__)
 
 
 ##################################
@@ -981,10 +982,7 @@ class LogSection(types.SimpleNamespace):
     @classmethod
     def _iter_lines_and_headers(cls, lines):
         header = None
-        i = 0
         for line in lines:
-            i += 1
-            print(i, line)
             if line.endswith('\n'):
                 # XXX Windows?
                 line = line[:-1]
@@ -2278,7 +2276,7 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
     _check_shell_str(bfiles.pyperformance_results)
     _check_shell_str(bfiles.pyperformance_log)
 
-    jobs_script = _quote_shell_str(os.path.abspath(__file__))
+    jobs_script = _quote_shell_str(JOBS_SCRIPT)
 
     if cfg.send_host == 'localhost':
         ssh = 'ssh -o StrictHostKeyChecking=no'
@@ -2375,19 +2373,8 @@ def _ensure_next_job(cfg):
         return
 
     # Run in the background.
-    jobs_script = os.path.abspath(__file__)
-    script = textwrap.dedent(f"""
-        #!/usr/bin/env bash
-        "{sys.executable}" "{jobs_script}" internal-run-next >> "{pfiles.queue_log}" 2>&1 &
-    """).lstrip()
-    scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
-    try:
-        with scriptfile:
-            scriptfile.write(script)
-        os.chmod(scriptfile.name, 0o755)
-        subprocess.run(scriptfile.name)
-    finally:
-        os.unlink(scriptfile.name)
+    cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfg.filename}"'
+    subprocess.run(f'{cmd} >> "{pfiles.queue_log}" 2>&1 &', shell=True)
 
 
 def cmd_list(cfg):
@@ -2586,34 +2573,10 @@ def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
         raise  # re-raise
 
     # Run the send.sh script in the background.
-    try:
-        script = textwrap.dedent(f"""
-            #!/usr/bin/env bash
-            "{pfiles.portal_script}" > "{pfiles.logfile}" 2>&1 &
-        """).lstrip()
-        scriptfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
-    except Exception as exc:
-        result.set_status(result.STATUS.FAILED)
-        result.save(resfile)
-        result.close()
-        result.save(resfile)
-        raise  # re-raise
-    try:
-        with scriptfile:
-            scriptfile.write(script)
-        os.chmod(scriptfile.name, 0o755)
-        subprocess.run(scriptfile.name)
-    except Exception as exc:
-        result.set_status(result.STATUS.FAILED)
-        result.save(resfile)
-        result.close()
-        result.save(resfile)
-        raise  # re-raise
-    except KeyboardInterrupt:
-        cmd_cancel(cfg, reqid, _status=result.STATUS.ACTIVE)
-        raise  # re-raise
-    finally:
-        os.unlink(scriptfile.name)
+    subprocess.run(
+        '"{pfiles.portal_script}" > "{pfiles.logfile}" 2>&1 &',
+        shell=True,
+    )
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
