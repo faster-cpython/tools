@@ -848,7 +848,10 @@ class PIDFile:
                 try:
                     pidfile = open(self._filename, 'x')
                 except FileExistsError:
-                    if self.read(**read_kwargs) is not None:
+                    _pid = self.read(**read_kwargs)
+                    if _pid == pid:
+                        return pid
+                    elif _pid is not None:
                         return None
                     # Looks like there was a race or invalid files.
                     #  Try one more time.
