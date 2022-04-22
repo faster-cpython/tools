@@ -3060,9 +3060,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = jobs.add_parser('compile-bench', parents=[common, _common],
                           help='Request a compile-and-run-benchmarks job')
     sub.add_argument('--optimize', dest='optimize',
-                     action='store_true')
-    sub.add_argument('--no-optimize', dest='optimize',
-                     action='store_const', const=False)
+                     action='store_const', const=True,
+                     help='(the default)')
+    sub.add_argument('--no-optimize', dest='optimize', action='store_false')
     sub.add_argument('--debug', action='store_true')
     sub.add_argument('--benchmarks')
     sub.add_argument('--branch')
