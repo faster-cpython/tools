@@ -1818,8 +1818,6 @@ class JobQueue:
             return data.paused
 
     def pause(self):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         with self._lock:
             data = self._load()
             if data.paused:
@@ -1828,8 +1826,6 @@ class JobQueue:
             self._save(data)
 
     def unpause(self):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         with self._lock:
             data = self._load()
             if not data.paused:
@@ -1838,8 +1834,6 @@ class JobQueue:
             self._save(data)
 
     def push(self, reqid):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data = self._load()
@@ -1851,8 +1845,6 @@ class JobQueue:
         return len(data.jobs)
 
     def pop(self):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         with self._lock:
             data = self._load()
@@ -1864,8 +1856,6 @@ class JobQueue:
         return reqid
 
     def move(self, reqid, position, relative=None):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data = self._load()
@@ -1888,8 +1878,6 @@ class JobQueue:
         return idx + 1
 
     def remove(self, reqid):
-        if isinstance(self._lock, DummyLockFile):
-            raise Exception('this queue is read-only')
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data= self._load()
