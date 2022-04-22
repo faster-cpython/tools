@@ -3217,6 +3217,9 @@ def main(cmd, cmd_kwargs, cfgfile=None):
             sys.exit(f'unsupported "after" cmd {_cmd!r}')
         after.append((_cmd, _run_cmd))
 
+    print()
+    print(f'# PID: {PID}')
+
     # Load the config.
     if not cfgfile:
         cfgfile = PortalConfig.find_config()
