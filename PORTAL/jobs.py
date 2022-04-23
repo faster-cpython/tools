@@ -1642,8 +1642,8 @@ class JobQueueError(Exception):
         super().__init__(msg or self.MSG)
 
 
-class JobQueueAlreadyPausedError(JobQueueError):
-    MSG = 'job queue already paused'
+class JobQueuePausedError(JobQueueError):
+    MSG = 'job queue paused'
 
 
 class JobQueueNotPausedError(JobQueueError):
@@ -1814,7 +1814,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if data.paused:
-                raise JobQueueAlreadyPausedError()
+                raise JobQueuePausedError()
             data.paused = True
             self._save(data)
 
@@ -2788,7 +2788,7 @@ def cmd_queue_pause(cfg):
     queue = JobQueue(cfg)
     try:
        queue.pause()
-    except JobQueueAlreadyPausedError:
+    except JobQueuePausedError:
         print('WARNING: job queue was already paused')
 
 
