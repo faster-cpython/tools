@@ -1837,10 +1837,13 @@ class JobQueue:
             self._save(data)
         return len(data.jobs)
 
-    def pop(self):
+    def pop(self, *, forceifpaused=False):
         pfiles = PortalRequestFS(None, self.cfg.data_dir)
         with self._lock:
             data = self._load()
+            if data.paused:
+                if not forceifpaused:
+                    raise JobQueuePausedError()
             if not data.jobs:
                 raise JobQueueEmptyError()
 
@@ -2678,12 +2681,10 @@ def cmd_run_next(cfg):
     print()
 
     queue = JobQueue(cfg)
-    if queue.paused:
-        print('done (job queue is paused)')
-        return
-
     try:
         reqid = queue.pop()
+    except JobQueuePausedError:
+        print('done (job queue is paused)')
     except JobQueueEmptyError:
         print('done (job queue is empty)')
         return
@@ -2855,11 +2856,10 @@ def cmd_queue_pop(cfg):
     print(f'Popping the next job from the queue...')
 
     queue = JobQueue(cfg)
-    if queue.paused:
-        print('WARNING: job queue is paused')
-
     try:
         reqid = queue.pop()
+    except JobQueuePausedError:
+        print('WARNING: job queue is paused')
     except JobQueueEmptyError:
         sys.exit('ERROR: job queue is empty')
 
