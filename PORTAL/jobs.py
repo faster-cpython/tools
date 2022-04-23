@@ -2377,13 +2377,13 @@ def _ensure_next_job(cfg):
     pfiles = PortalRequestFS(None, cfg.data_dir)
     if _get_staged_request(pfiles) is not None:
         # The running job will kick off the next one.
+        # XXX Check the pidfile.
         return
     queue = JobQueue(cfg).snapshot
     if queue.paused:
         return
     if not queue:
         return
-
     # Run in the background.
     cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfg.filename}"'
     subprocess.run(f'{cmd} >> "{pfiles.queue_log}" 2>&1 &', shell=True)
