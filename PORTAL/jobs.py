@@ -1851,6 +1851,15 @@ class JobQueue:
             self._save(data)
         return reqid
 
+    def unpop(self, reqid):
+        with self._lock:
+            data = self._load()
+            if data.jobs and data.jobs[0] == reqid:
+                # XXX warn?
+                return
+            data.jobs.insert(0, reqid)
+            self._save(data)
+
     def move(self, reqid, position, relative=None):
         pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
@@ -2729,8 +2738,7 @@ def cmd_run_next(cfg):
                 # XXX Check the pidfile?
             else:
                 print(f'another job is already running, adding {reqid} back to the queue')
-                queue.push(reqid)
-                queue.move(reqid, 1)
+                queue.unpop(reqid)
     except KeyboardInterrupt:
         cmd_cancel(cfg, reqid, _status=Result.STATUS.PENDING)
         raise  # re-raise
