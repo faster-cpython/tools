@@ -3183,7 +3183,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
 
-    if cmd != 'queue-info' or not cmd.startswith('internal-'):
+    if cmd != 'queue-info' and not cmd.startswith('internal-'):
         # In some cases the mechanism to run jobs from the queue may
         # get interrupted, so we re-start it manually here if necessary.
         _ensure_next_job(cfg)
