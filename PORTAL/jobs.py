@@ -2723,10 +2723,13 @@ def cmd_run_next(cfg):
         try:
             cmd_run(cfg, reqid, _usequeue=False)
         except RequestAlreadyStagedError:
-            print(f'another job is already running, adding {reqid} back to the queue')
-            queue.push(reqid)
-            queue.move(reqid, 1)
-            return
+            if reqid == exc.curid:
+                print(f'{reqid} is already running')
+                # XXX Check the pidfile?
+            else:
+                print(f'another job is already running, adding {reqid} back to the queue')
+                queue.push(reqid)
+                queue.move(reqid, 1)
     except KeyboardInterrupt:
         cmd_cancel(cfg, reqid, _status=Result.STATUS.PENDING)
         raise  # re-raise
