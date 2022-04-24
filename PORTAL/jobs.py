@@ -31,688 +31,12 @@ PID = os.getpid()
 JOBS_SCRIPT = os.path.abspath(__file__)
 
 
-##################################
-# config
-
-class Config(types.SimpleNamespace):
-    """The base config for the benchmarking machinery."""
-
-    CONFIG_DIRS = [
-        f'{HOME}/.config',
-        HOME,
-        f'{HOME}/BENCH',
-    ]
-    CONFIG = 'benchmarking.json'
-    ALT_CONFIG = None
-
-    # XXX Get FIELDS from the __init__() signature?
-    FIELDS = ()
-    OPTIONAL = ()
-
-    @classmethod
-    def find_config(cls):
-        for dirname in cls.CONFIG_DIRS:
-            filename = f'{dirname}/{cls.CONFIG}'
-            if os.path.exists(filename):
-                return filename
-        else:
-            if cls.ALT_CONFIG:
-                filename = f'{HOME}/BENCH/{cls.ALT_CONFIG}'
-                if os.path.exists(filename):
-                    return filename
-            raise FileNotFoundError('could not find config file')
-
-    @classmethod
-    def load(cls, filename=None, *, preserveorig=True):
-        if not filename:
-            filename = cls.find_config()
-
-        with open(filename) as infile:
-            data = json.load(infile)
-        if preserveorig:
-            loaded = dict(data, _filename=filename)
-
-        includes = data.pop('include', None) or ()
-        if includes:
-            includes = list(cls._load_includes(includes, set()))
-            for field in cls.FIELDS:
-                if data.get(field):
-                    continue
-                if field in cls.OPTIONAL:
-                    continue
-                for included in includes:
-                    value = included.get(field)
-                    if value:
-                        data[field] = value
-                        break
-
-        self = cls(**data)
-        self._filename = os.path.abspath(os.path.expanduser(filename))
-        if preserveorig:
-            self._loaded = loaded
-            self._includes = includes
-        return self
-
-    @classmethod
-    def _load_includes(cls, includes, seen):
-        if isinstance(includes, str):
-            includes = [includes]
-        for i, filename in enumerate(includes):
-            if not filename:
-                continue
-            filename = os.path.abspath(os.path.expanduser(filename))
-            if filename in seen:
-                continue
-            seen.add(filename)
-            text = _read_file(filename, fail=False)
-            if not text:
-                continue
-            included = json.loads(text)
-            included['_filename'] = filename
-            yield included
-
-            subincludes = included.get('include')
-            if subincludes:
-                yield from cls._load_includes(subincludes, seen)
-
-    def __init__(self, **kwargs):
-        for name in list(kwargs):
-            value = kwargs[name]
-            if not value:
-                if name in self.OPTIONAL:
-                    del kwargs[name]
-        super().__init__(**kwargs)
-
-    def __str__(self):
-        if not self.filename:
-            return super().__str__()
-        return self.filename or super().__str__()
-
-    @property
-    def filename(self):
-        try:
-            return self._filename
-        except AttributeError:
-            return None
-
-    def as_jsonable(self, *, withmissingoptional=True):
-        # XXX Hide sensitive data?
-        data = {k: v
-                for k, v in vars(self).items()
-                if not k.startswith('_')}
-        if withmissingoptional:
-            for name in self.OPTIONAL:
-                if name not in data:
-                    data[name] = None
-        return data
-
-    def render(self):
-        data = self.as_jsonable()
-        text = json.dumps(data, indent=4)
-        yield from text.splitlines()
-
-
-class PortalConfig(Config):
-
-    CONFIG = 'benchmarking-portal.json'
-    ALT_CONFIG = 'portal.json'
-
-    FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
-    OPTIONAL = ['data_dir']
-
-    def __init__(self,
-                 bench_user,
-                 send_user,
-                 send_host,
-                 send_port,
-                 data_dir=None,
-                 ):
-        if not bench_user:
-            raise ValueError('missing bench_user')
-        if not send_user:
-            send_user = bench_user
-        if not send_host:
-            raise ValueError('missing send_host')
-        if not send_port:
-            raise ValueError('missing send_port')
-        if data_dir:
-            data_dir = os.path.abspath(os.path.expanduser(data_dir))
-        else:
-            data_dir = f'/home/{send_user}/BENCH'  # This matches DATA_ROOT.
-        super().__init__(
-            bench_user=bench_user,
-            send_user=send_user,
-            send_host=send_host,
-            send_port=send_port,
-            data_dir=data_dir or None,
-        )
-
-
-#class BenchConfig(Config):
-#
-#    CONFIG = f'benchmarking-bench.json'
-#    ALT_CONFIG = f'bench.json'
-#
-#    FIELDS = ['portal']
-#
-#    def __init__(self,
-#                 portal,
-#                 ):
-#        super().__init__(
-#            portal=portal,
-#        )
+# XXX "portal" -> "control"?
+# XXX "bench" -> "worker"?
 
 
 ##################################
-# requests
-
-class RequestID(namedtuple('RequestID', 'kind timestamp user')):
-
-    KIND = types.SimpleNamespace(
-        BENCHMARKS='compile-bench',
-    )
-    _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
-
-    @classmethod
-    def from_raw(cls, raw):
-        if isinstance(raw, cls):
-            return raw
-        elif isinstance(raw, str):
-            return cls.parse(raw)
-        elif not raw:
-            raise NotImplementedError(raw)
-        else:
-            try:
-                args = tuple(raw)
-            except TypeError:
-                raise NotImplementedError(raw)
-            return cls(*args)
-
-    @classmethod
-    def parse(cls, idstr):
-        kinds = '|'.join(cls._KIND_BY_VALUE)
-        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)$', idstr)
-        if not m:
-            return None
-        kind, timestamp, user = m.groups()
-        return cls(kind, int(timestamp), user)
-
-    @classmethod
-    def generate(cls, cfg, user=None, kind=KIND.BENCHMARKS):
-        user = _resolve_user(cfg, user)
-        timestamp = int(_utcnow())
-        return cls(kind, timestamp, user)
-
-    def __new__(cls, kind, timestamp, user):
-        if not kind:
-            kind = cls.KIND.BENCHMARKS
-        else:
-            try:
-                kind = cls._KIND_BY_VALUE[kind]
-            except KeyError:
-                raise ValueError(f'unsupported kind {kind!r}')
-
-        if not timestamp:
-            raise ValueError('missing timestamp')
-        elif isinstance(timestamp, str):
-            timestamp, _, _ = timestamp.partition('.')
-            timestamp = int(timestamp)
-        elif not isinstance(timestamp, int):
-            try:
-                timestamp = int(timestamp)
-            except TypeError:
-                raise TypeError(f'expected int timestamp, got {timestamp!r}')
-
-        if not user:
-            raise ValueError('missing user')
-        elif not isinstance(user, str):
-            raise TypeError(f'expected str for user, got {user!r}')
-        else:
-            _check_name(user)
-
-        self = super().__new__(
-            cls,
-            kind=kind,
-            timestamp=timestamp,
-            user=user,
-        )
-        return self
-
-    def __str__(self):
-        return f'req-{self.kind}-{self.timestamp}-{self.user}'
-
-    @property
-    def date(self):
-        return get_utc_datetime(self.timestamp)
-
-
-class Metadata(types.SimpleNamespace):
-
-    FIELDS = None
-    OPTIONAL = None
-
-    _extra = None
-
-    @classmethod
-    def load(cls, resfile):
-        if isinstance(resfile, str):
-            filename = resfile
-            with open(filename) as resfile:
-                return cls.load(resfile)
-        data = json.load(resfile)
-        return cls.from_jsonable(data)
-
-    @classmethod
-    def from_jsonable(cls, data):
-        kwargs = {}
-        extra = {}
-        unused = set(cls.FIELDS or ())
-        for field in data:
-            if field in unused:
-                kwargs[field] = data[field]
-                unused.remove(field)
-            elif not field.startswith('_'):
-                extra[field] = data[field]
-        unused -= set(cls.OPTIONAL or ())
-        if unused:
-            missing = ', '.join(sorted(unused))
-            raise ValueError(f'missing required data (fields: {missing})')
-        if kwargs:
-            self = cls(**kwargs)
-            if extra:
-                self._extra = extra
-        else:
-            self = cls(**extra)
-        return self
-
-    def refresh(self, resfile):
-        """Reload from the given file."""
-        fresh = self.load(resfile)
-        # This isn't the best way to go, but it's simple.
-        vars(self).clear()
-        self.__init__(**vars(fresh))
-        return fresh
-
-    def as_jsonable(self):
-        fields = self.FIELDS
-        if not fields:
-            fields = (f for f in vars(self) if not f.startswith('_'))
-        optional = set(self.OPTIONAL or ())
-        data = {}
-        for field in fields:
-            try:
-                value = getattr(self, field)
-            except AttributeError:
-                # XXX Fail?  Warn?  Add a default?
-                continue
-            if hasattr(value, 'as_jsonable'):
-                value = value.as_jsonable()
-            data[field] = value
-        return data
-
-    def save(self, resfile):
-        if isinstance(resfile, str):
-            filename = resfile
-            with open(filename, 'w') as resfile:
-                return self.save(resfile)
-        data = self.as_jsonable()
-        json.dump(data, resfile, indent=4)
-        print(file=resfile)
-
-
-class Request(Metadata):
-
-    FIELDS = [
-        'kind',
-        'id',
-        'datadir',
-        'user',
-        'date',
-    ]
-
-    @classmethod
-    def read_kind(cls, metafile):
-        text = _read_file(metafile, fail=False)
-        if not text:
-            return None
-        data = json.loads(text)
-        if not data:
-            return None
-        kind = data.get('kind')
-        if not kind:
-            return None
-        try:
-            return RequestID._KIND_BY_VALUE[kind]
-        except KeyError:
-            raise ValueError(f'unsupported kind {kind!r}')
-
-    def __init__(self, id, datadir, *,
-                 # These are ignored (duplicated by id):
-                 kind=None, user=None, date=None,
-                 ):
-        if not id:
-            raise ValueError('missing id')
-        id = RequestID.from_raw(id)
-
-        if not datadir:
-            raise ValueError('missing datadir')
-        if not isinstance(datadir, str):
-            raise TypeError(f'expected dirname for datadir, got {datadir!r}')
-
-        super().__init__(
-            id=id,
-            datadir=datadir,
-        )
-
-    def __str__(self):
-        return str(self.id)
-
-    @property
-    def reqid(self):
-        return self.id
-
-    @property
-    def reqdir(self):
-        return self.datadir
-
-    @property
-    def kind(self):
-        return self.id.kind
-
-    @property
-    def user(self):
-        return self.id.user
-
-    @property
-    def date(self):
-        return self.id.date
-
-    def as_jsonable(self):
-        data = super().as_jsonable()
-        data['id'] = str(data['id'])
-        data['date'] = self.date.isoformat()
-        return data
-
-
-class Result(Metadata):
-
-    FIELDS = [
-        'reqid',
-        'reqdir',
-        'status',
-        'history',
-    ]
-
-    STATUS = types.SimpleNamespace(
-        CREATED='created',
-        PENDING='pending',
-        ACTIVE='active',
-        RUNNING='running',
-        SUCCESS='success',
-        FAILED='failed',
-        CANCELED='canceled',
-    )
-    _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
-    _STATUS_BY_VALUE['cancelled'] = STATUS.CANCELED
-    FINISHED = frozenset([
-        STATUS.SUCCESS,
-        STATUS.FAILED,
-        STATUS.CANCELED,
-    ])
-    CLOSED = 'closed'
-
-    @classmethod
-    def read_status(cls, metafile):
-       text = _read_file(metafile, fail=False)
-       if not text:
-           return None
-       data = json.loads(text)
-       return cls._STATUS_BY_VALUE.get(data.get('status'))
-
-    def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
-        if not reqid:
-            raise ValueError('missing reqid')
-        reqid = RequestID.from_raw(reqid)
-
-        if not reqdir:
-            raise ValueError('missing reqdir')
-        if not isinstance(reqdir, str):
-            raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
-
-        if status == self.STATUS.CREATED:
-            status = None
-        elif status:
-            try:
-                status = self._STATUS_BY_VALUE[status]
-            except KeyError:
-                raise ValueError(f'unsupported status {status!r}')
-        else:
-            status = None
-
-        if history:
-            h = []
-            for st, date in history:
-                try:
-                    st = self._STATUS_BY_VALUE[st]
-                except KeyError:
-                    if st == self.CLOSED:
-                        st = self.CLOSED
-                    else:
-                        raise ValueError(f'unsupported history status {st!r}')
-                if not date:
-                    date = None
-                elif isinstance(date, str):
-                    date = get_utc_datetime(date)
-                elif isinstance(date, int):
-                    date = get_utc_datetime(date)
-                elif not isinstance(date, datetime.datetime):
-                    raise TypeError(f'unsupported history date {date!r}')
-                h.append((st, date))
-            history = h
-        else:
-            history = [
-                (self.STATUS.CREATED, reqid.date),
-            ]
-            if status is not None:
-                for st in self._STATUS_BY_VALUE:
-                    history.append((st, None))
-                    if status == st:
-                        break
-                    if status == self.STATUS.RUNNING:
-                        history.append((status, None))
-
-        super().__init__(
-            reqid=reqid,
-            reqdir=reqdir,
-            status=status,
-            history=history,
-        )
-
-    def __str__(self):
-        return str(self.reqid)
-
-    @property
-    def short(self):
-        if not self.status:
-            return f'<{self.reqid}: (created)>'
-        return f'<{self.reqid}: {self.status}>'
-
-    @property
-    def request(self):
-        try:
-            return self._request
-        except AttributeError:
-            self._request = Request(self.reqid, self.reqdir)
-            return self._request
-
-    def set_status(self, status):
-        if not status:
-            raise ValueError('missing status')
-        try:
-            status = self._STATUS_BY_VALUE[status]
-        except KeyError:
-            raise ValueError(f'unsupported status {status!r}')
-        if self.history[-1][0] is self.CLOSED:
-            raise Exception(f'req {self.reqid} is already closed')
-        # XXX Make sure it is the next possible status?
-        self.history.append(
-            (status, datetime.datetime.now(datetime.timezone.utc)),
-        )
-        self.status = None if status is self.STATUS.CREATED else status
-
-    def close(self):
-        if self.history[-1][0] is self.CLOSED:
-            # XXX Fail?
-            return
-        self.history.append(
-            (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
-        )
-
-    def as_jsonable(self):
-        data = super().as_jsonable()
-        if self.status is None:
-            data['status'] = self.STATUS.CREATED
-        data['reqid'] = str(data['reqid'])
-        data['history'] = [(st, d.isoformat() if d else None)
-                           for st, d in data['history']]
-        return data
-
-
-##################################
-# minor utils
-
-def _utcnow():
-    if time.tzname[0] == 'UTC':
-        return time.time()
-    return time.mktime(time.gmtime())
-
-
-def get_utc_datetime(timestamp=None):
-    if timestamp is None:
-        return datetime.datetime.fromtimestamp(
-            int(_utcnow()),
-            datetime.timezone.utc,
-        )
-    elif isinstance(timestamp, datetime.datetime):
-        pass
-    elif isinstance(timestamp, int):
-        return datetime.datetime.fromtimestamp(
-            timestamp,
-            datetime.timezone.utc,
-        )
-    elif isinstance(timestamp, str):
-        if hasattr(datetime.datetime, 'fromisoformat'):  # 3.7+
-            timestamp = datetime.datetime.fromisoformat(timestamp)
-        else:
-            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
-            if not m:
-                raise NotImplementedError(repr(timestamp))
-            body, sep, subzero, tz = m.groups()
-            timestamp = body
-            fmt = f'%Y-%m-%d{sep}%H:%M:%S'
-            if subzero:
-                if len(subzero) == 4:
-                    subzero += '000'
-                timestamp += subzero
-                fmt += '.%f'
-            if tz:
-                timestamp += tz.replace(':', '')
-                fmt += '%z'
-            timestamp = datetime.datetime.strptime(timestamp, fmt)
-    else:
-        raise TypeError(f'unsupported timestamp {timestamp!r}')
-    # XXX Treat naive as UTC?
-    return timestamp.astimezone(datetime.timezone.utc)
-
-
-def _resolve_user(cfg, user=None):
-    if not user:
-        user = USER
-        if not user or user == 'benchmarking':
-            user = SUDO_USER
-            if not user:
-                raise Exception('could not determine user')
-    if not user.isidentifier():
-        raise ValueError(f'invalid user {user!r}')
-    return user
-
-
-def _check_name(name, *, loose=False):
-    if not name:
-        raise ValueError(name)
-    orig = name
-    if loose:
-        name = '_' + name.replace('-', '_')
-    if not name.isidentifier():
-        raise ValueError(orig)
-
-
-class Version(namedtuple('Version', 'major minor micro level serial')):
-
-    prefix = None
-
-    @classmethod
-    def parse(cls, verstr):
-        m = re.match(r'^(v)?(\d+)\.(\d+)(?:\.(\d+))?(?:(a|b|c|rc|f)(\d+))?$',
-                     verstr)
-        if not m:
-            return None
-        prefix, major, minor, micro, level, serial = m.groups()
-        if level == 'a':
-            level = 'alpha'
-        elif level == 'b':
-            level = 'beta'
-        elif level in ('c', 'rc'):
-            level = 'candidate'
-        elif level == 'f':
-            level = 'final'
-        elif level:
-            raise NotImplementedError(repr(verstr))
-        self = cls(
-            int(major),
-            int(minor),
-            int(micro) if micro else 0,
-            level or 'final',
-            int(serial) if serial else 0,
-        )
-        if prefix:
-            self.prefix = prefix
-        return self
-
-    def as_tag(self):
-        micro = f'.{self.micro}' if self.micro else ''
-        if self.level == 'alpha':
-            release = f'a{self.serial}'
-        elif self.level == 'beta':
-            release = f'b{self.serial}'
-        elif self.level == 'candidate':
-            release = f'rc{self.serial}'
-        elif self.level == 'final':
-            release = ''
-        else:
-            raise NotImplementedError(self.level)
-        return f'v{self.major}.{self.minor}{micro}{release}'
-
-
-def _is_proc_running(pid):
-    if pid == PID:
-        return True
-    try:
-        if os.name == 'nt':
-            os.waitpid(pid, os.WNOHANG)
-        else:
-            os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # XXX Does this *always* mean there's a proc?
-        return True
-    else:
-        return True
-
-
-##################################
-# files
+# file utils
 
 def _read_file(filename, *, fail=True):
     try:
@@ -930,7 +254,7 @@ class LockFile:
 
 
 ##################################
-# logging
+# logging utils
 
 class LogSection(types.SimpleNamespace):
     """A titled, grouped sequence of log entries."""
@@ -1360,6 +684,385 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
     else:
         tag = None
     return revision, branch or _branch, tag
+
+
+##################################
+# other utils
+
+def _utcnow():
+    if time.tzname[0] == 'UTC':
+        return time.time()
+    return time.mktime(time.gmtime())
+
+
+def get_utc_datetime(timestamp=None):
+    if timestamp is None:
+        return datetime.datetime.fromtimestamp(
+            int(_utcnow()),
+            datetime.timezone.utc,
+        )
+    elif isinstance(timestamp, datetime.datetime):
+        pass
+    elif isinstance(timestamp, int):
+        return datetime.datetime.fromtimestamp(
+            timestamp,
+            datetime.timezone.utc,
+        )
+    elif isinstance(timestamp, str):
+        if hasattr(datetime.datetime, 'fromisoformat'):  # 3.7+
+            timestamp = datetime.datetime.fromisoformat(timestamp)
+        else:
+            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
+            if not m:
+                raise NotImplementedError(repr(timestamp))
+            body, sep, subzero, tz = m.groups()
+            timestamp = body
+            fmt = f'%Y-%m-%d{sep}%H:%M:%S'
+            if subzero:
+                if len(subzero) == 4:
+                    subzero += '000'
+                timestamp += subzero
+                fmt += '.%f'
+            if tz:
+                timestamp += tz.replace(':', '')
+                fmt += '%z'
+            timestamp = datetime.datetime.strptime(timestamp, fmt)
+    else:
+        raise TypeError(f'unsupported timestamp {timestamp!r}')
+    # XXX Treat naive as UTC?
+    return timestamp.astimezone(datetime.timezone.utc)
+
+
+def _resolve_user(cfg, user=None):
+    if not user:
+        user = USER
+        if not user or user == 'benchmarking':
+            user = SUDO_USER
+            if not user:
+                raise Exception('could not determine user')
+    if not user.isidentifier():
+        raise ValueError(f'invalid user {user!r}')
+    return user
+
+
+def _check_name(name, *, loose=False):
+    if not name:
+        raise ValueError(name)
+    orig = name
+    if loose:
+        name = '_' + name.replace('-', '_')
+    if not name.isidentifier():
+        raise ValueError(orig)
+
+
+class Version(namedtuple('Version', 'major minor micro level serial')):
+
+    prefix = None
+
+    @classmethod
+    def parse(cls, verstr):
+        m = re.match(r'^(v)?(\d+)\.(\d+)(?:\.(\d+))?(?:(a|b|c|rc|f)(\d+))?$',
+                     verstr)
+        if not m:
+            return None
+        prefix, major, minor, micro, level, serial = m.groups()
+        if level == 'a':
+            level = 'alpha'
+        elif level == 'b':
+            level = 'beta'
+        elif level in ('c', 'rc'):
+            level = 'candidate'
+        elif level == 'f':
+            level = 'final'
+        elif level:
+            raise NotImplementedError(repr(verstr))
+        self = cls(
+            int(major),
+            int(minor),
+            int(micro) if micro else 0,
+            level or 'final',
+            int(serial) if serial else 0,
+        )
+        if prefix:
+            self.prefix = prefix
+        return self
+
+    def as_tag(self):
+        micro = f'.{self.micro}' if self.micro else ''
+        if self.level == 'alpha':
+            release = f'a{self.serial}'
+        elif self.level == 'beta':
+            release = f'b{self.serial}'
+        elif self.level == 'candidate':
+            release = f'rc{self.serial}'
+        elif self.level == 'final':
+            release = ''
+        else:
+            raise NotImplementedError(self.level)
+        return f'v{self.major}.{self.minor}{micro}{release}'
+
+
+def _is_proc_running(pid):
+    if pid == PID:
+        return True
+    try:
+        if os.name == 'nt':
+            os.waitpid(pid, os.WNOHANG)
+        else:
+            os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # XXX Does this *always* mean there's a proc?
+        return True
+    else:
+        return True
+
+
+class Metadata(types.SimpleNamespace):
+
+    FIELDS = None
+    OPTIONAL = None
+
+    _extra = None
+
+    @classmethod
+    def load(cls, resfile):
+        if isinstance(resfile, str):
+            filename = resfile
+            with open(filename) as resfile:
+                return cls.load(resfile)
+        data = json.load(resfile)
+        return cls.from_jsonable(data)
+
+    @classmethod
+    def from_jsonable(cls, data):
+        kwargs = {}
+        extra = {}
+        unused = set(cls.FIELDS or ())
+        for field in data:
+            if field in unused:
+                kwargs[field] = data[field]
+                unused.remove(field)
+            elif not field.startswith('_'):
+                extra[field] = data[field]
+        unused -= set(cls.OPTIONAL or ())
+        if unused:
+            missing = ', '.join(sorted(unused))
+            raise ValueError(f'missing required data (fields: {missing})')
+        if kwargs:
+            self = cls(**kwargs)
+            if extra:
+                self._extra = extra
+        else:
+            self = cls(**extra)
+        return self
+
+    def refresh(self, resfile):
+        """Reload from the given file."""
+        fresh = self.load(resfile)
+        # This isn't the best way to go, but it's simple.
+        vars(self).clear()
+        self.__init__(**vars(fresh))
+        return fresh
+
+    def as_jsonable(self):
+        fields = self.FIELDS
+        if not fields:
+            fields = (f for f in vars(self) if not f.startswith('_'))
+        optional = set(self.OPTIONAL or ())
+        data = {}
+        for field in fields:
+            try:
+                value = getattr(self, field)
+            except AttributeError:
+                # XXX Fail?  Warn?  Add a default?
+                continue
+            if hasattr(value, 'as_jsonable'):
+                value = value.as_jsonable()
+            data[field] = value
+        return data
+
+    def save(self, resfile):
+        if isinstance(resfile, str):
+            filename = resfile
+            with open(filename, 'w') as resfile:
+                return self.save(resfile)
+        data = self.as_jsonable()
+        json.dump(data, resfile, indent=4)
+        print(file=resfile)
+
+
+##################################
+# jobs config
+
+class Config(types.SimpleNamespace):
+    """The base config for the benchmarking machinery."""
+
+    CONFIG_DIRS = [
+        f'{HOME}/.config',
+        HOME,
+        f'{HOME}/BENCH',
+    ]
+    CONFIG = 'benchmarking.json'
+    ALT_CONFIG = None
+
+    # XXX Get FIELDS from the __init__() signature?
+    FIELDS = ()
+    OPTIONAL = ()
+
+    @classmethod
+    def find_config(cls):
+        for dirname in cls.CONFIG_DIRS:
+            filename = f'{dirname}/{cls.CONFIG}'
+            if os.path.exists(filename):
+                return filename
+        else:
+            if cls.ALT_CONFIG:
+                filename = f'{HOME}/BENCH/{cls.ALT_CONFIG}'
+                if os.path.exists(filename):
+                    return filename
+            raise FileNotFoundError('could not find config file')
+
+    @classmethod
+    def load(cls, filename=None, *, preserveorig=True):
+        if not filename:
+            filename = cls.find_config()
+
+        with open(filename) as infile:
+            data = json.load(infile)
+        if preserveorig:
+            loaded = dict(data, _filename=filename)
+
+        includes = data.pop('include', None) or ()
+        if includes:
+            includes = list(cls._load_includes(includes, set()))
+            for field in cls.FIELDS:
+                if data.get(field):
+                    continue
+                if field in cls.OPTIONAL:
+                    continue
+                for included in includes:
+                    value = included.get(field)
+                    if value:
+                        data[field] = value
+                        break
+
+        self = cls(**data)
+        self._filename = os.path.abspath(os.path.expanduser(filename))
+        if preserveorig:
+            self._loaded = loaded
+            self._includes = includes
+        return self
+
+    @classmethod
+    def _load_includes(cls, includes, seen):
+        if isinstance(includes, str):
+            includes = [includes]
+        for i, filename in enumerate(includes):
+            if not filename:
+                continue
+            filename = os.path.abspath(os.path.expanduser(filename))
+            if filename in seen:
+                continue
+            seen.add(filename)
+            text = _read_file(filename, fail=False)
+            if not text:
+                continue
+            included = json.loads(text)
+            included['_filename'] = filename
+            yield included
+
+            subincludes = included.get('include')
+            if subincludes:
+                yield from cls._load_includes(subincludes, seen)
+
+    def __init__(self, **kwargs):
+        for name in list(kwargs):
+            value = kwargs[name]
+            if not value:
+                if name in self.OPTIONAL:
+                    del kwargs[name]
+        super().__init__(**kwargs)
+
+    def __str__(self):
+        if not self.filename:
+            return super().__str__()
+        return self.filename or super().__str__()
+
+    @property
+    def filename(self):
+        try:
+            return self._filename
+        except AttributeError:
+            return None
+
+    def as_jsonable(self, *, withmissingoptional=True):
+        # XXX Hide sensitive data?
+        data = {k: v
+                for k, v in vars(self).items()
+                if not k.startswith('_')}
+        if withmissingoptional:
+            for name in self.OPTIONAL:
+                if name not in data:
+                    data[name] = None
+        return data
+
+    def render(self):
+        data = self.as_jsonable()
+        text = json.dumps(data, indent=4)
+        yield from text.splitlines()
+
+
+class PortalConfig(Config):
+
+    CONFIG = 'benchmarking-portal.json'
+    ALT_CONFIG = 'portal.json'
+
+    FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
+    OPTIONAL = ['data_dir']
+
+    def __init__(self,
+                 bench_user,
+                 send_user,
+                 send_host,
+                 send_port,
+                 data_dir=None,
+                 ):
+        if not bench_user:
+            raise ValueError('missing bench_user')
+        if not send_user:
+            send_user = bench_user
+        if not send_host:
+            raise ValueError('missing send_host')
+        if not send_port:
+            raise ValueError('missing send_port')
+        if data_dir:
+            data_dir = os.path.abspath(os.path.expanduser(data_dir))
+        else:
+            data_dir = f'/home/{send_user}/BENCH'  # This matches DATA_ROOT.
+        super().__init__(
+            bench_user=bench_user,
+            send_user=send_user,
+            send_host=send_host,
+            send_port=send_port,
+            data_dir=data_dir or None,
+        )
+
+
+#class BenchConfig(Config):
+#
+#    CONFIG = f'benchmarking-bench.json'
+#    ALT_CONFIG = f'bench.json'
+#
+#    FIELDS = ['portal']
+#
+#    def __init__(self,
+#                 portal,
+#                 ):
+#        super().__init__(
+#            portal=portal,
+#        )
 
 
 ##################################
@@ -1905,6 +1608,307 @@ class JobQueue:
             return
         with logfile:
             yield from LogSection.read_logfile(logfile)
+
+
+##################################
+# requests
+
+class RequestID(namedtuple('RequestID', 'kind timestamp user')):
+
+    KIND = types.SimpleNamespace(
+        BENCHMARKS='compile-bench',
+    )
+    _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
+
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        elif not raw:
+            raise NotImplementedError(raw)
+        else:
+            try:
+                args = tuple(raw)
+            except TypeError:
+                raise NotImplementedError(raw)
+            return cls(*args)
+
+    @classmethod
+    def parse(cls, idstr):
+        kinds = '|'.join(cls._KIND_BY_VALUE)
+        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)$', idstr)
+        if not m:
+            return None
+        kind, timestamp, user = m.groups()
+        return cls(kind, int(timestamp), user)
+
+    @classmethod
+    def generate(cls, cfg, user=None, kind=KIND.BENCHMARKS):
+        user = _resolve_user(cfg, user)
+        timestamp = int(_utcnow())
+        return cls(kind, timestamp, user)
+
+    def __new__(cls, kind, timestamp, user):
+        if not kind:
+            kind = cls.KIND.BENCHMARKS
+        else:
+            try:
+                kind = cls._KIND_BY_VALUE[kind]
+            except KeyError:
+                raise ValueError(f'unsupported kind {kind!r}')
+
+        if not timestamp:
+            raise ValueError('missing timestamp')
+        elif isinstance(timestamp, str):
+            timestamp, _, _ = timestamp.partition('.')
+            timestamp = int(timestamp)
+        elif not isinstance(timestamp, int):
+            try:
+                timestamp = int(timestamp)
+            except TypeError:
+                raise TypeError(f'expected int timestamp, got {timestamp!r}')
+
+        if not user:
+            raise ValueError('missing user')
+        elif not isinstance(user, str):
+            raise TypeError(f'expected str for user, got {user!r}')
+        else:
+            _check_name(user)
+
+        self = super().__new__(
+            cls,
+            kind=kind,
+            timestamp=timestamp,
+            user=user,
+        )
+        return self
+
+    def __str__(self):
+        return f'req-{self.kind}-{self.timestamp}-{self.user}'
+
+    @property
+    def date(self):
+        return get_utc_datetime(self.timestamp)
+
+
+class Request(Metadata):
+
+    FIELDS = [
+        'kind',
+        'id',
+        'datadir',
+        'user',
+        'date',
+    ]
+
+    @classmethod
+    def read_kind(cls, metafile):
+        text = _read_file(metafile, fail=False)
+        if not text:
+            return None
+        data = json.loads(text)
+        if not data:
+            return None
+        kind = data.get('kind')
+        if not kind:
+            return None
+        try:
+            return RequestID._KIND_BY_VALUE[kind]
+        except KeyError:
+            raise ValueError(f'unsupported kind {kind!r}')
+
+    def __init__(self, id, datadir, *,
+                 # These are ignored (duplicated by id):
+                 kind=None, user=None, date=None,
+                 ):
+        if not id:
+            raise ValueError('missing id')
+        id = RequestID.from_raw(id)
+
+        if not datadir:
+            raise ValueError('missing datadir')
+        if not isinstance(datadir, str):
+            raise TypeError(f'expected dirname for datadir, got {datadir!r}')
+
+        super().__init__(
+            id=id,
+            datadir=datadir,
+        )
+
+    def __str__(self):
+        return str(self.id)
+
+    @property
+    def reqid(self):
+        return self.id
+
+    @property
+    def reqdir(self):
+        return self.datadir
+
+    @property
+    def kind(self):
+        return self.id.kind
+
+    @property
+    def user(self):
+        return self.id.user
+
+    @property
+    def date(self):
+        return self.id.date
+
+    def as_jsonable(self):
+        data = super().as_jsonable()
+        data['id'] = str(data['id'])
+        data['date'] = self.date.isoformat()
+        return data
+
+
+class Result(Metadata):
+
+    FIELDS = [
+        'reqid',
+        'reqdir',
+        'status',
+        'history',
+    ]
+
+    STATUS = types.SimpleNamespace(
+        CREATED='created',
+        PENDING='pending',
+        ACTIVE='active',
+        RUNNING='running',
+        SUCCESS='success',
+        FAILED='failed',
+        CANCELED='canceled',
+    )
+    _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
+    _STATUS_BY_VALUE['cancelled'] = STATUS.CANCELED
+    FINISHED = frozenset([
+        STATUS.SUCCESS,
+        STATUS.FAILED,
+        STATUS.CANCELED,
+    ])
+    CLOSED = 'closed'
+
+    @classmethod
+    def read_status(cls, metafile):
+       text = _read_file(metafile, fail=False)
+       if not text:
+           return None
+       data = json.loads(text)
+       return cls._STATUS_BY_VALUE.get(data.get('status'))
+
+    def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
+        if not reqid:
+            raise ValueError('missing reqid')
+        reqid = RequestID.from_raw(reqid)
+
+        if not reqdir:
+            raise ValueError('missing reqdir')
+        if not isinstance(reqdir, str):
+            raise TypeError(f'expected dirname for reqdir, got {reqdir!r}')
+
+        if status == self.STATUS.CREATED:
+            status = None
+        elif status:
+            try:
+                status = self._STATUS_BY_VALUE[status]
+            except KeyError:
+                raise ValueError(f'unsupported status {status!r}')
+        else:
+            status = None
+
+        if history:
+            h = []
+            for st, date in history:
+                try:
+                    st = self._STATUS_BY_VALUE[st]
+                except KeyError:
+                    if st == self.CLOSED:
+                        st = self.CLOSED
+                    else:
+                        raise ValueError(f'unsupported history status {st!r}')
+                if not date:
+                    date = None
+                elif isinstance(date, str):
+                    date = get_utc_datetime(date)
+                elif isinstance(date, int):
+                    date = get_utc_datetime(date)
+                elif not isinstance(date, datetime.datetime):
+                    raise TypeError(f'unsupported history date {date!r}')
+                h.append((st, date))
+            history = h
+        else:
+            history = [
+                (self.STATUS.CREATED, reqid.date),
+            ]
+            if status is not None:
+                for st in self._STATUS_BY_VALUE:
+                    history.append((st, None))
+                    if status == st:
+                        break
+                    if status == self.STATUS.RUNNING:
+                        history.append((status, None))
+
+        super().__init__(
+            reqid=reqid,
+            reqdir=reqdir,
+            status=status,
+            history=history,
+        )
+
+    def __str__(self):
+        return str(self.reqid)
+
+    @property
+    def short(self):
+        if not self.status:
+            return f'<{self.reqid}: (created)>'
+        return f'<{self.reqid}: {self.status}>'
+
+    @property
+    def request(self):
+        try:
+            return self._request
+        except AttributeError:
+            self._request = Request(self.reqid, self.reqdir)
+            return self._request
+
+    def set_status(self, status):
+        if not status:
+            raise ValueError('missing status')
+        try:
+            status = self._STATUS_BY_VALUE[status]
+        except KeyError:
+            raise ValueError(f'unsupported status {status!r}')
+        if self.history[-1][0] is self.CLOSED:
+            raise Exception(f'req {self.reqid} is already closed')
+        # XXX Make sure it is the next possible status?
+        self.history.append(
+            (status, datetime.datetime.now(datetime.timezone.utc)),
+        )
+        self.status = None if status is self.STATUS.CREATED else status
+
+    def close(self):
+        if self.history[-1][0] is self.CLOSED:
+            # XXX Fail?
+            return
+        self.history.append(
+            (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
+        )
+
+    def as_jsonable(self):
+        data = super().as_jsonable()
+        if self.status is None:
+            data['status'] = self.STATUS.CREATED
+        data['reqid'] = str(data['reqid'])
+        data['history'] = [(st, d.isoformat() if d else None)
+                           for st, d in data['history']]
+        return data
 
 
 ##################################
