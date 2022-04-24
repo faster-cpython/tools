@@ -578,22 +578,6 @@ class Result(Metadata):
         return data
 
 
-def render_request(reqid, pfiles):
-    yield f'(from {pfiles.request_meta}):'
-    yield ''
-    # XXX Show something better?
-    text = _read_file(pfiles.request_meta)
-    yield from text.splitlines()
-
-
-def render_results(reqid, pfiles):
-    yield f'(from {pfiles.results_meta}):'
-    yield ''
-    # XXX Show something better?
-    text = _read_file(pfiles.results_meta)
-    yield from text.splitlines()
-
-
 ##################################
 # minor utils
 
@@ -1381,29 +1365,92 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 ##################################
 # files
 
-DATA_ROOT = os.path.expanduser(f'{HOME}/BENCH')
+class BaseJobsFS(types.SimpleNamespace):
+    """The file structure that the portal and bench hosts have in common."""
+
+    @classmethod
+    def from_user(cls, user):
+        return cls(f'/home/{user}/BENCH')
+
+    def __init__(self, topdata='~/BENCH'):
+        if topdata:
+            # XXX Leaving this as-is may be more user-friendly.
+            topdata = os.path.abspath(os.path.expanduser(topdata))
+        else:
+            topdata = '{HOME}/BENCH'
+        super().__init__(
+            topdata=topdata,
+            requests=f'{topdata}/REQUESTS',
+            results=f'{topdata}/REQUESTS',
+        )
+
+    def __str__(self):
+        return self.topdata
+
+    def resolve_request(self, reqid):
+        raise NotImplementedError
+
+
+class PortalJobsFS(BaseJobsFS):
+    """Files on the portal host."""
+
+    @property
+    def queue_data(self):
+        return f'{self.requests}/queue.json'
+
+    @property
+    def queue_lock(self):
+        return f'{self.requests}/queue.lock'
+
+    @property
+    def queue_log(self):
+        return f'{self.requests}/queue.log'
+
+    @property
+    def current_request(self):
+        """The directory of the currently running request, if any."""
+        return f'{self.requests}/CURRENT'
+
+    def resolve_request(self, reqid):
+        return PortalRequestFS(self, reqid)
+
+
+class BenchJobsFS(BaseJobsFS):
+    """Files on the bench host."""
+
+    @property
+    def repos(self):
+        return f'{self}/repositories'
+
+    # the local git repositories used by the job
+
+    @property
+    def cpython_repo(self):
+        return f'{self.repos}/cpython'
+
+    @property
+    def pyperformance_repo(self):
+        return f'{self.repos}/pyperformance'
+
+    @property
+    def pyston_benchmarks_repo(self):
+        return f'{self.repos}/pyston-benchmarks'
+
+    def resolve_request(self, reqid):
+        return BenchRequestFS(self, reqid)
 
 
 class BaseRequestFS(types.SimpleNamespace):
     """The file structure that the portal and bench hosts have in common."""
 
-    @classmethod
-    def from_user(cls, user, reqid):
-        topdata = f'/home/{user}/BENCH'
-        return cls(reqid, topdata)
-
-    def __init__(self, reqid, topdata=DATA_ROOT):
-        reqid = RequestID.from_raw(reqid) if reqid else None
-        if topdata:
-            # XXX Leaving this as-is may be more user-friendly.
-            topdata = os.path.abspath(os.path.expanduser(topdata))
-        else:
-            topdata = DATA_ROOT
-        reqdir = f'{topdata}/REQUESTS/{reqid}'
+    def __init__(self, jobs, reqid):
+        if not jobs:
+            raise ValueError('missing jobs')
+        elif not isinstance(jobs, BaseJobsFS):
+            raise TypeError(f'expected JobsFS, got {jobs!r}')
+        reqdir = f'{jobs}/REQUESTS/{reqid}'
         super().__init__(
             reqid=reqid,
-            topdata=topdata,
-            requests=f'{topdata}/REQUESTS',
             reqdir=reqdir,
             resdir=reqdir,
         )
@@ -1456,15 +1503,6 @@ class BaseRequestFS(types.SimpleNamespace):
 class PortalRequestFS(BaseRequestFS):
     """Files on the portal host."""
 
-    def __init__(self, reqid, portaldata=DATA_ROOT):
-        super().__init__(reqid, portaldata)
-        self.portaldata = self.topdata
-
-    @property
-    def current_request(self):
-        """The directory of the currently running request, if any."""
-        return f'{self.requests}/CURRENT'
-
     # the job
 
     @property
@@ -1487,40 +1525,9 @@ class PortalRequestFS(BaseRequestFS):
         """Where the job output is written."""
         return f'{self.reqdir}/job.log'
 
-    @property
-    def queue_data(self):
-        return f'{self.requests}/queue.json'
-
-    @property
-    def queue_lock(self):
-        return f'{self.requests}/queue.lock'
-
-    @property
-    def queue_log(self):
-        return f'{self.requests}/queue.log'
-
 
 class BenchRequestFS(BaseRequestFS):
     """Files on the bench host."""
-
-    def __init__(self, reqid, benchdata=DATA_ROOT):
-        super().__init__(reqid, benchdata)
-        self.benchdata = self.topdata
-        self.repos = f'{self.benchdata}/repositories'
-
-    # the local git repositories used by the job
-
-    @property
-    def cpython_repo(self):
-        return f'{self.repos}/cpython'
-
-    @property
-    def pyperformance_repo(self):
-        return f'{self.repos}/pyperformance'
-
-    @property
-    def pyston_benchmarks_repo(self):
-        return f'{self.repos}/pyston-benchmarks'
 
     # other directories needed by the job
 
@@ -1608,11 +1615,13 @@ def _get_staged_request(pfiles):
 
 
 def stage_request(reqid, pfiles):
+    reqdir = pfiles.resolve_request(reqid).reqdir
+
     status = Result.read_status(pfiles.results_meta)
     if status is not Result.STATUS.PENDING:
         raise RequestNotPendingError(reqid, status)
     try:
-        os.symlink(pfiles.reqdir, pfiles.current_request)
+        os.symlink(reqdir, pfiles.current_request)
     except FileExistsError:
         # XXX Delete the existing one if bogus?
         curid = _get_staged_request(pfiles) or '???'
@@ -1713,7 +1722,7 @@ class JobQueue:
 
     def __init__(self, cfg):
         self.cfg = cfg
-        pfiles = PortalRequestFS(None, self.cfg.data_dir)
+        pfiles = PortalJobsFS(self.cfg.data_dir)
         self._filename = pfiles.queue_data
         self._lock = LockFile(pfiles.queue_lock)
         self._logfile = pfiles.queue_log
@@ -1827,7 +1836,6 @@ class JobQueue:
             self._save(data)
 
     def push(self, reqid):
-        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data = self._load()
             if reqid in data.jobs:
@@ -1838,7 +1846,6 @@ class JobQueue:
         return len(data.jobs)
 
     def pop(self, *, forceifpaused=False):
-        pfiles = PortalRequestFS(None, self.cfg.data_dir)
         with self._lock:
             data = self._load()
             if data.paused:
@@ -1861,7 +1868,6 @@ class JobQueue:
             self._save(data)
 
     def move(self, reqid, position, relative=None):
-        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data = self._load()
             if reqid not in data.jobs:
@@ -1883,7 +1889,6 @@ class JobQueue:
         return idx + 1
 
     def remove(self, reqid):
-        pfiles = PortalRequestFS(reqid, self.cfg.data_dir)
         with self._lock:
             data= self._load()
 
@@ -2031,7 +2036,9 @@ def _build_manifest(req, bfiles):
     '''[1:-1])
 
 
-def _build_pyperformance_config(req, pfiles, bfiles):
+def _build_pyperformance_config(req, bfiles):
+    cpython = bfiles.cpython_repo
+    bfiles = bfiles.resolve_request(req.id)
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
@@ -2052,7 +2059,7 @@ def _build_pyperformance_config(req, pfiles, bfiles):
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
-    cfg['run_benchmark']['manifest'] = pfiles.manifest
+    cfg['run_benchmark']['manifest'] = bfiles.manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
@@ -2090,10 +2097,12 @@ def _build_compile_script(req, bfiles):
     maybe_branch = req.branch or ''
     _check_shell_str(req.ref)
 
+    cpython_repo = _quote_shell_str(bfiles.cpython_repo)
+    pyperformance_repo = _quote_shell_str(bfiles.pyperformance_repo)
+    pyston_benchmarks_repo = _quote_shell_str(bfiles.pyston_benchmarks_repo)
+
+    bfiles = bfiles.resolve_request(req.id)
     _check_shell_str(bfiles.pyperformance_config)
-    _check_shell_str(bfiles.cpython_repo)
-    _check_shell_str(bfiles.pyperformance_repo)
-    _check_shell_str(bfiles.pyston_benchmarks_repo)
     _check_shell_str(bfiles.pyperformance_log)
     _check_shell_str(bfiles.results_meta)
     _check_shell_str(bfiles.pyperformance_results)
@@ -2130,19 +2139,19 @@ def _build_compile_script(req, bfiles):
         #####################
         # Ensure the dependencies.
 
-        if [ ! -e {bfiles.cpython_repo} ]; then
+        if [ ! -e {cpython_repo} ]; then
             ( set -x
-            git clone https://github.com/python/cpython {bfiles.cpython_repo}
+            git clone https://github.com/python/cpython {cpython_repo}
             )
         fi
-        if [ ! -e {bfiles.pyperformance_repo} ]; then
+        if [ ! -e {pyperformance_repo} ]; then
             ( set -x
-            git clone https://github.com/python/pyperformance {bfiles.pyperformance_repo}
+            git clone https://github.com/python/pyperformance {pyperformance_repo}
             )
         fi
-        if [ ! -e {bfiles.pyston_benchmarks_repo} ]; then
+        if [ ! -e {pyston_benchmarks_repo} ]; then
             ( set -x
-            git clone https://github.com/pyston/python-macrobenchmarks {bfiles.pyston_benchmarks_repo}
+            git clone https://github.com/pyston/python-macrobenchmarks {pyston_benchmarks_repo}
             )
         fi
 
@@ -2152,23 +2161,23 @@ def _build_compile_script(req, bfiles):
         remote='{req.cpython.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C {bfiles.cpython_repo} remote add {req.cpython.remote} {req.cpython.url}
-            git -C {bfiles.cpython_repo} fetch --tags {req.cpython.remote}
+            2>/dev/null git -C {cpython_repo} remote add {req.cpython.remote} {req.cpython.url}
+            git -C {cpython_repo} fetch --tags {req.cpython.remote}
             )
         fi
         # Get the upstream tags, just in case.
         ( set -x
-        git -C {bfiles.cpython_repo} fetch --tags origin
+        git -C {cpython_repo} fetch --tags origin
         )
         branch='{maybe_branch}'
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git -C {bfiles.cpython_repo} checkout -b {req.branch or '$branch'} --track {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout -b {req.branch or '$branch'} --track {req.cpython.remote}/{req.branch or '$branch'}
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git -C {bfiles.cpython_repo} checkout {req.branch or '$branch'}
-                git -C {bfiles.cpython_repo} reset --hard {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout {req.branch or '$branch'}
+                git -C {cpython_repo} reset --hard {req.cpython.remote}/{req.branch or '$branch'}
                 )
             fi
         fi
@@ -2176,23 +2185,23 @@ def _build_compile_script(req, bfiles):
         remote='{req.pyperformance.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C {bfiles.pyperformance_repo} remote add {req.pyperformance.remote} {req.pyperformance.url}
+            2>/dev/null git -C {pyperformance_repo} remote add {req.pyperformance.remote} {req.pyperformance.url}
             )
         fi
         ( set -x
-        git -C {bfiles.pyperformance_repo} fetch --tags {req.pyperformance.remote}
-        git -C {bfiles.pyperformance_repo} checkout {req.pyperformance.fullref}
+        git -C {pyperformance_repo} fetch --tags {req.pyperformance.remote}
+        git -C {pyperformance_repo} checkout {req.pyperformance.fullref}
         )
 
         remote='{req.pyston_benchmarks.remote}'
         if [ "$remote" != 'origin' ]; then
             ( set -x
-            2>/dev/null git -C {bfiles.pyston_benchmarks_repo} remote add {req.pyston_benchmarks.remote} {req.pyston_benchmarks.url}
+            2>/dev/null git -C {pyston_benchmarks_repo} remote add {req.pyston_benchmarks.remote} {req.pyston_benchmarks.url}
             )
         fi
         ( set -x
-        git -C {bfiles.pyston_benchmarks_repo} fetch --tags {req.pyston_benchmarks.remote}
-        git -C {bfiles.pyston_benchmarks_repo} checkout {req.pyston_benchmarks.fullref}
+        git -C {pyston_benchmarks_repo} fetch --tags {req.pyston_benchmarks.remote}
+        git -C {pyston_benchmarks_repo} checkout {req.pyston_benchmarks.fullref}
         )
 
         #####################
@@ -2209,7 +2218,7 @@ def _build_compile_script(req, bfiles):
         else
             ( set -x
             MAKEFLAGS='-j{numjobs}' \\
-                {python} {bfiles.pyperformance_repo}/dev.py compile \\
+                {python} {pyperformance_repo}/dev.py compile \\
                 {bfiles.pyperformance_config} \\
                 {req.ref} {maybe_branch} \\
                 2>&1 | tee {bfiles.pyperformance_log}
@@ -2271,16 +2280,17 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
         port = cfg.send_port
     conn = f'{benchuser}@{host}'
 
+    queue_log = _quote_shell_str(pfiles.queue_log)
     #reqdir = _quote_shell_str(pfiles.current_request)
+    pfiles = pfiles.resolve_request(req.id)
     reqdir = _quote_shell_str(pfiles.reqdir)
     results_meta = _quote_shell_str(pfiles.results_meta)
     pidfile = _quote_shell_str(pfiles.pidfile)
     pyperformance_results = _quote_shell_str(pfiles.pyperformance_results)
     pyperformance_log = _quote_shell_str(pfiles.pyperformance_log)
-    queue_log = _quote_shell_str(pfiles.queue_log)
 
+    bfiles = bfiles.resolve_request(req.id)
     _check_shell_str(bfiles.reqdir)
-    _check_shell_str(bfiles.requests)
     _check_shell_str(bfiles.bench_script)
     _check_shell_str(bfiles.scratch_dir)
     _check_shell_str(bfiles.resdir)
@@ -2338,8 +2348,8 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
             ( set -x
 
             # Set up before running.
-            {ssh} -p {port} {conn} mkdir -p {bfiles.requests}
-            {scp} -rp -P {port} {reqdir} {conn}:{bfiles.reqdir}
+            {ssh} -p {port} {conn} mkdir -p {bfiles.reqdir}
+            {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.reqdir}
             {ssh} -p {port} {conn} mkdir -p {bfiles.scratch_dir}
             {ssh} -p {port} {conn} mkdir -p {bfiles.resdir}
 
@@ -2373,8 +2383,16 @@ def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
 ##################################
 # commands
 
+def show_file(filename):
+    print(f'(from {filename})')
+    print()
+    text = _read_file(filename)
+    for line in text.splitlines():
+        print(f'  {line}')
+
+
 def _ensure_next_job(cfg):
-    pfiles = PortalRequestFS(None, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
     if _get_staged_request(pfiles) is not None:
         # The running job will kick off the next one.
         # XXX Check the pidfile.
@@ -2393,11 +2411,11 @@ def cmd_list(cfg):
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
     total = 0
-    pfiles = PortalRequestFS(None, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
     requests = (RequestID.parse(n) for n in os.listdir(pfiles.requests))
     for reqid in sorted(r for r in requests if r):
-        pfiles = PortalRequestFS(reqid, cfg.data_dir)
-        status = Result.read_status(pfiles.results_meta)
+        reqpfiles = pfiles.resolve_request(reqid)
+        status = Result.read_status(reqpfiles.results_meta)
         total += 1
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
     print()
@@ -2408,13 +2426,13 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
     if not fmt:
         fmt = 'summary'
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
     if not reqid:
         reqid = _get_staged_request(pfiles)
         if not reqid:
             # XXX Use the last finished?
             raise NotImplementedError
-        pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
     reqfs_fields = [
         'bench_script',
         'portal_script',
@@ -2423,7 +2441,7 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
         'pidfile',
         'logfile',
     ]
-    kind = Request.read_kind(pfiles.request_meta)
+    kind = Request.read_kind(reqpfiles.request_meta)
     if kind is RequestID.KIND.BENCHMARKS:
         req_cls = BenchCompileRequest
         res_cls = BenchCompileResult
@@ -2437,9 +2455,9 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
         ])
     else:
         raise NotImplementedError(kind)
-    req = req_cls.load(pfiles.request_meta)
-    res = res_cls.load(pfiles.results_meta)
-    pid = PIDFile(pfiles.pidfile).read()
+    req = req_cls.load(reqpfiles.request_meta)
+    res = res_cls.load(reqpfiles.results_meta)
+    pid = PIDFile(reqpfiles.pidfile).read()
 
     if fmt == 'summary':
         print(f'Request {reqid}:')
@@ -2464,22 +2482,22 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
         print()
         print('Request files:')
         print(f'  {"data root:":20} {_render_file(req.reqdir)}')
-        print(f'  {"metadata:":20} {_render_file(pfiles.request_meta)}')
+        print(f'  {"metadata:":20} {_render_file(reqpfiles.request_meta)}')
         for field in reqfs_fields:
-            value = _render_file(getattr(pfiles, field, None))
+            value = _render_file(getattr(reqpfiles, field, None))
             print(f'  {field + ":":20} {value}')
         print()
         print('Result files:')
-        print(f'  {"data root:":20} {_render_file(pfiles.resdir)}')
-        print(f'  {"metadata:":20} {_render_file(pfiles.results_meta)}')
+        print(f'  {"data root:":20} {_render_file(reqpfiles.resdir)}')
+        print(f'  {"metadata:":20} {_render_file(reqpfiles.results_meta)}')
         for field in resfs_fields:
-            value = _render_file(getattr(pfiles, field, None))
+            value = _render_file(getattr(reqpfiles, field, None))
             print(f'  {field + ":":20} {value}')
     else:
         raise ValueError(f'unsupported fmt {fmt!r}')
 
     if lines:
-        tail_file(pfiles.logfile, lines, follow=False)
+        tail_file(reqpfiles.logfile, lines, follow=False)
 
 
 def cmd_request_compile_bench(cfg, reqid, revision, *,
@@ -2489,51 +2507,52 @@ def cmd_request_compile_bench(cfg, reqid, revision, *,
                               optimize=False,
                               debug=False,
                               ):
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    bfiles = BenchRequestFS.from_user(cfg.bench_user, reqid)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
+    bfiles = BenchJobsFS.from_user(cfg.bench_user)
 
-    print(f'generating request files in {pfiles.reqdir}...')
+    print(f'generating request files in {reqpfiles.reqdir}...')
 
     req = _resolve_bench_compile_request(
-        reqid, pfiles.reqdir, remote, revision, branch, benchmarks,
+        reqid, reqpfiles.reqdir, remote, revision, branch, benchmarks,
         optimize=optimize,
         debug=debug,
     )
     result = req.result
-    resfile = pfiles.results_meta
+    resfile = reqpfiles.results_meta
 
-    os.makedirs(pfiles.reqdir, exist_ok=True)
+    os.makedirs(reqpfiles.reqdir, exist_ok=True)
 
     # Write metadata.
-    req.save(pfiles.request_meta)
+    req.save(reqpfiles.request_meta)
     result.save(resfile)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, bfiles)
-    with open(pfiles.manifest, 'w') as outfile:
+    with open(reqpfiles.manifest, 'w') as outfile:
         outfile.write(manifest)
 
     # Write the config.
     ini = _build_pyperformance_config(req, pfiles, bfiles)
-    with open(pfiles.pyperformance_config, 'w') as outfile:
+    with open(reqpfiles.pyperformance_config, 'w') as outfile:
         ini.write(outfile)
 
     # Write the commands to execute remotely.
     script = _build_compile_script(req, bfiles)
-    with open(pfiles.bench_script, 'w') as outfile:
+    with open(reqpfiles.bench_script, 'w') as outfile:
         outfile.write(script)
-    os.chmod(pfiles.bench_script, 0o755)
+    os.chmod(reqpfiles.bench_script, 0o755)
 
     # Write the commands to execute locally.
     script = _build_send_script(cfg, req, pfiles, bfiles)
-    with open(pfiles.portal_script, 'w') as outfile:
+    with open(reqpfiles.portal_script, 'w') as outfile:
         outfile.write(script)
-    os.chmod(pfiles.portal_script, 0o755)
+    os.chmod(reqpfiles.portal_script, 0o755)
 
     print('...done (generating request files)')
     print()
-    for line in render_request(reqid, pfiles):
-        print(f'  {line}')
+    # XXX Show something better?
+    show_file(reqpfiles.request_meta)
 
 
 def cmd_copy(cfg, reqid=None):
@@ -2552,9 +2571,10 @@ def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
     if force:
         raise NotImplementedError
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
 
-    resfile = pfiles.results_meta
+    resfile = reqpfiles.results_meta
     result = BenchCompileResult.load(resfile)
 
     if _usequeue:
@@ -2584,24 +2604,25 @@ def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
 
     # Run the send.sh script in the background.
     subprocess.run(
-        '"{pfiles.portal_script}" > "{pfiles.logfile}" 2>&1 &',
+        '"{reqpfiles.portal_script}" > "{reqpfiles.logfile}" 2>&1 &',
         shell=True,
     )
 
 
 def cmd_attach(cfg, reqid=None, *, lines=None):
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
+
     if not reqid:
         reqid = _get_staged_request(pfiles)
         if not reqid:
             sys.exit('ERROR: no current request to attach')
-        pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
 
     # Wait for the request to start.
-    pidfile = PIDFile(pfiles.pidfile)
+    pidfile = PIDFile(reqpfiles.pidfile)
     pid = pidfile.read()
     while pid is None:
-        status = Result.read_status(pfiles.results_meta)
+        status = Result.read_status(reqpfiles.results_meta)
         if status is Result.FINISHED:
             # XXX Use a logger.
             print(f'WARNING: job not started')
@@ -2611,21 +2632,21 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
 
     # XXX Cancel the job for KeyboardInterrupt?
     if pid:
-        tail_file(pfiles.logfile, lines, follow=pid)
+        tail_file(reqpfiles.logfile, lines, follow=pid)
     elif lines:
-        tail_file(pfiles.logfile, lines, follow=False)
+        tail_file(reqpfiles.logfile, lines, follow=False)
 
 
 def cmd_cancel(cfg, reqid=None, *, _status=None):
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
     current = _get_staged_request(pfiles)
     if not reqid:
         if not current:
             sys.exit('ERROR: no current request to cancel')
         reqid = current
-        pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
     # XXX Use the right result type.
-    resfile = pfiles.results_meta
+    resfile = reqpfiles.results_meta
     result = BenchCompileResult.load(resfile)
     status = result.status
 
@@ -2646,7 +2667,7 @@ def cmd_cancel(cfg, reqid=None, *, _status=None):
         print('# done unstaging request')
 
         # Kill the process.
-        pid = PIDFile(pfiles.pidfile).read()
+        pid = PIDFile(reqpfiles.pidfile).read()
         if pid:
             print(f'# killing PID {pid}')
             os.kill(pid, signal.SIGKILL)
@@ -2655,12 +2676,13 @@ def cmd_cancel(cfg, reqid=None, *, _status=None):
 
     print()
     print('Results:')
-    for line in render_results(reqid, pfiles):
-        print(line)
+    # XXX Show something better?
+    show_file(reqpfiles.results_meta)
 
 
 def cmd_finish_run(cfg, reqid):
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    reqpfiles = pfiles.resolve_request(reqid)
 
     print(f'# unstaging request {reqid}')
     try:
@@ -2669,7 +2691,7 @@ def cmd_finish_run(cfg, reqid):
         pass
     print('# done unstaging request')
 
-    resfile = pfiles.results_meta
+    resfile = reqpfiles.results_meta
     # XXX Use the correct type for the request.
     result = BenchCompileResult.load(resfile)
 
@@ -2678,11 +2700,13 @@ def cmd_finish_run(cfg, reqid):
 
     print()
     print('Results:')
-    for line in render_results(reqid, pfiles):
-        print(line)
+    # XXX Show something better?
+    show_file(reqpfiles.results_meta)
 
 
 def cmd_run_next(cfg):
+    pfiles = PortalJobsFS(cfg.data_dir)
+
     logentry = LogSection.from_title('Running next queued job')
     print()
     for line in logentry.render():
@@ -2700,9 +2724,9 @@ def cmd_run_next(cfg):
 
     try:
         try:
-            pfiles = PortalRequestFS(reqid, cfg.data_dir)
+            reqpfiles = pfiles.resolve_request(reqid)
 
-            resfile = pfiles.results_meta
+            resfile = reqpfiles.results_meta
             result = BenchCompileResult.load(resfile)
             status = result.status
         except Exception:
@@ -2745,7 +2769,6 @@ def cmd_run_next(cfg):
 
 
 def cmd_queue_info(cfg, *, withlog=True):
-    pfiles = PortalRequestFS(None, cfg.data_dir)
     queue = JobQueue(cfg).snapshot
 
     jobs = queue.jobs
@@ -2831,8 +2854,10 @@ def cmd_queue_push(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Adding job {reqid} to the queue')
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    status = Result.read_status(pfiles.results_meta)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    resfile = pfiles.resolve_request(reqid).results_meta
+
+    status = Result.read_status(resfile)
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
     elif status is not Result.STATUS.CREATED:
@@ -2852,7 +2877,6 @@ def cmd_queue_push(cfg, reqid):
         else:
             raise NotImplementedError
 
-    resfile = pfiles.results_meta
     result = BenchCompileResult.load(resfile)
     result.set_status(result.STATUS.PENDING)
     result.save(resfile)
@@ -2871,15 +2895,15 @@ def cmd_queue_pop(cfg):
     except JobQueueEmptyError:
         sys.exit('ERROR: job queue is empty')
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    status = Result.read_status(pfiles.results_meta)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    resfile = pfiles.resolve_request(reqid).results_meta
+    status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: queued request ({reqid}) not found')
     elif status is not Result.STATUS.PENDING:
         print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
         # XXX Give the option to force the status to "active"?
     else:
-        resfile = pfiles.results_meta
         result = BenchCompileResult.load(resfile)
         # XXX Is "active" the right status?
         result.set_status(result.STATUS.ACTIVE)
@@ -2905,8 +2929,9 @@ def cmd_queue_move(cfg, reqid, position, relative=None):
     if queue.paused:
         print('WARNING: job queue is paused')
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    status = Result.read_status(pfiles.results_meta)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    resfile = pfiles.resolve_request(reqid).results_meta
+    status = Result.read_status(resfile)
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
     elif status is not Result.STATUS.PENDING:
@@ -2924,8 +2949,9 @@ def cmd_queue_remove(cfg, reqid):
     if queue.paused:
         print('WARNING: job queue is paused')
 
-    pfiles = PortalRequestFS(reqid, cfg.data_dir)
-    status = Result.read_status(pfiles.results_meta)
+    pfiles = PortalJobsFS(cfg.data_dir)
+    resfile = pfiles.resolve_request(reqid).results_meta
+    status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: request {reqid} not found')
     elif status is not Result.STATUS.PENDING:
@@ -2937,7 +2963,6 @@ def cmd_queue_remove(cfg, reqid):
         print(f'WARNING: {reqid} was not queued')
 
     if status is Result.STATUS.PENDING:
-        resfile = pfiles.results_meta
         result = BenchCompileResult.load(resfile)
         result.set_status(result.STATUS.CREATED)
         result.save(resfile)
