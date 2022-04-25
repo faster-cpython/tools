@@ -1270,6 +1270,34 @@ class JobsFS(FSTree):
 ##################################
 # jobs
 
+class JobsError(RuntimeError):
+    MSG = 'a jobs-related problem'
+
+    def __init__(self, msg=None):
+        super().__init__(msg or self.MSG)
+
+
+class NoRunningJobError(JobsError):
+    MSG = 'no job is currently running'
+
+
+class JobError(JobsError):
+    MSG = 'job {reqid} has a problem'
+
+    def __init__(self, reqid, msg=None):
+        msg = (msg or self.MSG).format(reqid=str(reqid))
+        super().__init__(msg)
+        self.reqid = reqid
+
+
+class JobNotRunningError(JobError):
+    MSG = 'job {reqid} is not running'
+
+
+class JobNeverStartedError(JobNotRunningError):
+    MSG = 'job {reqid} was never started'
+
+
 class Job:
 
     def __init__(self, reqid, fs, bench_fs):
@@ -1286,6 +1314,7 @@ class Job:
         self._reqid = RequestID.from_raw(reqid)
         self._fs = fs
         self._bench_fs = bench_fs
+        self._pidfile = PIDFile(fs.pidfile)
 
     def __repr__(self):
         args = (f'{n}={str(getattr(self, "_"+n))!r}'
@@ -1337,6 +1366,40 @@ class Job:
         else:
             proc = subprocess.run([self.fs.portal_script])
             return proc.returncode
+
+    def get_pid(self):
+        return self._pidfile.read()
+
+    def kill(self):
+        pid = self.get_pid()
+        if pid:
+            # XXX Use a logger.
+            print(f'# killing PID {pid}')
+            os.kill(pid, signal.SIGKILL)
+
+    def attach(self, lines=None):
+        # Wait for the request to start.
+        pid = self.get_pid()
+        while pid is None:
+            status = self.get_status()
+            if status in Result.FINISHED:
+                raise JobNeverStartedError(reqid)
+            time.sleep(0.01)
+            pid = self.get_pid()
+
+        # XXX Cancel the job for KeyboardInterrupt?
+        if pid:
+            tail_file(self.fs.logfile, lines, follow=pid)
+        elif lines:
+            tail_file(self.fs.logfile, lines, follow=False)
+
+    def cancel(self, *, ifstatus=None):
+        if ifstatus is not None:
+            if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
+                return
+        self.set_status('canceled')
+        # XXX Try to download the results directly?
+        self.kill()
 
     def close(self):
         result = self.load_result()
@@ -1433,6 +1496,37 @@ class Jobs:
         cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
         subprocess.run(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &', shell=True)
         #cmd_run_next(common)
+
+    def cancel_current(self, reqid=None, *, ifstatus=None):
+        if not reqid:
+            job = self.get_current()
+            if job is None:
+                raise NoRunningJobError()
+        else:
+            job = self._get(reqid)
+        job.cancel(ifstatus=_status)
+
+        # XXX Use a logger.
+        print(f'# unstaging request {reqid}')
+        try:
+            unstage_request(job.reqid, self._fs)
+        except RequestNotStagedError:
+            pass
+        print('# done unstaging request')
+        return job
+
+    def finish_successful(self, reqid):
+        # XXX Use a logger.
+        print(f'# unstaging request {reqid}')
+        try:
+            unstage_request(reqid, self._fs)
+        except RequestNotStagedError:
+            pass
+        print('# done unstaging request')
+
+        job = self._get(reqid)
+        job.close()
+        return job
 
 
 ##################################
@@ -1545,20 +1639,15 @@ class JobQueueEmptyError(JobQueueError):
     MSG = 'job queue is empty'
 
 
-class JobError(JobQueueError):
+class QueuedJobError(JobError, JobQueueError):
     MSG = 'some problem with job {reqid}'
 
-    def __init__(self, reqid, msg=None):
-        msg = (msg or self.MSG).format(reqid=str(reqid))
-        super().__init__(msg)
-        self.reqid = reqid
 
-
-class JobNotQueuedError(JobError):
+class JobNotQueuedError(QueuedJobError):
     MSG = 'job {reqid} is not in the queue'
 
 
-class JobAlreadyQueuedError(JobError):
+class JobAlreadyQueuedError(QueuedJobError):
     MSG = 'job {reqid} is already in the queue'
 
 
@@ -2790,59 +2879,33 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
     if not reqid:
-        reqid = _get_staged_request(jobs.fs)
-        if not reqid:
+        job = jobs.get_current()
+        if not job:
             sys.exit('ERROR: no current request to attach')
-    job = jobs.get(reqid)
-
-    # Wait for the request to start.
-    pidfile = PIDFile(job.fs.pidfile)
-    pid = pidfile.read()
-    while pid is None:
-        status = job.get_status()
-        if status is Result.FINISHED:
-            # XXX Use a logger.
-            print(f'WARNING: job not started')
-            return
-        time.sleep(0.01)
-        pid = pidfile.read()
-
-    # XXX Cancel the job for KeyboardInterrupt?
-    if pid:
-        tail_file(job.fs.logfile, lines, follow=pid)
-    elif lines:
-        tail_file(job.fs.logfile, lines, follow=False)
+    else:
+        job = jobs.get(reqid)
+    try:
+        job.attach(lines)
+    except JobNeverStartedError:
+        print(f'WARNING: job not started')
 
 
 def cmd_cancel(jobs, reqid=None, *, _status=None):
-    current = jobs.get_current()
     if not reqid:
-        if not current:
-            sys.exit('ERROR: no current request to cancel')
-        job = current
-    else:
-        job = jobs.get(reqid)
-
-    if _status is not None:
-        if job.get_status() not in (Result.STATUS.CREATED, _status):
-            return
-    job.set_status('canceled')
-
-    if reqid == current:
-        print(f'# unstaging request {reqid}')
         try:
-            unstage_request(reqid, jobs.fs)
-        except RequestNotStagedError:
-            pass
-        print('# done unstaging request')
-
-        # Kill the process.
-        pid = PIDFile(job.fs.pidfile).read()
-        if pid:
-            print(f'# killing PID {pid}')
-            os.kill(pid, signal.SIGKILL)
-
-    # XXX Try to download the results directly?
+            job = jobs.cancel_current(ifstatus=_status)
+        except NoRunningJobError:
+            sys.exit('ERROR: no current request to cancel')
+    else:
+        current = jobs.get_current()
+        if current and reqid == current.reqid:
+            try:
+                job = jobs.cancel_current(current, ifstatus=_status)
+            except NoRunningJobError:
+                print('WARNING: job just finished')
+        else:
+            job = jobs.get(reqid)
+            job.cancel(ifstatus=_status)
 
     print()
     print('Results:')
@@ -2851,16 +2914,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
 
 
 def cmd_finish_run(jobs, reqid):
-    job = jobs.get(reqid)
-
-    print(f'# unstaging request {reqid}')
-    try:
-        unstage_request(reqid, jobs.fs)
-    except RequestNotStagedError:
-        pass
-    print('# done unstaging request')
-
-    job.close()
+    job = jobs.finish_successful(reqid)
 
     print()
     print('Results:')
@@ -3051,8 +3105,8 @@ def cmd_queue_pop(jobs):
         print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
         # XXX Give the option to force the status to "active"?
     else:
-        # XXX Is "active" the right status?
-        job.set_status('active')
+        # XXX Set the status to "active"?
+        pass
 
     print(reqid)
 
