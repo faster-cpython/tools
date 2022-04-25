@@ -2070,6 +2070,25 @@ class Result(Metadata):
 ##################################
 # "compile"
 
+#class CompileBenchFS(JobFS):
+#
+#    def __init__(self, jobsfs, reqid):
+#        super().__init__(jobfs, reqid)
+#        #self.pyperformance_config = f'{self.reqdir}/compile.ini'
+#        self.pyperformance_config = f'{self.reqdir}/pyperformance.ini'
+#        #self.pyperformance_log = f'{self.resdir}/run.log'
+#        self.pyperformance_log = f'{self.resdir}/pyperformance.log'
+#        #self.pyperformance_results = f'{self.reqdir}/results-data.json.gz'
+#        self.pyperformance_results = f'{self.reqdir}/pyperformance-results.json.gz'
+#
+#        if self.kind == 'bench':
+#            # other directories needed by the job
+#            self.venv = f'{self.reqdir}/pyperformance-venv'
+#            self.scratch_dir = f'{self.reqdir}/pyperformance-scratch'
+#            # the results
+#            self.pyperformance_results_glob = f'{self.resdir}/*.json.gz'
+
+
 class BenchCompileRequest(Request):
 
     FIELDS = Request.FIELDS + [
