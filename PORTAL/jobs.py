@@ -1408,7 +1408,7 @@ class Jobs:
         os.makedirs(job.fs.result.root, exist_ok=True)
         return job
 
-    def activate(self, reqid)
+    def activate(self, reqid):
         stage_request(reqid, self.fs)
         job = self._get(reqid)
         job.set_active()
