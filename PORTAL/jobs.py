@@ -1327,6 +1327,17 @@ class Job:
         result.set_status(Result.STATUS.ACTIVE)
         result.save(self._fs.result.metadata, withextra=True)
 
+    def run(self, *, background=False):
+        if background:
+            subprocess.run(
+                '"{self.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &',
+                shell=True,
+            )
+            return 0
+        else:
+            proc = subprocess.run([self.fs.portal_script])
+            return proc.returncode
+
     def close(self):
         result = self.load_result()
         result.close()
@@ -2761,11 +2772,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         job.set_status('failed')
         raise  # re-raise
 
-    # Run the send.sh script in the background.
-    subprocess.run(
-        '"{job.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &',
-        shell=True,
-    )
+    job.run(background=True)
 
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
