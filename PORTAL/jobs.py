@@ -112,6 +112,17 @@ def _render_file(filename):
 
 class FSTree(types.SimpleNamespace):
 
+    @classmethod
+    def from_raw(cls, raw, *, name=None):
+        if isinstance(raw, cls):
+            return raw
+        elif not raw:
+            raise ValueError('missing {name or "raw"}')
+        elif isinstance(raw, str):
+            return cls(raw)
+        else:
+            raise TypeError(f'expected FSTree, got {raw!r}')
+
     def __init__(self, root):
         if not root or root == '.':
             root = CWD
@@ -1110,35 +1121,51 @@ class PortalConfig(Config):
 class JobFS(types.SimpleNamespace):
     """The file structure of a job's data."""
 
-    def __init__(self, jobsfs, reqid):
-        if not jobsfs:
-            raise ValueError('missing jobsfs')
-        elif isinstance(jobsfs, str):
-            jobsfs = JobsFS(jobsfs, 'portal')
-        elif isinstance(jobsfs, JobsFS):
-            jobsfs = jobsfs.copy()
+    @classmethod
+    def from_jobsfs(cls, jobsfs, reqid):
+        self = cls(
+            f'{jobsfs.requests}/{reqid}',
+            f'{jobsfs.requests}/{reqid}',
+            f'{jobsfs.work}/{reqid}',
+            reqid,
+            jobsfs.context,
+        )
+        return self
+
+    def __init__(self, request, work, result, reqid=None, context='portal'):
+        request = FSTree.from_raw(request, name='request')
+        work = FSTree.from_raw(work, name='work')
+        result = FSTree.from_raw(result, name='result')
+        if not reqid:
+            reqid = os.path.basename(request)
+            reqid = RequestID.from_raw(reqid)
+            if not reqid:
+                raise ValueError('missing reqid')
         else:
-            raise TypeError(f'expected JobsFS, got {jobsfs!r}')
-        reqid = RequestID.from_raw(reqid)
+            orig = reqid
+            reqid = RequestID.from_raw(reqid)
+            if not reqid:
+                raise ValueError(f'unsupported reqid {orig!r}')
+        if not context:
+            context = 'portal'
+        elif context not in ('portal', 'bench'):
+            raise ValueError(f'unsupported context {context!r}')
 
         # the request
-        request = FSTree(f'{jobsfs.requests}/{reqid}')
         request.metadata = f'{request}/request.json'
         request.manifest = f'{request}/benchmarks.manifest'
         # the job
-        work = FSTree(f'{jobsfs.work}/{reqid}')
         work.bench_script = f'{work}/run.sh'
-        if jobsfs.context == 'portal':
+        if context == 'portal':
             work.portal_script = f'{work}/send.sh'
             work.pidfile = f'{work}/send.pid'
             work.logfile = f'{work}/job.log'
         # the results
-        result = FSTree(f'{jobsfs.results}/{reqid}')
         result.metadata = f'{result}/results.json'
 
         super().__init__(
-            jobsfs=jobsfs,
             reqid=reqid,
+            context=context,
             request=request,
             work=work,
             result=result,
@@ -1159,11 +1186,7 @@ class JobFS(types.SimpleNamespace):
             self.pyperformance_results_glob = f'{result}/*.json.gz'
 
     def __str__(self):
-        return self.request
-
-    @property
-    def context(self):
-        return self.jobsfs.context
+        return str(self.request)
 
     @property
     def bench_script(self):
@@ -1182,7 +1205,13 @@ class JobFS(types.SimpleNamespace):
         return self.work.logfile
 
     def copy(self):
-        return type(self)(self.jobsfs, self.reqid)
+        return type(self)(
+            str(self.request),
+            str(self.work),
+            str(self.result),
+            self.reqid,
+            self.context,
+        )
 
 
 class JobsFS(FSTree):
@@ -1230,7 +1259,7 @@ class JobsFS(FSTree):
         return self.root
 
     def resolve_request(self, reqid):
-        return self.JOBFS(self, reqid)
+        return self.JOBFS.from_jobsfs(self, reqid)
 
     def copy(self):
         return type(self)(self.root, self.context)
@@ -1238,6 +1267,64 @@ class JobsFS(FSTree):
 
 ##################################
 # jobs
+
+class Job:
+
+    def __init__(self, reqid, fs, bench_fs):
+        if not reqid:
+            raise ValueError('missing reqid')
+        if not fs:
+            raise ValueError('missing fs')
+        elif not isinstance(fs, JobFS):
+            raise TypeError(f'expected JobFS for fs, got {fs!r}')
+        if not bench_fs:
+            raise ValueError('missing bench_fs')
+        elif not isinstance(bench_fs, JobFS):
+            raise TypeError(f'expected JobFS for bench_fs, got {bench_fs!r}')
+        self._reqid = RequestID.from_raw(reqid)
+        self._fs = fs
+        self._bench_fs = bench_fs
+
+    def __repr__(self):
+        args = (f'{n}={str(getattr(self, "_"+n))!r}'
+                for n in 'reqid fs bench_fs'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def __str__(self):
+        return str(self._reqid)
+
+    @property
+    def reqid(self):
+        return self._reqid
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def bench_fs(self):
+        return self._bench_fs
+
+    @property
+    def kind(self):
+        return self.reqid.kind
+
+    @property
+    def request(self):
+        return Request(self._reqid, str(self.fs))
+
+    def get_status(self):
+        return Result.read_status(self._fs.result.metadata)
+
+    def load_result(self):
+        return Result.load(self._fs.result.metadata)
+
+#    def fail(self, result):
+#        result.set_status(result.STATUS.FAILED)
+#        result.save(resfile)
+#        result.close()
+#        result.save(resfile)
+
 
 class Jobs:
 
@@ -1272,6 +1359,17 @@ class Jobs:
         except AttributeError:
             self._queue = JobQueue.from_fstree(self.fs)
             return self._queue
+
+    def iter_all(self):
+        for name in os.listdir(str(self._fs.requests)):
+            reqid = RequestID.parse(name)
+            if not reqid:
+                continue
+            yield Job(
+                reqid,
+                self._fs.resolve_request(reqid),
+                self._bench_fs.resolve_request(reqid),
+            )
 
     def ensure_next(self):
         # Return (queued ID, already running ID)
@@ -2443,9 +2541,11 @@ def cmd_list(jobs):
     print(f'{"-"*48} {"-"*10} {"-"*19}')
     total = 0
     requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
-    for reqid in sorted(r for r in requests if r):
-        jobfs = jobs.fs.resolve_request(reqid)
-        status = Result.read_status(jobfs.result.metadata)
+    for job in sorted(jobs.iter_all(), key=(lambda j: j.reqid)):
+        #for line in job.render(fmt='row'):
+        #    print(line)
+        reqid = job.reqid
+        status = job.get_status()
         total += 1
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
     print()
