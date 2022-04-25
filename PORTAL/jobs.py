@@ -1273,6 +1273,26 @@ class Jobs:
             self._queue = JobQueue.from_fstree(self.fs)
             return self._queue
 
+    def ensure_next(self):
+        # Return (queued ID, already running ID)
+        reqid = _get_staged_request(self._fs)
+        if reqid is not None:
+            # The running job will kick off the next one.
+            # XXX Check the pidfile.
+            return
+        queue = self.queue.snapshot
+        if queue.paused:
+            return
+        if not queue:
+            return
+        # Run in the background.
+        cfgfile = self._cfg.filename
+        if not cfgfile:
+            raise NotImplementedError
+        cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
+        subprocess.run(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &', shell=True)
+        #cmd_run_next(common)
+
 
 ##################################
 # the current job
@@ -2418,24 +2438,6 @@ def show_file(filename):
         print(f'  {line}')
 
 
-def _ensure_next_job(jobs):
-    if _get_staged_request(jobs.fs) is not None:
-        # The running job will kick off the next one.
-        # XXX Check the pidfile.
-        return
-    queue = jobs.queue.snapshot
-    if queue.paused:
-        return
-    if not queue:
-        return
-    # Run in the background.
-    cfgfile = jobs.cfg.filename
-    if not cfgfile:
-        raise NotImplementedError
-    cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
-    subprocess.run(f'{cmd} >> "{jobs.fs.queue.log}" 2>&1 &', shell=True)
-
-
 def cmd_list(jobs):
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
@@ -2844,7 +2846,7 @@ def cmd_queue_unpause(jobs):
     except JobQueueNotPausedError:
         print('WARNING: job queue was not paused')
     else:
-        _ensure_next_job(jobs)
+        jobs.ensure_next()
 
 
 def cmd_queue_list(jobs):
@@ -3228,7 +3230,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     if cmd != 'queue-info' and not cmd.startswith('internal-'):
         # In some cases the mechanism to run jobs from the queue may
         # get interrupted, so we re-start it manually here if necessary.
-        _ensure_next_job(jobs)
+        jobs.ensure_next()
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
