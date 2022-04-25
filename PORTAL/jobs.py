@@ -1398,6 +1398,12 @@ class Jobs:
             self._bench_fs.resolve_request(reqid),
         )
 
+    def activate(self, reqid)
+        stage_request(reqid, self.fs)
+        job = self.get(reqid)
+        job.set_active()
+        return job
+
     def ensure_next(self):
         # XXX Return (queued job, already running job).
         job = self.get_current()
@@ -2751,7 +2757,6 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
 
     if not reqid:
         raise NotImplementedError
-    job = jobs.get(reqid)
 
     if _usequeue:
         if not jobs.queue.paused:
@@ -2761,18 +2766,18 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     # Try staging it directly.
     print('# staging request')
     try:
-        stage_request(reqid, jobs.fs)
-        job.set_active()
+        job = jobs.activate(reqid)
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
     except Exception:
         print('ERROR: Could not stage request')
         print()
+        job = jobs.get(reqid)
         job.set_status('failed')
         raise  # re-raise
-
-    job.run(background=True)
+    else:
+        job.run(background=True)
 
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
