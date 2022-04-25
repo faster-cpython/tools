@@ -1390,13 +1390,32 @@ class JobQueue:
 
     # XXX Add maxsize.
 
-    def __init__(self, cfg, jobsfs=None):
-        self.cfg = cfg
-        if jobsfs is None:
-            jobsfs = JobsFS(self.cfg.data_dir)
-        self._filename = jobsfs.queue.data
-        self._lock = LockFile(jobsfs.queue.lock)
-        self._logfile = jobsfs.queue.log
+    @classmethod
+    def from_config(cls, cfg):
+        fs = JobsFS(self.cfg.data_dir)
+        return cls.from_jobsfs(fs)
+
+    @classmethod
+    def from_fstree(cls, fs):
+        if isinstance(fs, str):
+            fs = JobsFS(fs)
+        elif not isinstance(fs, JobsFS):
+            raise TypeError(f'expected JobsFS, got {fs!r}')
+        self = cls(
+            datafile=fs.queue.data,
+            lockfile=fs.queue.lock,
+            logfile=fs.queue.log,
+        )
+        return self
+
+    def __init__(self, datafile, lockfile, logfile):
+        _validate_string(datafile, 'datafile')
+        _validate_string(lockfile, 'lockfile')
+        _validate_string(logfile, 'logfile')
+
+        self._datafile = datafile
+        self._lock = LockFile(lockfile)
+        self._logfile = logfile
         self._data = None
 
     def __iter__(self):
@@ -1415,7 +1434,7 @@ class JobQueue:
         return data.jobs[idx]
 
     def _load(self):
-        text = _read_file(self._filename, fail=False)
+        text = _read_file(self._datafile, fail=False)
         data = (json.loads(text) if text else None) or {}
         # Normalize.
         fixed = False
@@ -1432,12 +1451,12 @@ class JobQueue:
             jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
                 # XXX Use a logger.
-                print(f'WARNING: job queue at {self._filename} has bad entries')
+                print(f'WARNING: job queue at {self._datafile} has bad entries')
                 fixed = True
             data['jobs'] = [r for r in jobs if r]
         # Save and return the data.
         if fixed:
-            with open(self._filename, 'w') as outfile:
+            with open(self._datafile, 'w') as outfile:
                 json.dump(data, outfile, indent=4)
         data = self._data = JobQueueData(**data)
         return data
@@ -1461,7 +1480,7 @@ class JobQueue:
         elif any(not isinstance(v, RequestID) for v in data['jobs']):
             raise NotImplementedError
         # Write to the queue file.
-        with open(self._filename, 'w') as outfile:
+        with open(self._datafile, 'w') as outfile:
             json.dump(data, outfile, indent=4)
             print(file=outfile)
 
@@ -1477,7 +1496,7 @@ class JobQueue:
         else:
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
-            datafile=self._filename,
+            datafile=self._datafile,
             lockfile=self._lock.filename,
             logfile=self._logfile,
             locked=locked,
@@ -2351,7 +2370,7 @@ def _ensure_next_job(cfg):
         # The running job will kick off the next one.
         # XXX Check the pidfile.
         return
-    queue = JobQueue(cfg).snapshot
+    queue = JobQueue.from_fstree(pfiles).snapshot
     if queue.paused:
         return
     if not queue:
@@ -2532,7 +2551,7 @@ def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
     result = BenchCompileResult.load(resfile)
 
     if _usequeue:
-        queue = JobQueue(cfg)
+        queue = JobQueue.from_fstree(pfiles)
         if not queue.paused:
             cmd_queue_push(cfg, reqid)
             return
@@ -2667,7 +2686,7 @@ def cmd_run_next(cfg):
         print(line)
     print()
 
-    queue = JobQueue(cfg)
+    queue = JobQueue.from_fstree(pfiles)
     try:
         reqid = queue.pop()
     except JobQueuePausedError:
@@ -2723,7 +2742,7 @@ def cmd_run_next(cfg):
 
 
 def cmd_queue_info(cfg, *, withlog=True):
-    queue = JobQueue(cfg).snapshot
+    queue = JobQueue.from_config(cfg).snapshot
 
     jobs = queue.jobs
     paused = queue.paused
@@ -2771,7 +2790,7 @@ def cmd_queue_info(cfg, *, withlog=True):
 
 
 def cmd_queue_pause(cfg):
-    queue = JobQueue(cfg)
+    queue = JobQueue.from_config(cfg)
     try:
        queue.pause()
     except JobQueuePausedError:
@@ -2779,7 +2798,7 @@ def cmd_queue_pause(cfg):
 
 
 def cmd_queue_unpause(cfg):
-    queue = JobQueue(cfg)
+    queue = JobQueue.from_config(cfg)
     try:
        queue.unpause()
     except JobQueueNotPausedError:
@@ -2789,7 +2808,7 @@ def cmd_queue_unpause(cfg):
 
 
 def cmd_queue_list(cfg):
-    queue = JobQueue(cfg)
+    queue = JobQueue.from_config(cfg)
     if queue.paused:
         print('WARNING: job queue is paused')
 
@@ -2817,7 +2836,7 @@ def cmd_queue_push(cfg, reqid):
     elif status is not Result.STATUS.CREATED:
         sys.exit(f'ERROR: request {reqid} has already been used')
 
-    queue = JobQueue(cfg)
+    queue = JobQueue.from_fstree(pfiles)
     if queue.paused:
         print('WARNING: job queue is paused')
 
@@ -2841,7 +2860,8 @@ def cmd_queue_push(cfg, reqid):
 def cmd_queue_pop(cfg):
     print(f'Popping the next job from the queue...')
 
-    queue = JobQueue(cfg)
+    pfiles = JobsFS(cfg.data_dir)
+    queue = JobQueue.from_fstree(pfiles)
     try:
         reqid = queue.pop()
     except JobQueuePausedError:
@@ -2849,7 +2869,6 @@ def cmd_queue_pop(cfg):
     except JobQueueEmptyError:
         sys.exit('ERROR: job queue is empty')
 
-    pfiles = JobsFS(cfg.data_dir)
     resfile = pfiles.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
@@ -2879,11 +2898,11 @@ def cmd_queue_move(cfg, reqid, position, relative=None):
     else:
         print(f'Moving job {reqid} to position {position} in the queue...')
 
-    queue = JobQueue(cfg)
+    pfiles = JobsFS(cfg.data_dir)
+    queue = JobQueue.from_fstree(pfiles)
     if queue.paused:
         print('WARNING: job queue is paused')
 
-    pfiles = JobsFS(cfg.data_dir)
     resfile = pfiles.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
@@ -2899,11 +2918,11 @@ def cmd_queue_remove(cfg, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Removing job {reqid} from the queue...')
 
-    queue = JobQueue(cfg)
+    pfiles = JobsFS(cfg.data_dir)
+    queue = JobQueue.from_fstree(pfiles)
     if queue.paused:
         print('WARNING: job queue is paused')
 
-    pfiles = JobsFS(cfg.data_dir)
     resfile = pfiles.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
