@@ -37,7 +37,40 @@ JOBS_SCRIPT = os.path.abspath(__file__)
 
 
 ##################################
+# string utils
+
+def _check_name(name, *, loose=False):
+    if not name:
+        raise ValueError(name)
+    orig = name
+    if loose:
+        name = '_' + name.replace('-', '_')
+    if not name.isidentifier():
+        raise ValueError(orig)
+
+
+def _validate_string(name, value, argname=None, *, required=True):
+    if not value and required:
+        raise ValueError(f'missing {argname or "required value"}')
+    if not isinstance(value, str):
+        label = f' for {argname}' if argname else ''
+        raise TypeError(f'expected str{label}, got {value!r}')
+
+
+##################################
 # file utils
+
+def _check_shell_str(value, *, required=True, allowspaces=False):
+    _validate_string(value, required=required)
+    if not allowspaces and ' ' in value:
+        raise ValueError(f'unexpected space in {value!r}')
+    return value
+
+
+def _quote_shell_str(value, *, required=True):
+    _check_shell_str(value, required=required, allowspaces=True)
+    return shlex.quote(value)
+
 
 def _read_file(filename, *, fail=True):
     try:
@@ -759,16 +792,6 @@ def _resolve_user(cfg, user=None):
     if not user.isidentifier():
         raise ValueError(f'invalid user {user!r}')
     return user
-
-
-def _check_name(name, *, loose=False):
-    if not name:
-        raise ValueError(name)
-    orig = name
-    if loose:
-        name = '_' + name.replace('-', '_')
-    if not name.isidentifier():
-        raise ValueError(orig)
 
 
 class Version(namedtuple('Version', 'major minor micro level serial')):
@@ -2011,21 +2034,6 @@ def _build_pyperformance_config(req, bfiles):
     cfg['run_benchmark']['upload'] = 'False'
 
     return cfg
-
-
-def _check_shell_str(value, *, required=True, allowspaces=False):
-    if not value and required:
-        raise ValueError(f'missing required value')
-    if not isinstance(value, str):
-        raise TypeError(f'expected str, got {value!r}')
-    if not allowspaces and ' ' in value:
-        raise ValueError(f'unexpected space in {value!r}')
-    return value
-
-
-def _quote_shell_str(value, *, required=True):
-    _check_shell_str(value, required=required, allowspaces=True)
-    return shlex.quote(value)
 
 
 def _build_compile_script(req, bfiles):
