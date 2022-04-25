@@ -1960,6 +1960,13 @@ class Result(Metadata):
     CLOSED = 'closed'
 
     @classmethod
+    def resolve_status(cls, status):
+        try:
+            return cls._STATUS_BY_VALUE[status]
+        except KeyError:
+            raise ValueError(f'unsupported status {status!r}')
+
+    @classmethod
     def read_status(cls, metafile):
        text = _read_file(metafile, fail=False)
        if not text:
@@ -1980,10 +1987,7 @@ class Result(Metadata):
         if status == self.STATUS.CREATED:
             status = None
         elif status:
-            try:
-                status = self._STATUS_BY_VALUE[status]
-            except KeyError:
-                raise ValueError(f'unsupported status {status!r}')
+            status = self.resolve_status(status)
         else:
             status = None
 
@@ -2046,10 +2050,7 @@ class Result(Metadata):
     def set_status(self, status):
         if not status:
             raise ValueError('missing status')
-        try:
-            status = self._STATUS_BY_VALUE[status]
-        except KeyError:
-            raise ValueError(f'unsupported status {status!r}')
+        status = self.resolve_status(status)
         if self.history[-1][0] is self.CLOSED:
             raise Exception(f'req {self.reqid} is already closed')
         # XXX Make sure it is the next possible status?
