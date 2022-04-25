@@ -1365,16 +1365,25 @@ class Jobs:
             reqid = RequestID.parse(name)
             if not reqid:
                 continue
-            yield Job(
-                reqid,
-                self._fs.resolve_request(reqid),
-                self._bench_fs.resolve_request(reqid),
-            )
+            yield self.get(reqid)
+
+    def get_current(self):
+        reqid = _get_staged_request(self._fs)
+        if not reqid:
+            return None
+        return self.get(reqid)
+
+    def get(self, reqid):
+        return Job(
+            reqid,
+            self._fs.resolve_request(reqid),
+            self._bench_fs.resolve_request(reqid),
+        )
 
     def ensure_next(self):
-        # Return (queued ID, already running ID)
-        reqid = _get_staged_request(self._fs)
-        if reqid is not None:
+        # XXX Return (queued job, already running job).
+        job = self.get_current()
+        if job is not None:
             # The running job will kick off the next one.
             # XXX Check the pidfile.
             return
@@ -2178,7 +2187,7 @@ class BenchCompileResult(Result):
         return data
 
 
-def _resolve_bench_compile_request(reqid, reqdir, remote, revision, branch,
+def _resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
                                    benchmarks,
                                    *,
                                    optimize,
@@ -2195,7 +2204,7 @@ def _resolve_bench_compile_request(reqid, reqdir, remote, revision, branch,
 
     meta = BenchCompileRequest(
         id=reqid,
-        datadir=reqdir,
+        datadir=workdir,
         # XXX Add a "commit" field and use "tag or branch" for ref.
         ref=commit,
         remote=remote,
@@ -2575,11 +2584,13 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
     if not fmt:
         fmt = 'summary'
 
-    if not reqid:
-        reqid = _get_staged_request(jobs.fs)
-        if not reqid:
+    if reqid:
+        job = jobs.get(reqid)
+    else:
+        job = jobs.get_current()
+        if not job:
             # XXX Use the last finished?
-            raise NotImplementedError
+            sys.exit('ERROR: no job currently running')
     jobfs = jobs.fs.resolve_request(reqid)
     reqfs_fields = [
         'bench_script',
@@ -2589,8 +2600,7 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
         'pidfile',
         'logfile',
     ]
-    kind = Request.read_kind(jobfs.request.metadata)
-    if kind is RequestID.KIND.BENCHMARKS:
+    if job.kind is RequestID.KIND.BENCHMARKS:
         req_cls = BenchCompileRequest
         res_cls = BenchCompileResult
         reqfs_fields.extend([
@@ -2603,9 +2613,9 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
         ])
     else:
         raise NotImplementedError(kind)
-    req = req_cls.load(jobfs.request.metadata)
-    res = res_cls.load(jobfs.result.metadata)
-    pid = PIDFile(jobfs.pidfile).read()
+    req = req_cls.load(job.fs.request.metadata)
+    res = res_cls.load(job.fs.result.metadata)
+    pid = PIDFile(job.fs.pidfile).read()
 
     if fmt == 'summary':
         print(f'Request {reqid}:')
@@ -2655,50 +2665,54 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               optimize=False,
                               debug=False,
                               ):
-    jobfs = jobs.fs.resolve_request(reqid)
+    if not reqid:
+        raise NotImplementedError
+    job = jobs.get(reqid)
 
-    print(f'generating request files in {jobfs.reqdir}...')
+    print(f'generating request files in {job.fs.request}...')
 
     req = _resolve_bench_compile_request(
-        reqid, jobfs.reqdir, remote, revision, branch, benchmarks,
+        reqid, job.fs.work.root, remote, revision, branch, benchmarks,
         optimize=optimize,
         debug=debug,
     )
     result = req.result
     resfile = jobfs.result.metadata
 
-    os.makedirs(jobfs.reqdir, exist_ok=True)
+    os.makedirs(job.fs.request.root, exist_ok=True)
+    os.makedirs(job.fs.work.root, exist_ok=True)
+    os.makedirs(job.fs.result.root, exist_ok=True)
 
     # Write metadata.
-    req.save(jobfs.request.metadata)
+    req.save(job.fs.request.metadata)
     result.save(resfile)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, jobs.bench_fs)
-    with open(jobfs.manifest, 'w') as outfile:
+    with open(job.fs.manifest, 'w') as outfile:
         outfile.write(manifest)
 
     # Write the config.
     ini = _build_pyperformance_config(req, jobs.fs, jobs.bench_fs)
-    with open(jobfs.pyperformance_config, 'w') as outfile:
+    with open(job.fs.pyperformance_config, 'w') as outfile:
         ini.write(outfile)
 
     # Write the commands to execute remotely.
     script = _build_compile_script(req, jobs.bench_fs)
-    with open(jobfs.bench_script, 'w') as outfile:
+    with open(job.fs.bench_script, 'w') as outfile:
         outfile.write(script)
-    os.chmod(jobfs.bench_script, 0o755)
+    os.chmod(job.fs.bench_script, 0o755)
 
     # Write the commands to execute locally.
     script = _build_send_script(cfg, req, jobs.fs, jobs.bench_fs)
-    with open(jobfs.portal_script, 'w') as outfile:
+    with open(job.fs.portal_script, 'w') as outfile:
         outfile.write(script)
-    os.chmod(jobfs.portal_script, 0o755)
+    os.chmod(job.fs.portal_script, 0o755)
 
     print('...done (generating request files)')
     print()
     # XXX Show something better?
-    show_file(jobfs.request.metadata)
+    show_file(job.fs.request.metadata)
 
 
 def cmd_copy(jobs, reqid=None):
@@ -2707,8 +2721,6 @@ def cmd_copy(jobs, reqid=None):
 
 def cmd_remove(jobs, reqid):
     raise NotImplementedError
-    reqids = _find_all_requests(reqid)
-    ...
 
 
 def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
@@ -2717,9 +2729,11 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     if force:
         raise NotImplementedError
 
-    jobfs = jobs.fs.resolve_request(reqid)
+    if not reqid:
+        raise NotImplementedError
+    job = jobs.get(reqid)
 
-    resfile = jobfs.result.metadata
+    resfile = job.fs.result.metadata
     result = BenchCompileResult.load(resfile)
 
     if _usequeue:
@@ -2748,7 +2762,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
 
     # Run the send.sh script in the background.
     subprocess.run(
-        '"{jobfs.portal_script}" > "{jobfs.logfile}" 2>&1 &',
+        '"{job.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &',
         shell=True,
     )
 
@@ -2758,13 +2772,13 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
         reqid = _get_staged_request(jobs.fs)
         if not reqid:
             sys.exit('ERROR: no current request to attach')
-    jobfs = jobs.fs.resolve_request(reqid)
+    job = jobs.get(reqid)
 
     # Wait for the request to start.
-    pidfile = PIDFile(jobfs.pidfile)
+    pidfile = PIDFile(job.fs.pidfile)
     pid = pidfile.read()
     while pid is None:
-        status = Result.read_status(jobfs.result.metadata)
+        status = Result.read_status(job.fs.result.metadata)
         if status is Result.FINISHED:
             # XXX Use a logger.
             print(f'WARNING: job not started')
@@ -2774,20 +2788,21 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
 
     # XXX Cancel the job for KeyboardInterrupt?
     if pid:
-        tail_file(jobfs.logfile, lines, follow=pid)
+        tail_file(job.fs.logfile, lines, follow=pid)
     elif lines:
-        tail_file(jobfs.logfile, lines, follow=False)
+        tail_file(job.fs.logfile, lines, follow=False)
 
 
 def cmd_cancel(jobs, reqid=None, *, _status=None):
-    current = _get_staged_request(jobs.fs)
+    current = jobs.get_current()
     if not reqid:
         if not current:
             sys.exit('ERROR: no current request to cancel')
-        reqid = current
-    jobfs = jobs.fs.resolve_request(reqid)
+        job = current
+    else:
+        job = jobs.get(reqid)
     # XXX Use the right result type.
-    resfile = jobfs.result.metadata
+    resfile = job.fs.result.metadata
     result = BenchCompileResult.load(resfile)
     status = result.status
 
@@ -2808,7 +2823,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         print('# done unstaging request')
 
         # Kill the process.
-        pid = PIDFile(jobfs.pidfile).read()
+        pid = PIDFile(job.fs.pidfile).read()
         if pid:
             print(f'# killing PID {pid}')
             os.kill(pid, signal.SIGKILL)
@@ -2818,11 +2833,11 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
     print()
     print('Results:')
     # XXX Show something better?
-    show_file(jobfs.result.metadata)
+    show_file(job.fs.result.metadata)
 
 
 def cmd_finish_run(jobs, reqid):
-    jobfs = jobs.fs.resolve_request(reqid)
+    job = jobs.get(reqid)
 
     print(f'# unstaging request {reqid}')
     try:
@@ -2831,7 +2846,7 @@ def cmd_finish_run(jobs, reqid):
         pass
     print('# done unstaging request')
 
-    resfile = jobfs.result.metadata
+    resfile = job.fs.result.metadata
     # XXX Use the correct type for the request.
     result = BenchCompileResult.load(resfile)
 
@@ -2841,7 +2856,7 @@ def cmd_finish_run(jobs, reqid):
     print()
     print('Results:')
     # XXX Show something better?
-    show_file(jobfs.result.metadata)
+    show_file(job.fs.result.metadata)
 
 
 def cmd_run_next(jobs):
@@ -2861,9 +2876,9 @@ def cmd_run_next(jobs):
 
     try:
         try:
-            jobfs = jobs.fs.resolve_request(reqid)
+            job = jobs.get(reqid)
 
-            resfile = jobfs.result.metadata
+            resfile = job.fs.result.metadata
             result = BenchCompileResult.load(resfile)
             status = result.status
         except Exception:
@@ -2986,10 +3001,9 @@ def cmd_queue_list(jobs):
 def cmd_queue_push(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Adding job {reqid} to the queue')
+    job = jobs.get(reqid)
 
-    resfile = jobs.fs.resolve_request(reqid).result.metadata
-
-    status = Result.read_status(resfile)
+    status = job.get_status()
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
     elif status is not Result.STATUS.CREATED:
@@ -3008,6 +3022,7 @@ def cmd_queue_push(jobs, reqid):
         else:
             raise NotImplementedError
 
+    resfile = job.fs.result.metadata
     result = BenchCompileResult.load(resfile)
     result.set_status(result.STATUS.PENDING)
     result.save(resfile)
@@ -3017,15 +3032,16 @@ def cmd_queue_push(jobs, reqid):
 
 def cmd_queue_pop(jobs):
     print(f'Popping the next job from the queue...')
-
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
         print('WARNING: job queue is paused')
+        return
     except JobQueueEmptyError:
         sys.exit('ERROR: job queue is empty')
+    job = jobs.get(reqid)
 
-    resfile = jobs.fs.resolve_request(reqid).result.metadata
+    resfile = job.fs.result.metadata
     status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: queued request ({reqid}) not found')
@@ -3053,11 +3069,12 @@ def cmd_queue_move(jobs, reqid, position, relative=None):
         print(f'Moving job {reqid} {relative}{position} in the queue...')
     else:
         print(f'Moving job {reqid} to position {position} in the queue...')
+    job = jobs.get(reqid)
 
     if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = jobs.fs.resolve_request(reqid).result.metadata
+    resfile = job.fs.result.metadata
     status = Result.read_status(resfile)
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
@@ -3071,11 +3088,12 @@ def cmd_queue_move(jobs, reqid, position, relative=None):
 def cmd_queue_remove(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Removing job {reqid} from the queue...')
+    job = jobs.get(reqid)
 
     if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = jobs.fs.resolve_request(reqid).result.metadata
+    resfile = job.fs.result.metadata
     status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: request {reqid} not found')
