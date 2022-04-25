@@ -916,10 +916,12 @@ class Metadata(types.SimpleNamespace):
         self.__init__(**vars(fresh))
         return fresh
 
-    def as_jsonable(self):
+    def as_jsonable(self, *, withextra=False):
         fields = self.FIELDS
         if not fields:
-            fields = (f for f in vars(self) if not f.startswith('_'))
+            fields = [f for f in vars(self) if not f.startswith('_')]
+        elif withextra:
+            fields.extend(getattr(self, '_extra', {}).keys())
         optional = set(self.OPTIONAL or ())
         data = {}
         for field in fields:
@@ -933,12 +935,12 @@ class Metadata(types.SimpleNamespace):
             data[field] = value
         return data
 
-    def save(self, resfile):
+    def save(self, resfile, *, withextra=False):
         if isinstance(resfile, str):
             filename = resfile
             with open(filename, 'w') as resfile:
                 return self.save(resfile)
-        data = self.as_jsonable()
+        data = self.as_jsonable(withextra=withextra)
         json.dump(data, resfile, indent=4)
         print(file=resfile)
 
@@ -1313,17 +1315,22 @@ class Job:
     def request(self):
         return Request(self._reqid, str(self.fs))
 
-    def get_status(self):
-        return Result.read_status(self._fs.result.metadata)
-
     def load_result(self):
         return Result.load(self._fs.result.metadata)
 
-#    def fail(self, result):
-#        result.set_status(result.STATUS.FAILED)
-#        result.save(resfile)
-#        result.close()
-#        result.save(resfile)
+    def get_status(self):
+        return Result.read_status(self._fs.result.metadata)
+
+    def set_status(self, status):
+        status = Result.resolve_status(status)
+        result = self.load_result()
+        result.set_status(Result.STATUS.ACTIVE)
+        result.save(self._fs.result.metadata, withextra=True)
+
+    def close(self):
+        result = self.load_result()
+        result.close()
+        result.save(self._fs.result.metadata, withextra=True)
 
 
 class Jobs:
@@ -2058,6 +2065,8 @@ class Result(Metadata):
             (status, datetime.datetime.now(datetime.timezone.utc)),
         )
         self.status = None if status is self.STATUS.CREATED else status
+        if status in self.FINISHED:
+            self.close()
 
     def close(self):
         if self.history[-1][0] is self.CLOSED:
@@ -2678,7 +2687,6 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
         debug=debug,
     )
     result = req.result
-    resfile = jobfs.result.metadata
 
     os.makedirs(job.fs.request.root, exist_ok=True)
     os.makedirs(job.fs.work.root, exist_ok=True)
@@ -2686,7 +2694,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
 
     # Write metadata.
     req.save(job.fs.request.metadata)
-    result.save(resfile)
+    result.save(job.fs.result.metadata)
 
     # Write the benchmarks manifest.
     manifest = _build_manifest(req, jobs.bench_fs)
@@ -2734,9 +2742,6 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         raise NotImplementedError
     job = jobs.get(reqid)
 
-    resfile = job.fs.result.metadata
-    result = BenchCompileResult.load(resfile)
-
     if _usequeue:
         if not jobs.queue.paused:
             cmd_queue_push(jobs, reqid)
@@ -2746,19 +2751,14 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     print('# staging request')
     try:
         stage_request(reqid, jobs.fs)
-
-        result.set_status(result.STATUS.ACTIVE)
-        result.save(resfile)
+        job.set_active()
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
     except Exception:
         print('ERROR: Could not stage request')
         print()
-        result.set_status(result.STATUS.FAILED)
-        result.save(resfile)
-        result.close()
-        result.save(resfile)
+        job.set_status('failed')
         raise  # re-raise
 
     # Run the send.sh script in the background.
@@ -2779,7 +2779,7 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
     pidfile = PIDFile(job.fs.pidfile)
     pid = pidfile.read()
     while pid is None:
-        status = Result.read_status(job.fs.result.metadata)
+        status = job.get_status()
         if status is Result.FINISHED:
             # XXX Use a logger.
             print(f'WARNING: job not started')
@@ -2802,18 +2802,11 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         job = current
     else:
         job = jobs.get(reqid)
-    # XXX Use the right result type.
-    resfile = job.fs.result.metadata
-    result = BenchCompileResult.load(resfile)
-    status = result.status
 
     if _status is not None:
-        if result.status not in (Result.STATUS.CREATED, _status):
+        if job.get_status() not in (Result.STATUS.CREATED, _status):
             return
-
-    result.set_status(result.STATUS.CANCELED)
-    result.close()
-    result.save(resfile)
+    job.set_status('canceled')
 
     if reqid == current:
         print(f'# unstaging request {reqid}')
@@ -2847,12 +2840,7 @@ def cmd_finish_run(jobs, reqid):
         pass
     print('# done unstaging request')
 
-    resfile = job.fs.result.metadata
-    # XXX Use the correct type for the request.
-    result = BenchCompileResult.load(resfile)
-
-    result.close()
-    result.save(resfile)
+    job.close()
 
     print()
     print('Results:')
@@ -2878,10 +2866,7 @@ def cmd_run_next(jobs):
     try:
         try:
             job = jobs.get(reqid)
-
-            resfile = job.fs.result.metadata
-            result = BenchCompileResult.load(resfile)
-            status = result.status
+            status = job.get_status()
         except Exception:
             print(f'ERROR: Could not load results metadata')
             print(f'WARNING: {reqid} status could not be updated (to "failed")')
@@ -3023,10 +3008,7 @@ def cmd_queue_push(jobs, reqid):
         else:
             raise NotImplementedError
 
-    resfile = job.fs.result.metadata
-    result = BenchCompileResult.load(resfile)
-    result.set_status(result.STATUS.PENDING)
-    result.save(resfile)
+    job.set_status('pending')
 
     print(f'{reqid} added to the job queue at position {pos}')
 
@@ -3042,18 +3024,15 @@ def cmd_queue_pop(jobs):
         sys.exit('ERROR: job queue is empty')
     job = jobs.get(reqid)
 
-    resfile = job.fs.result.metadata
-    status = Result.read_status(resfile)
+    status = job.get_status()
     if not status:
         print(f'WARNING: queued request ({reqid}) not found')
     elif status is not Result.STATUS.PENDING:
         print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
         # XXX Give the option to force the status to "active"?
     else:
-        result = BenchCompileResult.load(resfile)
         # XXX Is "active" the right status?
-        result.set_status(result.STATUS.ACTIVE)
-        result.save(resfile)
+        job.set_status('active')
 
     print(reqid)
 
@@ -3075,8 +3054,7 @@ def cmd_queue_move(jobs, reqid, position, relative=None):
     if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = job.fs.result.metadata
-    status = Result.read_status(resfile)
+    status = job.get_status()
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
     elif status is not Result.STATUS.PENDING:
@@ -3094,8 +3072,7 @@ def cmd_queue_remove(jobs, reqid):
     if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = job.fs.result.metadata
-    status = Result.read_status(resfile)
+    status = job.get_status()
     if not status:
         print(f'WARNING: request {reqid} not found')
     elif status is not Result.STATUS.PENDING:
@@ -3107,9 +3084,7 @@ def cmd_queue_remove(jobs, reqid):
         print(f'WARNING: {reqid} was not queued')
 
     if status is Result.STATUS.PENDING:
-        result = BenchCompileResult.load(resfile)
-        result.set_status(result.STATUS.CREATED)
-        result.save(resfile)
+        job.set_status('created')
 
     print('...done!')
 
