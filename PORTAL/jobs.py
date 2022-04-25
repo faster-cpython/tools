@@ -1406,6 +1406,72 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
+    def render(self, fmt=None):
+        if not fmt:
+            fmt = 'summary'
+
+        reqfs_fields = [
+            'bench_script',
+            'portal_script',
+        ]
+        resfs_fields = [
+            'pidfile',
+            'logfile',
+        ]
+        if self.kind is RequestID.KIND.BENCHMARKS:
+            req_cls = BenchCompileRequest
+            res_cls = BenchCompileResult
+            reqfs_fields.extend([
+                'manifest',
+                'pyperformance_config',
+            ])
+            resfs_fields.extend([
+                'pyperformance_log',
+                'pyperformance_results',
+            ])
+        else:
+            raise NotImplementedError(kind)
+        req = req_cls.load(self._fs.request.metadata)
+        res = res_cls.load(self._fs.result.metadata)
+        pid = PIDFile(self._fs.pidfile).read()
+
+        if fmt == 'summary':
+            yield f'Request {self.reqid}:'
+            yield f'  {"kind:":20} {req.kind}'
+            yield f'  {"user:":20} {req.user}'
+            if pid:
+                yield f'  {"PID:":20} {pid}'
+            yield f'  {"status:":20} {res.status}'
+            yield ''
+            yield 'Details:'
+            for field in req_cls.FIELDS:
+                if field in ('id', 'reqid', 'kind', 'user', 'date', 'datadir'):
+                    continue
+                value = getattr(req, field)
+                if isinstance(value, str) and value.strip() != value:
+                    value = repr(value)
+                yield f'  {field + ":":20} {value}'
+            yield ''
+            yield 'History:'
+            for st, ts in res.history:
+                yield f'  {st + ":":20} {ts:%Y-%m-%d %H:%M:%S}'
+            yield ''
+            yield 'Request files:'
+            yield f'  {"data root:":20} {_render_file(req.reqdir)}'
+            yield f'  {"metadata:":20} {_render_file(self._fs.request.metadata)}'
+            for field in reqfs_fields:
+                value = _render_file(getattr(self._fs, field, None))
+                yield f'  {field + ":":20} {value}'
+            yield ''
+            yield 'Result files:'
+            yield f'  {"data root:":20} {_render_file(self._fs.result)}'
+            yield f'  {"metadata:":20} {_render_file(self._fs.result.metadata)}'
+            for field in resfs_fields:
+                value = _render_file(getattr(self._fs, field, None))
+                yield f'  {field + ":":20} {value}'
+        else:
+            raise ValueError(f'unsupported fmt {fmt!r}')
+
 
 class Jobs:
 
@@ -2707,9 +2773,6 @@ def cmd_list(jobs):
 
 
 def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
-    if not fmt:
-        fmt = 'summary'
-
     if reqid:
         job = jobs.get(reqid)
     else:
@@ -2717,71 +2780,12 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
         if not job:
             # XXX Use the last finished?
             sys.exit('ERROR: no job currently running')
-    jobfs = jobs.fs.resolve_request(reqid)
-    reqfs_fields = [
-        'bench_script',
-        'portal_script',
-    ]
-    resfs_fields = [
-        'pidfile',
-        'logfile',
-    ]
-    if job.kind is RequestID.KIND.BENCHMARKS:
-        req_cls = BenchCompileRequest
-        res_cls = BenchCompileResult
-        reqfs_fields.extend([
-            'manifest',
-            'pyperformance_config',
-        ])
-        resfs_fields.extend([
-            'pyperformance_log',
-            'pyperformance_results',
-        ])
-    else:
-        raise NotImplementedError(kind)
-    req = req_cls.load(job.fs.request.metadata)
-    res = res_cls.load(job.fs.result.metadata)
-    pid = PIDFile(job.fs.pidfile).read()
 
-    if fmt == 'summary':
-        print(f'Request {reqid}:')
-        print(f'  {"kind:":20} {req.kind}')
-        print(f'  {"user:":20} {req.user}')
-        if pid:
-            print(f'  {"PID:":20} {pid}')
-        print(f'  {"status:":20} {res.status}')
-        print()
-        print('Details:')
-        for field in req_cls.FIELDS:
-            if field in ('id', 'reqid', 'kind', 'user', 'date', 'datadir'):
-                continue
-            value = getattr(req, field)
-            if isinstance(value, str) and value.strip() != value:
-                value = repr(value)
-            print(f'  {field + ":":20} {value}')
-        print()
-        print('History:')
-        for st, ts in res.history:
-            print(f'  {st + ":":20} {ts:%Y-%m-%d %H:%M:%S}')
-        print()
-        print('Request files:')
-        print(f'  {"data root:":20} {_render_file(req.reqdir)}')
-        print(f'  {"metadata:":20} {_render_file(jobfs.request.metadata)}')
-        for field in reqfs_fields:
-            value = _render_file(getattr(jobfs, field, None))
-            print(f'  {field + ":":20} {value}')
-        print()
-        print('Result files:')
-        print(f'  {"data root:":20} {_render_file(jobfs.result)}')
-        print(f'  {"metadata:":20} {_render_file(jobfs.result.metadata)}')
-        for field in resfs_fields:
-            value = _render_file(getattr(jobfs, field, None))
-            print(f'  {field + ":":20} {value}')
-    else:
-        raise ValueError(f'unsupported fmt {fmt!r}')
+    for line in job.render(fmt=fmt):
+        print(line)
 
     if lines:
-        tail_file(jobfs.logfile, lines, follow=False)
+        tail_file(job.fs.logfile, lines, follow=False)
 
 
 def cmd_request_compile_bench(jobs, reqid, revision, *,
