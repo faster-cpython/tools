@@ -1383,7 +1383,14 @@ class Jobs:
             reqid = RequestID.parse(name)
             if not reqid:
                 continue
-            yield self.get(reqid)
+            yield self._get(reqid)
+
+    def _get(self, reqid):
+        return Job(
+            reqid,
+            self._fs.resolve_request(reqid),
+            self._bench_fs.resolve_request(reqid),
+        )
 
     def get_current(self):
         reqid = _get_staged_request(self._fs)
@@ -1392,15 +1399,18 @@ class Jobs:
         return self.get(reqid)
 
     def get(self, reqid):
-        return Job(
-            reqid,
-            self._fs.resolve_request(reqid),
-            self._bench_fs.resolve_request(reqid),
-        )
+        return self._get(reqid)
+
+    def create(self, reqid):
+        job = self._get(reqid)
+        os.makedirs(job.fs.request.root, exist_ok=True)
+        os.makedirs(job.fs.work.root, exist_ok=True)
+        os.makedirs(job.fs.result.root, exist_ok=True)
+        return job
 
     def activate(self, reqid)
         stage_request(reqid, self.fs)
-        job = self.get(reqid)
+        job = self._get(reqid)
         job.set_active()
         return job
 
@@ -2694,7 +2704,9 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               ):
     if not reqid:
         raise NotImplementedError
-    job = jobs.get(reqid)
+    job = jobs.create(reqid)
+
+    # XXX Move most of this into Jobs.create().
 
     print(f'generating request files in {job.fs.request}...')
 
@@ -2704,10 +2716,6 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
         debug=debug,
     )
     result = req.result
-
-    os.makedirs(job.fs.request.root, exist_ok=True)
-    os.makedirs(job.fs.work.root, exist_ok=True)
-    os.makedirs(job.fs.result.root, exist_ok=True)
 
     # Write metadata.
     req.save(job.fs.request.metadata)
