@@ -1110,16 +1110,16 @@ class PortalConfig(Config):
 class JobFS(types.SimpleNamespace):
     """The file structure of a job's data."""
 
-    def __init__(self, jobsfs, reqid, context='portal'):
+    def __init__(self, jobsfs, reqid):
         if not jobsfs:
             raise ValueError('missing jobsfs')
-        elif not isinstance(jobsfs, JobsFS):
+        elif isinstance(jobsfs, str):
+            jobsfs = JobsFS(jobsfs, 'portal')
+        elif isinstance(jobsfs, JobsFS):
+            jobsfs = jobsfs.copy()
+        else:
             raise TypeError(f'expected JobsFS, got {jobsfs!r}')
         reqid = RequestID.from_raw(reqid)
-        if not context:
-            context = 'portal'
-        elif context not in ('portal', 'bench'):
-            raise ValueError(f'unsupported context {context!r}')
 
         # the request
         request = FSTree(f'{jobsfs.requests}/{reqid}')
@@ -1128,7 +1128,7 @@ class JobFS(types.SimpleNamespace):
         # the job
         work = FSTree(f'{jobsfs.work}/{reqid}')
         work.bench_script = f'{work}/run.sh'
-        if context == 'portal':
+        if jobsfs.context == 'portal':
             work.portal_script = f'{work}/send.sh'
             work.pidfile = f'{work}/send.pid'
             work.logfile = f'{work}/job.log'
@@ -1137,7 +1137,8 @@ class JobFS(types.SimpleNamespace):
         result.metadata = f'{result}/results.json'
 
         super().__init__(
-            context=context,
+            jobsfs=jobsfs,
+            reqid=reqid,
             request=request,
             work=work,
             result=result,
@@ -1161,6 +1162,10 @@ class JobFS(types.SimpleNamespace):
         return self.request
 
     @property
+    def context(self):
+        return self.jobsfs.context
+
+    @property
     def bench_script(self):
         return self.work.portal_script
 
@@ -1176,6 +1181,9 @@ class JobFS(types.SimpleNamespace):
     def logfile(self):
         return self.work.logfile
 
+    def copy(self):
+        return type(self)(self.jobsfs, self.reqid)
+
 
 class JobsFS(FSTree):
     """The file structure of the jobs data."""
@@ -1187,15 +1195,17 @@ class JobsFS(FSTree):
         return cls(f'/home/{user}/BENCH', context)
 
     def __init__(self, root='~/BENCH', context='portal'):
-        super().__init__(root or '~/BENCH')
+        if not root:
+            root = '~/BENCH'
+        super().__init__(root)
         self.context = context or 'portal'
 
-        self.requests = FSTree(f'{self.root}/REQUESTS')
+        self.requests = FSTree(f'{root}/REQUESTS')
         if context == 'portal':
             self.requests.current = f'{self.requests}/CURRENT'
 
-        self.work = self.requests.root
-        self.results = self.requests.root
+        self.work = FSTree(self.requests.root)
+        self.results = FSTree(self.requests.root)
 
         if not context:
             context = 'portal'
@@ -1222,6 +1232,9 @@ class JobsFS(FSTree):
     def resolve_request(self, reqid):
         return self.JOBFS(self, reqid)
 
+    def copy(self):
+        return type(self)(self.root, self.context)
+
 
 ##################################
 # jobs
@@ -1231,20 +1244,26 @@ class Jobs:
     FS = JobsFS
 
     def __init__(self, cfg):
-        self.cfg = cfg
+        self._cfg = cfg
+        self._fs = self.FS(cfg.data_dir)
+        self._bench_fs = self.FS.from_user(cfg.bench_user, 'bench')
 
     def __str__(self):
         return self.fs.root
 
     @property
+    def cfg(self):
+        return self._cfg
+
+    @property
     def fs(self):
         """Files on the portal host."""
-        return self.FS(self.cfg.data_dir)
+        return self._fs.copy()
 
     @property
     def bench_fs(self):
         """Files on the bench host."""
-        return self.FS.from_user(cfg.bench_user, 'bench')
+        return self._bench_fs.copy()
 
     @property
     def queue(self):
