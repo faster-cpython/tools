@@ -1224,6 +1224,38 @@ class JobsFS(FSTree):
 
 
 ##################################
+# jobs
+
+class Jobs:
+
+    FS = JobsFS
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def __str__(self):
+        return self.fs.root
+
+    @property
+    def fs(self):
+        """Files on the portal host."""
+        return self.FS(self.cfg.data_dir)
+
+    @property
+    def bench_fs(self):
+        """Files on the bench host."""
+        return self.FS.from_user(cfg.bench_user, 'bench')
+
+    @property
+    def queue(self):
+        try:
+            return self._queue
+        except AttributeError:
+            self._queue = JobQueue.from_fstree(self.fs)
+            return self._queue
+
+
+##################################
 # the current job
 
 class StagedRequestError(Exception):
@@ -1898,6 +1930,9 @@ class Result(Metadata):
         return data
 
 
+##################################
+# "compile"
+
 class BenchCompileRequest(Request):
 
     FIELDS = Request.FIELDS + [
@@ -2364,30 +2399,31 @@ def show_file(filename):
         print(f'  {line}')
 
 
-def _ensure_next_job(cfg):
-    pfiles = JobsFS(cfg.data_dir)
-    if _get_staged_request(pfiles) is not None:
+def _ensure_next_job(jobs):
+    if _get_staged_request(jobs.fs) is not None:
         # The running job will kick off the next one.
         # XXX Check the pidfile.
         return
-    queue = JobQueue.from_fstree(pfiles).snapshot
+    queue = jobs.queue.snapshot
     if queue.paused:
         return
     if not queue:
         return
     # Run in the background.
-    cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfg.filename}"'
-    subprocess.run(f'{cmd} >> "{pfiles.queue.log}" 2>&1 &', shell=True)
+    cfgfile = jobs.cfg.filename
+    if not cfgfile:
+        raise NotImplementedError
+    cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
+    subprocess.run(f'{cmd} >> "{jobs.fs.queue.log}" 2>&1 &', shell=True)
 
 
-def cmd_list(cfg):
+def cmd_list(jobs):
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
     total = 0
-    pfiles = JobsFS(cfg.data_dir)
-    requests = (RequestID.parse(n) for n in os.listdir(pfiles.requests.root))
+    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     for reqid in sorted(r for r in requests if r):
-        jobfs = pfiles.resolve_request(reqid)
+        jobfs = jobs.fs.resolve_request(reqid)
         status = Result.read_status(jobfs.result.metadata)
         total += 1
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
@@ -2395,17 +2431,16 @@ def cmd_list(cfg):
     print(f'(total: {total})')
 
 
-def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
+def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
     if not fmt:
         fmt = 'summary'
 
-    pfiles = JobsFS(cfg.data_dir)
     if not reqid:
-        reqid = _get_staged_request(pfiles)
+        reqid = _get_staged_request(jobs.fs)
         if not reqid:
             # XXX Use the last finished?
             raise NotImplementedError
-    jobfs = pfiles.resolve_request(reqid)
+    jobfs = jobs.fs.resolve_request(reqid)
     reqfs_fields = [
         'bench_script',
         'portal_script',
@@ -2473,16 +2508,14 @@ def cmd_show(cfg, reqid=None, fmt=None, *, lines=None):
         tail_file(jobfs.logfile, lines, follow=False)
 
 
-def cmd_request_compile_bench(cfg, reqid, revision, *,
+def cmd_request_compile_bench(jobs, reqid, revision, *,
                               remote=None,
                               branch=None,
                               benchmarks=None,
                               optimize=False,
                               debug=False,
                               ):
-    pfiles = JobsFS(cfg.data_dir)
-    jobfs = pfiles.resolve_request(reqid)
-    bfiles = BenchJobsFS.from_user(cfg.bench_user)
+    jobfs = jobs.fs.resolve_request(reqid)
 
     print(f'generating request files in {jobfs.reqdir}...')
 
@@ -2501,23 +2534,23 @@ def cmd_request_compile_bench(cfg, reqid, revision, *,
     result.save(resfile)
 
     # Write the benchmarks manifest.
-    manifest = _build_manifest(req, bfiles)
+    manifest = _build_manifest(req, jobs.bench_fs)
     with open(jobfs.manifest, 'w') as outfile:
         outfile.write(manifest)
 
     # Write the config.
-    ini = _build_pyperformance_config(req, pfiles, bfiles)
+    ini = _build_pyperformance_config(req, jobs.fs, jobs.bench_fs)
     with open(jobfs.pyperformance_config, 'w') as outfile:
         ini.write(outfile)
 
     # Write the commands to execute remotely.
-    script = _build_compile_script(req, bfiles)
+    script = _build_compile_script(req, jobs.bench_fs)
     with open(jobfs.bench_script, 'w') as outfile:
         outfile.write(script)
     os.chmod(jobfs.bench_script, 0o755)
 
     # Write the commands to execute locally.
-    script = _build_send_script(cfg, req, pfiles, bfiles)
+    script = _build_send_script(cfg, req, jobs.fs, jobs.bench_fs)
     with open(jobfs.portal_script, 'w') as outfile:
         outfile.write(script)
     os.chmod(jobfs.portal_script, 0o755)
@@ -2528,38 +2561,36 @@ def cmd_request_compile_bench(cfg, reqid, revision, *,
     show_file(jobfs.request.metadata)
 
 
-def cmd_copy(cfg, reqid=None):
+def cmd_copy(jobs, reqid=None):
     raise NotImplementedError
 
 
-def cmd_remove(cfg, reqid):
+def cmd_remove(jobs, reqid):
     raise NotImplementedError
     reqids = _find_all_requests(reqid)
     ...
 
 
-def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
+def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     if copy:
         raise NotImplementedError
     if force:
         raise NotImplementedError
 
-    pfiles = JobsFS(cfg.data_dir)
-    jobfs = pfiles.resolve_request(reqid)
+    jobfs = jobs.fs.resolve_request(reqid)
 
     resfile = jobfs.result.metadata
     result = BenchCompileResult.load(resfile)
 
     if _usequeue:
-        queue = JobQueue.from_fstree(pfiles)
-        if not queue.paused:
-            cmd_queue_push(cfg, reqid)
+        if not jobs.queue.paused:
+            cmd_queue_push(jobs, reqid)
             return
 
     # Try staging it directly.
     print('# staging request')
     try:
-        stage_request(reqid, pfiles)
+        stage_request(reqid, jobs.fs)
 
         result.set_status(result.STATUS.ACTIVE)
         result.save(resfile)
@@ -2582,14 +2613,12 @@ def cmd_run(cfg, reqid, *, copy=False, force=False, _usequeue=True):
     )
 
 
-def cmd_attach(cfg, reqid=None, *, lines=None):
-    pfiles = JobsFS(cfg.data_dir)
-
+def cmd_attach(jobs, reqid=None, *, lines=None):
     if not reqid:
-        reqid = _get_staged_request(pfiles)
+        reqid = _get_staged_request(jobs.fs)
         if not reqid:
             sys.exit('ERROR: no current request to attach')
-    jobfs = pfiles.resolve_request(reqid)
+    jobfs = jobs.fs.resolve_request(reqid)
 
     # Wait for the request to start.
     pidfile = PIDFile(jobfs.pidfile)
@@ -2610,14 +2639,13 @@ def cmd_attach(cfg, reqid=None, *, lines=None):
         tail_file(jobfs.logfile, lines, follow=False)
 
 
-def cmd_cancel(cfg, reqid=None, *, _status=None):
-    pfiles = JobsFS(cfg.data_dir)
-    current = _get_staged_request(pfiles)
+def cmd_cancel(jobs, reqid=None, *, _status=None):
+    current = _get_staged_request(jobs.fs)
     if not reqid:
         if not current:
             sys.exit('ERROR: no current request to cancel')
         reqid = current
-    jobfs = pfiles.resolve_request(reqid)
+    jobfs = jobs.fs.resolve_request(reqid)
     # XXX Use the right result type.
     resfile = jobfs.result.metadata
     result = BenchCompileResult.load(resfile)
@@ -2634,7 +2662,7 @@ def cmd_cancel(cfg, reqid=None, *, _status=None):
     if reqid == current:
         print(f'# unstaging request {reqid}')
         try:
-            unstage_request(reqid, pfiles)
+            unstage_request(reqid, jobs.fs)
         except RequestNotStagedError:
             pass
         print('# done unstaging request')
@@ -2653,13 +2681,12 @@ def cmd_cancel(cfg, reqid=None, *, _status=None):
     show_file(jobfs.result.metadata)
 
 
-def cmd_finish_run(cfg, reqid):
-    pfiles = JobsFS(cfg.data_dir)
-    jobfs = pfiles.resolve_request(reqid)
+def cmd_finish_run(jobs, reqid):
+    jobfs = jobs.fs.resolve_request(reqid)
 
     print(f'# unstaging request {reqid}')
     try:
-        unstage_request(reqid, pfiles)
+        unstage_request(reqid, jobs.fs)
     except RequestNotStagedError:
         pass
     print('# done unstaging request')
@@ -2677,18 +2704,15 @@ def cmd_finish_run(cfg, reqid):
     show_file(jobfs.result.metadata)
 
 
-def cmd_run_next(cfg):
-    pfiles = JobsFS(cfg.data_dir)
-
+def cmd_run_next(jobs):
     logentry = LogSection.from_title('Running next queued job')
     print()
     for line in logentry.render():
         print(line)
     print()
 
-    queue = JobQueue.from_fstree(pfiles)
     try:
-        reqid = queue.pop()
+        reqid = jobs.queue.pop()
     except JobQueuePausedError:
         print('done (job queue is paused)')
     except JobQueueEmptyError:
@@ -2697,7 +2721,7 @@ def cmd_run_next(cfg):
 
     try:
         try:
-            jobfs = pfiles.resolve_request(reqid)
+            jobfs = jobs.fs.resolve_request(reqid)
 
             resfile = jobfs.result.metadata
             result = BenchCompileResult.load(resfile)
@@ -2709,49 +2733,48 @@ def cmd_run_next(cfg):
             traceback.print_exc()
             print()
             print('trying next job...')
-            cmd_run_next(cfg)
+            cmd_run_next(jobs)
             return
 
         if not status:
             print(f'WARNING: queued request ({reqid}) not found')
             print('trying next job...')
-            cmd_run_next(cfg)
+            cmd_run_next(jobs)
             return
         elif status is not Result.STATUS.PENDING:
             print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
             # XXX Give the option to force the status to "active"?
             print('trying next job...')
-            cmd_run_next(cfg)
+            cmd_run_next(jobs)
             return
 
         # We're okay to run the job.
         print(f'Running next job from queue ({reqid})')
         print()
         try:
-            cmd_run(cfg, reqid, _usequeue=False)
+            cmd_run(jobs, reqid, _usequeue=False)
         except RequestAlreadyStagedError:
             if reqid == exc.curid:
                 print(f'{reqid} is already running')
                 # XXX Check the pidfile?
             else:
                 print(f'another job is already running, adding {reqid} back to the queue')
-                queue.unpop(reqid)
+                jobs.queue.unpop(reqid)
     except KeyboardInterrupt:
-        cmd_cancel(cfg, reqid, _status=Result.STATUS.PENDING)
+        cmd_cancel(jobs, reqid, _status=Result.STATUS.PENDING)
         raise  # re-raise
 
 
-def cmd_queue_info(cfg, *, withlog=True):
-    queue = JobQueue.from_config(cfg).snapshot
-
-    jobs = queue.jobs
-    paused = queue.paused
-    pid, pid_running = queue.locked
+def cmd_queue_info(jobs, *, withlog=True):
+    _queue = jobs.queue.snapshot
+    queued = _queue.jobs
+    paused = _queue.paused
+    pid, pid_running = _queue.locked
     if withlog:
-        log = list(queue.read_log())
+        log = list(_queue.read_log())
 
     print('Job Queue:')
-    print(f'  size:     {len(jobs)}')
+    print(f'  size:     {len(queued)}')
     #print(f'  max size: {maxsize}')
     print(f'  paused:   {paused}')
     if isinstance(pid, str):
@@ -2764,14 +2787,14 @@ def cmd_queue_info(cfg, *, withlog=True):
         print('  lock:     (not locked)')
     print()
     print('Files:')
-    print(f'  data:      {_render_file(queue.datafile)}')
-    print(f'  lock:      {_render_file(queue.lockfile)}')
-    print(f'  log:       {_render_file(queue.logfile)}')
+    print(f'  data:      {_render_file(_queue.datafile)}')
+    print(f'  lock:      {_render_file(_queue.lockfile)}')
+    print(f'  log:       {_render_file(_queue.logfile)}')
     print()
     print('Top 5:')
-    if jobs:
-        for i in range(min(5, len(jobs))):
-            print(f'  {i+1} {jobs[i]}')
+    if queued:
+        for i in range(min(5, len(queued))):
+            print(f'  {i+1} {queued[i]}')
     else:
         print('  (queue is empty)')
     if withlog:
@@ -2789,46 +2812,42 @@ def cmd_queue_info(cfg, *, withlog=True):
             print('  (log is empty)')
 
 
-def cmd_queue_pause(cfg):
-    queue = JobQueue.from_config(cfg)
+def cmd_queue_pause(jobs):
     try:
-       queue.pause()
+       jobs.queue.pause()
     except JobQueuePausedError:
         print('WARNING: job queue was already paused')
 
 
-def cmd_queue_unpause(cfg):
-    queue = JobQueue.from_config(cfg)
+def cmd_queue_unpause(jobs):
     try:
-       queue.unpause()
+       jobs.queue.unpause()
     except JobQueueNotPausedError:
         print('WARNING: job queue was not paused')
     else:
-        _ensure_next_job(cfg)
+        _ensure_next_job(jobs)
 
 
-def cmd_queue_list(cfg):
-    queue = JobQueue.from_config(cfg)
-    if queue.paused:
+def cmd_queue_list(jobs):
+    if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    if not queue:
+    if not jobs.queue:
         print('no jobs queued')
         return
 
     print('Queued jobs:')
-    for i, reqid in enumerate(queue, 1):
+    for i, reqid in enumerate(jobs.queue, 1):
         print(f'{i:>3} {reqid}')
     print()
     print(f'(total: {i})')
 
 
-def cmd_queue_push(cfg, reqid):
+def cmd_queue_push(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Adding job {reqid} to the queue')
 
-    pfiles = JobsFS(cfg.data_dir)
-    resfile = pfiles.resolve_request(reqid).result.metadata
+    resfile = jobs.fs.resolve_request(reqid).result.metadata
 
     status = Result.read_status(resfile)
     if not status:
@@ -2836,14 +2855,13 @@ def cmd_queue_push(cfg, reqid):
     elif status is not Result.STATUS.CREATED:
         sys.exit(f'ERROR: request {reqid} has already been used')
 
-    queue = JobQueue.from_fstree(pfiles)
-    if queue.paused:
+    if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
     try:
-        pos = queue.push(reqid)
+        pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
-        for pos, queued in enumerate(queue, 1):
+        for pos, queued in enumerate(jobs.queue, 1):
             if queued == reqid:
                 print(f'WARNING: {reqid} was already queued')
                 break
@@ -2857,19 +2875,17 @@ def cmd_queue_push(cfg, reqid):
     print(f'{reqid} added to the job queue at position {pos}')
 
 
-def cmd_queue_pop(cfg):
+def cmd_queue_pop(jobs):
     print(f'Popping the next job from the queue...')
 
-    pfiles = JobsFS(cfg.data_dir)
-    queue = JobQueue.from_fstree(pfiles)
     try:
-        reqid = queue.pop()
+        reqid = jobs.queue.pop()
     except JobQueuePausedError:
         print('WARNING: job queue is paused')
     except JobQueueEmptyError:
         sys.exit('ERROR: job queue is empty')
 
-    resfile = pfiles.resolve_request(reqid).result.metadata
+    resfile = jobs.fs.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: queued request ({reqid}) not found')
@@ -2885,7 +2901,7 @@ def cmd_queue_pop(cfg):
     print(reqid)
 
 
-def cmd_queue_move(cfg, reqid, position, relative=None):
+def cmd_queue_move(jobs, reqid, position, relative=None):
     position = int(position)
     if position <= 0:
         raise ValueError(f'expected positive position, got {position}')
@@ -2898,32 +2914,28 @@ def cmd_queue_move(cfg, reqid, position, relative=None):
     else:
         print(f'Moving job {reqid} to position {position} in the queue...')
 
-    pfiles = JobsFS(cfg.data_dir)
-    queue = JobQueue.from_fstree(pfiles)
-    if queue.paused:
+    if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = pfiles.resolve_request(reqid).result.metadata
+    resfile = jobs.fs.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
         sys.exit(f'ERROR: request {reqid} not found')
     elif status is not Result.STATUS.PENDING:
         print(f'WARNING: request {reqid} has been updated since queued')
 
-    pos = queue.move(reqid, position, relative)
+    pos = jobs.queue.move(reqid, position, relative)
     print(f'...moved to position {pos}')
 
 
-def cmd_queue_remove(cfg, reqid):
+def cmd_queue_remove(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
     print(f'Removing job {reqid} from the queue...')
 
-    pfiles = JobsFS(cfg.data_dir)
-    queue = JobQueue.from_fstree(pfiles)
-    if queue.paused:
+    if jobs.queue.paused:
         print('WARNING: job queue is paused')
 
-    resfile = pfiles.resolve_request(reqid).result.metadata
+    resfile = jobs.fs.resolve_request(reqid).result.metadata
     status = Result.read_status(resfile)
     if not status:
         print(f'WARNING: request {reqid} not found')
@@ -2931,7 +2943,7 @@ def cmd_queue_remove(cfg, reqid):
         print(f'WARNING: request {reqid} has been updated since queued')
 
     try:
-        queue.remove(reqid)
+        jobs.queue.remove(reqid)
     except JobNotQueuedError:
         print(f'WARNING: {reqid} was not queued')
 
@@ -2943,12 +2955,12 @@ def cmd_queue_remove(cfg, reqid):
     print('...done!')
 
 
-def cmd_config_show(cfg):
-    for line in cfg.render():
+def cmd_config_show(jobs):
+    for line in jobs.cfg.render():
         print(line)
 
 
-def cmd_bench_host_clean(cfg):
+def cmd_bench_host_clean(jobs):
     raise NotImplementedError
 
 
@@ -3192,10 +3204,12 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     print(f'# loading config from {cfgfile}')
     cfg = PortalConfig.load(cfgfile)
 
+    jobs = Jobs(cfg)
+
     if cmd != 'queue-info' and not cmd.startswith('internal-'):
         # In some cases the mechanism to run jobs from the queue may
         # get interrupted, so we re-start it manually here if necessary.
-        _ensure_next_job(cfg)
+        _ensure_next_job(jobs)
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
@@ -3215,7 +3229,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     else:
         print(f'# Running {cmd!r} command')
     print()
-    run_cmd(cfg, **cmd_kwargs)
+    run_cmd(jobs, **cmd_kwargs)
 
     # Run "after" commands, if any
     for cmd, run_cmd in after:
@@ -3227,7 +3241,7 @@ def main(cmd, cmd_kwargs, cfgfile=None):
             print(f'# Running {cmd!r} command')
         print()
         # XXX Add --lines='-1' for attach.
-        run_cmd(cfg, reqid=reqid)
+        run_cmd(jobs, reqid=reqid)
 
 
 if __name__ == '__main__':
