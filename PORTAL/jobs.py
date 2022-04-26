@@ -49,7 +49,7 @@ def _check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
-def _validate_string(name, value, argname=None, *, required=True):
+def _validate_string(value, argname=None, *, required=True):
     if not value and required:
         raise ValueError(f'missing {argname or "required value"}')
     if not isinstance(value, str):
@@ -939,7 +939,7 @@ class Metadata(types.SimpleNamespace):
         if isinstance(resfile, str):
             filename = resfile
             with open(filename, 'w') as resfile:
-                return self.save(resfile)
+                return self.save(resfile, withextra=withextra)
         data = self.as_jsonable(withextra=withextra)
         json.dump(data, resfile, indent=4)
         print(file=resfile)
@@ -1155,7 +1155,6 @@ class JobFS(types.SimpleNamespace):
 
         # the request
         request.metadata = f'{request}/request.json'
-        request.manifest = f'{request}/benchmarks.manifest'
         # the job
         work.bench_script = f'{work}/run.sh'
         if context == 'portal':
@@ -1173,26 +1172,31 @@ class JobFS(types.SimpleNamespace):
             result=result,
         )
 
-        #request.pyperformance_config = f'{request}/compile.ini'
-        request.pyperformance_config = f'{request}/pyperformance.ini'
-        #request.pyperformance_log = f'{request}/run.log'
-        request.pyperformance_log = f'{request}/pyperformance.log'
-        #request.pyperformance_results = f'{request}/results-data.json.gz'
-        request.pyperformance_results = f'{request}/pyperformance-results.json.gz'
-        if self.context == 'bench':
-            # other directories needed by the job
-            work.venv = f'{work}/pyperformance-venv'
-            work.scratch_dir = f'{work}/pyperformance-scratch'
-            # the results
-            # XXX Is this right?
-            self.pyperformance_results_glob = f'{result}/*.json.gz'
+        # XXX Move these to a subclass?
+        if reqid.kind == 'compile-bench':
+            request.manifest = f'{request}/benchmarks.manifest'
+            #request.pyperformance_config = f'{request}/compile.ini'
+            request.pyperformance_config = f'{request}/pyperformance.ini'
+            #result.pyperformance_log = f'{result}/run.log'
+            result.pyperformance_log = f'{result}/pyperformance.log'
+            #result.pyperformance_results = f'{result}/results-data.json.gz'
+            result.pyperformance_results = f'{result}/pyperformance-results.json.gz'
+            if self.context == 'bench':
+                # other directories needed by the job
+                work.venv = f'{work}/pyperformance-venv'
+                work.scratch_dir = f'{work}/pyperformance-scratch'
+                # the results
+                # XXX Is this right?
+                work.pyperformance_results_glob = f'{work}/*.json.gz'
+        else:
+            raise ValueError(f'unsupported job kind for {reqid}')
 
     def __str__(self):
         return str(self.request)
 
     @property
     def bench_script(self):
-        return self.work.portal_script
+        return self.work.bench_script
 
     @property
     def portal_script(self):
@@ -1530,12 +1534,175 @@ class Jobs:
     def get(self, reqid):
         return self._get(reqid)
 
-    def create(self, reqid):
+    def create(self, reqid, kind_kwargs=None, reqfsattrs=None):
         job = self._get(reqid)
         os.makedirs(job.fs.request.root, exist_ok=True)
         os.makedirs(job.fs.work.root, exist_ok=True)
         os.makedirs(job.fs.result.root, exist_ok=True)
+
+        if reqid.kind == 'compile-bench':
+            req = _resolve_bench_compile_request(
+                reqid,
+                job.fs.work.root,
+                **kind_kwargs,
+            )
+
+            # Write the benchmarks manifest.
+            manifest = _build_pyperformance_manifest(req, self._bench_fs)
+            with open(job.fs.request.manifest, 'w') as outfile:
+                outfile.write(manifest)
+
+            # Write the config.
+            ini = _build_pyperformance_config(req, self._bench_fs)
+            with open(job.fs.request.pyperformance_config, 'w') as outfile:
+                ini.write(outfile)
+
+            # Build the script for the commands to execute remotely.
+            script = _build_compile_script(req, self._bench_fs)
+        else:
+            raise ValueError(f'unsupported job kind in {reqid}')
+
+        # Write metadata.
+        req.save(job.fs.request.metadata)
+        req.result.save(job.fs.result.metadata)
+
+        # Write the commands to execute remotely.
+        with open(job.fs.bench_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(job.fs.bench_script, 0o755)
+
+        # Write the commands to execute locally.
+        script = self._build_send_script(reqid, reqfsattrs)
+        with open(job.fs.portal_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(job.fs.portal_script, 0o755)
+
         return job
+
+    def _build_send_script(self, reqid, resfsfields=None, *,
+                           hidecfg=False,
+                           ):
+        cfg = self._cfg
+        pfiles = self._fs
+        bfiles = self._bench_fs
+
+        jobs_script = _quote_shell_str(JOBS_SCRIPT)
+
+        if not cfg.filename:
+            raise NotImplementedError(cfg)
+        cfgfile = _quote_shell_str(cfg.filename)
+        if hidecfg:
+            benchuser = '$benchuser'
+            user = '$user'
+            host = _host = '$host'
+            port = '$port'
+        else:
+            benchuser = _check_shell_str(cfg.bench_user)
+            user = _check_shell_str(cfg.send_user)
+            host = _check_shell_str(cfg.send_host)
+            port = cfg.send_port
+        conn = f'{benchuser}@{host}'
+
+        if cfg.send_host == 'localhost':
+            ssh = 'ssh -o StrictHostKeyChecking=no'
+            scp = 'scp -o StrictHostKeyChecking=no'
+        else:
+            ssh = 'ssh'
+            scp = 'scp'
+
+        queue_log = _quote_shell_str(pfiles.queue.log)
+        #reqdir = _quote_shell_str(pfiles.requests.current)
+        jobfs = pfiles.resolve_request(reqid)
+        reqdir = _quote_shell_str(jobfs.request.root)
+        results_meta = _quote_shell_str(jobfs.result.metadata)
+        pidfile = _quote_shell_str(jobfs.pidfile)
+
+        bfiles = bfiles.resolve_request(reqid)
+        _check_shell_str(bfiles.request.root)
+        _check_shell_str(bfiles.bench_script)
+        _check_shell_str(bfiles.result.root)
+        _check_shell_str(bfiles.result.metadata)
+
+        resfiles = []
+        for attr in resfsfields or ():
+            pvalue = getattr(jobfs.result, attr)
+            pvalue = _quote_shell_str(pvalue)
+            bvalue = getattr(bfiles.result, attr)
+            _check_shell_str(bvalue)
+            resfiles.append((bvalue, pvalue))
+        resfiles = (f'{scp} -rp -P {port} {conn}:{r[0]} {r[1]}'
+                    for r in resfiles)
+        resfiles = '\n                '.join(resfiles)
+
+        return textwrap.dedent(f'''
+            #!/usr/bin/env bash
+
+            # This script only runs on the portal host.
+            # It does 4 things:
+            #   1. switch to the {user} user, if necessary
+            #   2. prepare the bench host, including sending all
+            #      the request files to the bench host (over SSH)
+            #   3. run the job (e.g. run the benchmarks)
+            #   4. pull the results-related files from the bench host (over SSH)
+
+            # The commands in this script are deliberately explicit
+            # so you can copy-and-paste them selectively.
+
+            cfgfile='{cfgfile}'
+
+            # Mark the script as running.
+            echo "$$" > {pidfile}
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
+            echo
+
+            user=$(jq -r '.send_user' {cfgfile})
+            if [ "$USER" != '{user}' ]; then
+                echo "(switching users from $USER to {user})"
+                echo
+                setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
+                setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
+                # Stop running and re-run this script as the {user} user.
+                exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
+            fi
+            host=$(jq -r '.send_host' {cfgfile})
+            port=$(jq -r '.send_port' {cfgfile})
+
+            exitcode=0
+            if ssh -p {port} {conn} test -e {bfiles.request}; then
+                >&2 echo "request {reqid} was already sent"
+                exitcode=1
+            else
+                ( set -x
+
+                # Set up before running.
+                {ssh} -p {port} {conn} mkdir -p {bfiles.request}
+                {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.request}
+                {ssh} -p {port} {conn} mkdir -p {bfiles.result}
+
+                # Run the request.
+                {ssh} -p {port} {conn} {bfiles.bench_script}
+                exitcode=$?
+
+                # Finish up.
+                # XXX Push from the bench host in run.sh instead of pulling here?
+                {scp} -p -P {port} {conn}:{bfiles.result.metadata} {results_meta}
+                {resfiles}
+                )
+            fi
+
+            # Unstage the request.
+            {sys.executable} {jobs_script} internal-finish-run --config {cfgfile} {reqid}
+
+            # Mark the script as complete.
+            echo
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid} has finished)"
+            #rm -f {pidfile}
+
+            # Trigger the next job.
+            {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {queue_log} 2>&1 &
+
+            exit $exitcode
+        '''[1:-1])
 
     def activate(self, reqid):
         stage_request(reqid, self.fs)
@@ -2114,8 +2281,8 @@ class Request(Metadata):
     def date(self):
         return self.id.date
 
-    def as_jsonable(self):
-        data = super().as_jsonable()
+    def as_jsonable(self, *, withextra=False):
+        data = super().as_jsonable(withextra=withextra)
         data['id'] = str(data['id'])
         data['date'] = self.date.isoformat()
         return data
@@ -2258,8 +2425,8 @@ class Result(Metadata):
             (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
         )
 
-    def as_jsonable(self):
-        data = super().as_jsonable()
+    def as_jsonable(self, *, withextra=False):
+        data = super().as_jsonable(withextra=withextra)
         if self.status is None:
             data['status'] = self.STATUS.CREATED
         data['reqid'] = str(data['reqid'])
@@ -2270,25 +2437,6 @@ class Result(Metadata):
 
 ##################################
 # "compile"
-
-#class CompileBenchFS(JobFS):
-#
-#    def __init__(self, jobsfs, reqid):
-#        super().__init__(jobfs, reqid)
-#        #self.pyperformance_config = f'{self.reqdir}/compile.ini'
-#        self.pyperformance_config = f'{self.reqdir}/pyperformance.ini'
-#        #self.pyperformance_log = f'{self.resdir}/run.log'
-#        self.pyperformance_log = f'{self.resdir}/pyperformance.log'
-#        #self.pyperformance_results = f'{self.reqdir}/results-data.json.gz'
-#        self.pyperformance_results = f'{self.reqdir}/pyperformance-results.json.gz'
-#
-#        if self.kind == 'bench':
-#            # other directories needed by the job
-#            self.venv = f'{self.reqdir}/pyperformance-venv'
-#            self.scratch_dir = f'{self.reqdir}/pyperformance-scratch'
-#            # the results
-#            self.pyperformance_results_glob = f'{self.resdir}/*.json.gz'
-
 
 class BenchCompileRequest(Request):
 
@@ -2370,8 +2518,8 @@ class BenchCompileResult(Result):
         self.pyperformance_results = pyperformance_results
         self.pyperformance_results_orig = pyperformance_results_orig
 
-    def as_jsonable(self):
-        data = super().as_jsonable()
+    def as_jsonable(self, *, withextra=False):
+        data = super().as_jsonable(withextra=withextra)
         for field in ['pyperformance_results', 'pyperformance_results_orig']:
             if not data[field]:
                 del data[field]
@@ -2408,38 +2556,38 @@ def _resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
     return meta
 
 
-def _build_manifest(req, bfiles):
+def _build_pyperformance_manifest(req, bfiles):
     return textwrap.dedent(f'''
         [includes]
         <default>
-        {bfiles.pyston_benchmarks_repo}/benchmarks/MANIFEST
+        {bfiles.repos.pyston_benchmarks}/benchmarks/MANIFEST
     '''[1:-1])
 
 
 def _build_pyperformance_config(req, bfiles):
-    cpython = bfiles.cpython_repo
+    cpython = bfiles.repos.cpython
     bfiles = bfiles.resolve_request(req.id)
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
-    cfg['config']['json_dir'] = bfiles.resdir
+    cfg['config']['json_dir'] = bfiles.result.root
     cfg['config']['debug'] = str(req.debug)
     # XXX pyperformance should be looking in [scm] for this.
     cfg['config']['git_remote'] = req.remote
 
     cfg['scm'] = {}
-    cfg['scm']['repo_dir'] = bfiles.cpython_repo
+    cfg['scm']['repo_dir'] = cpython
     cfg['scm']['git_remote'] = req.remote
     cfg['scm']['update'] = 'True'
 
     cfg['compile'] = {}
-    cfg['compile']['bench_dir'] = bfiles.scratch_dir
+    cfg['compile']['bench_dir'] = bfiles.work.scratch_dir
     cfg['compile']['pgo'] = str(req.optimize)
     cfg['compile']['lto'] = str(req.optimize)
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
-    cfg['run_benchmark']['manifest'] = bfiles.manifest
+    cfg['run_benchmark']['manifest'] = bfiles.request.manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
@@ -2462,16 +2610,17 @@ def _build_compile_script(req, bfiles):
     maybe_branch = req.branch or ''
     _check_shell_str(req.ref)
 
-    cpython_repo = _quote_shell_str(bfiles.cpython_repo)
-    pyperformance_repo = _quote_shell_str(bfiles.pyperformance_repo)
-    pyston_benchmarks_repo = _quote_shell_str(bfiles.pyston_benchmarks_repo)
+    cpython_repo = _quote_shell_str(bfiles.repos.cpython)
+    pyperformance_repo = _quote_shell_str(bfiles.repos.pyperformance)
+    pyston_benchmarks_repo = _quote_shell_str(bfiles.repos.pyston_benchmarks)
 
     bfiles = bfiles.resolve_request(req.id)
-    _check_shell_str(bfiles.pyperformance_config)
-    _check_shell_str(bfiles.pyperformance_log)
+    _check_shell_str(bfiles.work.scratch_dir)
+    _check_shell_str(bfiles.request.pyperformance_config)
+    _check_shell_str(bfiles.result.pyperformance_log)
     _check_shell_str(bfiles.result.metadata)
-    _check_shell_str(bfiles.pyperformance_results)
-    _check_shell_str(bfiles.pyperformance_results_glob)
+    _check_shell_str(bfiles.result.pyperformance_results)
+    _check_shell_str(bfiles.work.pyperformance_results_glob)
 
     _check_shell_str(python)
 
@@ -2572,21 +2721,25 @@ def _build_compile_script(req, bfiles):
         #####################
         # Run the benchmarks.
 
+        ( set -x
+        mkdir -p {bfiles.work.scratch_dir}
+        )
+
         echo "running the benchmarks..."
-        echo "(logging to {bfiles.pyperformance_log})"
+        echo "(logging to {bfiles.result.pyperformance_log})"
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
-            touch {bfiles.pyperformance_log}
-            touch {bfiles.reqdir}//pyperformance-dummy-results.json.gz
+            touch {bfiles.result.pyperformance_log}
+            touch {bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
             ( set -x
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
-                {bfiles.pyperformance_config} \\
+                {bfiles.request.pyperformance_config} \\
                 {req.ref} {maybe_branch} \\
-                2>&1 | tee {bfiles.pyperformance_log}
+                2>&1 | tee {bfiles.result.pyperformance_log}
             )
             exitcode=$?
         fi
@@ -2594,7 +2747,7 @@ def _build_compile_script(req, bfiles):
         #####################
         # Record the results metadata.
 
-        results=$(2>/dev/null ls {bfiles.pyperformance_results_glob})
+        results=$(2>/dev/null ls {bfiles.work.pyperformance_results_glob})
         results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
@@ -2621,127 +2774,11 @@ def _build_compile_script(req, bfiles):
 
         if [ -n "$results" -a -e "$results" ]; then
             ( set -x
-            ln -s $results {bfiles.pyperformance_results}
+            ln -s $results {bfiles.result.pyperformance_results}
             )
         fi
 
         echo "...done!"
-    '''[1:-1])
-
-
-def _build_send_script(cfg, req, pfiles, bfiles, *, hidecfg=False):
-    if not cfg.filename:
-        raise NotImplementedError(cfg)
-    cfgfile = _quote_shell_str(cfg.filename)
-    if hidecfg:
-        benchuser = '$benchuser'
-        user = '$user'
-        host = _host = '$host'
-        port = '$port'
-    else:
-        benchuser = _check_shell_str(cfg.bench_user)
-        user = _check_shell_str(cfg.send_user)
-        host = _check_shell_str(cfg.send_host)
-        port = cfg.send_port
-    conn = f'{benchuser}@{host}'
-
-    queue_log = _quote_shell_str(pfiles.queue.log)
-    #reqdir = _quote_shell_str(pfiles.requests.current)
-    jobfs = pfiles.resolve_request(req.id)
-    reqdir = _quote_shell_str(jobfs.reqdir)
-    results_meta = _quote_shell_str(jobfs.result.metadata)
-    pidfile = _quote_shell_str(jobfs.pidfile)
-    pyperformance_results = _quote_shell_str(jobfs.pyperformance_results)
-    pyperformance_log = _quote_shell_str(jobfs.pyperformance_log)
-
-    bfiles = bfiles.resolve_request(req.id)
-    _check_shell_str(bfiles.request.root)
-    _check_shell_str(bfiles.bench_script)
-    _check_shell_str(bfiles.scratch_dir)
-    _check_shell_str(bfiles.resdir)
-    _check_shell_str(bfiles.result.metadata)
-    _check_shell_str(bfiles.pyperformance_results)
-    _check_shell_str(bfiles.pyperformance_log)
-
-    jobs_script = _quote_shell_str(JOBS_SCRIPT)
-
-    if cfg.send_host == 'localhost':
-        ssh = 'ssh -o StrictHostKeyChecking=no'
-        scp = 'scp -o StrictHostKeyChecking=no'
-    else:
-        ssh = 'ssh'
-        scp = 'scp'
-
-    return textwrap.dedent(f'''
-        #!/usr/bin/env bash
-
-        # This script only runs on the portal host.
-        # It does 4 things:
-        #   1. switch to the {user} user, if necessary
-        #   2. prepare the bench host, including sending all
-        #      the request files to the bench host (over SSH)
-        #   3. run the job (e.g. run the benchmarks)
-        #   4. pull the results-related files from the bench host (over SSH)
-
-        # The commands in this script are deliberately explicit
-        # so you can copy-and-paste them selectively.
-
-        cfgfile='{cfgfile}'
-
-        # Mark the script as running.
-        echo "$$" > {pidfile}
-        echo "(the "'"'"{req.kind}"'"'" job, {req.id}, has started)"
-        echo
-
-        user=$(jq -r '.send_user' {cfgfile})
-        if [ "$USER" != '{user}' ]; then
-            echo "(switching users from $USER to {user})"
-            echo
-            setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
-            setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
-            # Stop running and re-run this script as the {user} user.
-            exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
-        fi
-        host=$(jq -r '.send_host' {cfgfile})
-        port=$(jq -r '.send_port' {cfgfile})
-
-        exitcode=0
-        if ssh -p {port} {conn} test -e {bfiles.reqdir}; then
-            >&2 echo "request {req.id} was already sent"
-            exitcode=1
-        else
-            ( set -x
-
-            # Set up before running.
-            {ssh} -p {port} {conn} mkdir -p {bfiles.reqdir}
-            {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.reqdir}
-            {ssh} -p {port} {conn} mkdir -p {bfiles.scratch_dir}
-            {ssh} -p {port} {conn} mkdir -p {bfiles.resdir}
-
-            # Run the request.
-            {ssh} -p {port} {conn} {bfiles.bench_script}
-            exitcode=$?
-
-            # Finish up.
-            # XXX Push from the bench host in run.sh instead of pulling here?
-            {scp} -p -P {port} {conn}:{bfiles.result.metadata} {result.metadata}
-            {scp} -rp -P {port} {conn}:{bfiles.pyperformance_results} {pyperformance_results}
-            {scp} -rp -P {port} {conn}:{bfiles.pyperformance_log} {pyperformance_log}
-            )
-        fi
-
-        # Unstage the request.
-        {sys.executable} {jobs_script} internal-finish-run --config {cfgfile} {req.id}
-
-        # Mark the script as complete.
-        echo
-        echo "(the "'"'"{req.kind}"'"'" job, {req.id} has finished)"
-        #rm -f {pidfile}
-
-        # Trigger the next job.
-        {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {queue_log} 2>&1 &
-
-        exit $exitcode
     '''[1:-1])
 
 
@@ -2797,45 +2834,21 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               ):
     if not reqid:
         raise NotImplementedError
-    job = jobs.create(reqid)
-
-    # XXX Move most of this into Jobs.create().
-
-    print(f'generating request files in {job.fs.request}...')
-
-    req = _resolve_bench_compile_request(
-        reqid, job.fs.work.root, remote, revision, branch, benchmarks,
-        optimize=optimize,
-        debug=debug,
+    assert reqid.kind == 'compile-bench', reqid
+    reqroot = jobs.fs.resolve_request(reqid).request.root
+    print(f'generating request files in {reqroot}...')
+    job = jobs.create(
+        reqid,
+        dict(
+            revision=revision,
+            remote=remote,
+            branch=branch,
+            benchmarks=benchmarks,
+            optimize=optimize,
+            debug=debug,
+        ),
+        ['pyperformance_results', 'pyperformance_log'],
     )
-    result = req.result
-
-    # Write metadata.
-    req.save(job.fs.request.metadata)
-    result.save(job.fs.result.metadata)
-
-    # Write the benchmarks manifest.
-    manifest = _build_manifest(req, jobs.bench_fs)
-    with open(job.fs.manifest, 'w') as outfile:
-        outfile.write(manifest)
-
-    # Write the config.
-    ini = _build_pyperformance_config(req, jobs.fs, jobs.bench_fs)
-    with open(job.fs.pyperformance_config, 'w') as outfile:
-        ini.write(outfile)
-
-    # Write the commands to execute remotely.
-    script = _build_compile_script(req, jobs.bench_fs)
-    with open(job.fs.bench_script, 'w') as outfile:
-        outfile.write(script)
-    os.chmod(job.fs.bench_script, 0o755)
-
-    # Write the commands to execute locally.
-    script = _build_send_script(cfg, req, jobs.fs, jobs.bench_fs)
-    with open(job.fs.portal_script, 'w') as outfile:
-        outfile.write(script)
-    os.chmod(job.fs.portal_script, 0o755)
-
     print('...done (generating request files)')
     print()
     # XXX Show something better?
