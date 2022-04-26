@@ -1441,11 +1441,11 @@ class Job:
 
         if fmt == 'summary':
             yield f'Request {self.reqid}:'
-            yield f'  {"kind:":20} {req.kind}'
-            yield f'  {"user:":20} {req.user}'
+            yield f'  {"kind:":22} {req.kind}'
+            yield f'  {"user:":22} {req.user}'
             if pid:
-                yield f'  {"PID:":20} {pid}'
-            yield f'  {"status:":20} {res.status}'
+                yield f'  {"PID:":22} {pid}'
+            yield f'  {"status:":22} {res.status}'
             yield ''
             yield 'Details:'
             for field in req_cls.FIELDS:
@@ -1454,25 +1454,29 @@ class Job:
                 value = getattr(req, field)
                 if isinstance(value, str) and value.strip() != value:
                     value = repr(value)
-                yield f'  {field + ":":20} {value}'
+                yield f'  {field + ":":22} {value}'
             yield ''
             yield 'History:'
             for st, ts in res.history:
-                yield f'  {st + ":":20} {ts:%Y-%m-%d %H:%M:%S}'
+                yield f'  {st + ":":22} {ts:%Y-%m-%d %H:%M:%S}'
             yield ''
             yield 'Request files:'
-            yield f'  {"data root:":20} {_render_file(req.reqdir)}'
-            yield f'  {"metadata:":20} {_render_file(self._fs.request.metadata)}'
+            yield f'  {"data root:":22} {_render_file(req.reqdir)}'
+            yield f'  {"metadata:":22} {_render_file(self._fs.request.metadata)}'
             for field in reqfs_fields:
-                value = _render_file(getattr(self._fs, field, None))
-                yield f'  {field + ":":20} {value}'
+                value = getattr(self._fs.request, field, None)
+                if value is None:
+                    value = getattr(self._fs.work, field, None)
+                yield f'  {field + ":":22} {_render_file(value)}'
             yield ''
             yield 'Result files:'
-            yield f'  {"data root:":20} {_render_file(self._fs.result)}'
-            yield f'  {"metadata:":20} {_render_file(self._fs.result.metadata)}'
+            yield f'  {"data root:":22} {_render_file(self._fs.result)}'
+            yield f'  {"metadata:":22} {_render_file(self._fs.result.metadata)}'
             for field in resfs_fields:
-                value = _render_file(getattr(self._fs, field, None))
-                yield f'  {field + ":":20} {value}'
+                value = getattr(self._fs.result, field, None)
+                if value is None:
+                    value = getattr(self._fs.work, field, None)
+                yield f'  {field + ":":22} {_render_file(value)}'
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
 
