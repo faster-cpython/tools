@@ -1508,6 +1508,12 @@ class Job:
         req = req_cls.load(self._fs.request.metadata)
         res = res_cls.load(self._fs.result.metadata)
         pid = PIDFile(self._fs.pidfile).read()
+        try:
+            staged = _get_staged_request(self._fs.jobs)
+        except StagedRequestError:
+            isstaged = False
+        else:
+            isstaged = (self.reqid == staged)
 
         if fmt == 'summary':
             yield f'Request {self.reqid}:'
@@ -1516,6 +1522,7 @@ class Job:
             if pid:
                 yield f'  {"PID:":22} {pid}'
             yield f'  {"status:":22} {res.status or "(created)"}'
+            yield f'  {"is staged:":22} {isstaged}'
             yield ''
             yield 'Details:'
             for field in req_cls.FIELDS:
