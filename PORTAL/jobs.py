@@ -60,6 +60,24 @@ def _validate_string(value, argname=None, *, required=True):
         raise TypeError(f'expected str{label}, got {value!r}')
 
 
+def _parse_slice(raw, length):
+    start = 0
+    stop = length
+    if not raw:
+        pass
+    elif not isinstance(raw, str):
+        raise TypeError(f'expected str, got {raw!r}')
+    elif raw.startswith('-') and raw[1:].isdigit():
+        start = int(raw)
+    elif raw.isdigit():
+        stop = int(raw)
+    else:
+        raise ValueError(f'expected int, got {raw!r}')
+    s = slice(start, stop)
+    start, stop, _ = s.indices(length)
+    return s, stop - start
+
+
 ##################################
 # file utils
 
@@ -2800,20 +2818,23 @@ def show_file(filename):
         logger.info(f'  %s', line)
 
 
-def cmd_list(jobs):
+def cmd_list(jobs, range=None):
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
-    total = 0
     requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
-    for job in sorted(jobs.iter_all(), key=(lambda j: j.reqid)):
+    jobs = sorted(jobs.iter_all(), key=(lambda j: j.reqid))
+    total = len(jobs)
+    range, count = _parse_slice(range, total)
+    for job in jobs[range]:
         #for line in job.render(fmt='row'):
         #    print(line)
         reqid = job.reqid
         status = job.get_status()
-        total += 1
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
-    print()
-    print(f'(total: {total})')
+    logger.info('')
+    if count != total:
+        logger.info('(showing: %s)', count)
+    logger.info('(total: %s)', total)
 
 
 def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
@@ -3298,6 +3319,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         return subs.add_parser(name, parents=[common, *parents], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
+    sub.add_argument('--range')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=0,
