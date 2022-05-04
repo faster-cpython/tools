@@ -1460,7 +1460,7 @@ class Job:
             yield f'  {"user:":22} {req.user}'
             if pid:
                 yield f'  {"PID:":22} {pid}'
-            yield f'  {"status:":22} {res.status}'
+            yield f'  {"status:":22} {res.status or "(created)"}'
             yield ''
             yield 'Details:'
             for field in req_cls.FIELDS:
