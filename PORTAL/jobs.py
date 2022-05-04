@@ -2600,6 +2600,8 @@ def _build_pyperformance_config(req, bfiles):
 def _build_compile_script(req, bfiles, exitcode=None):
     if exitcode is None:
         exitcode = ''
+    elif exitcode != '':
+        logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
     python = 'python3.9'  # On the bench host:
     numjobs = 20
 
