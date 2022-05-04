@@ -1240,6 +1240,16 @@ class JobFS(types.SimpleNamespace):
         return str(self.request)
 
     @property
+    def jobs(self):
+        dirname, reqid = os.path.split(self.request)
+        if str(self.reqid) != reqid:
+            raise NotImplementedError
+        root, requests = os.path.split(dirname)
+        if requests != 'REQUESTS':
+            raise NotImplementedError
+        return JobsFS(root)
+
+    @property
     def bench_script(self):
         return self.work.bench_script
 
