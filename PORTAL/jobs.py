@@ -1539,12 +1539,16 @@ class Jobs:
         return self._get(reqid)
 
     def create(self, reqid, kind_kwargs=None, reqfsattrs=None):
+        if kind_kwargs is None:
+            kind_kwargs = {}
+
         job = self._get(reqid)
         os.makedirs(job.fs.request.root, exist_ok=True)
         os.makedirs(job.fs.work.root, exist_ok=True)
         os.makedirs(job.fs.result.root, exist_ok=True)
 
         if reqid.kind == 'compile-bench':
+            exitcode = kind_kwargs.pop('exitcode', None)
             req = _resolve_bench_compile_request(
                 reqid,
                 job.fs.work.root,
@@ -1562,7 +1566,7 @@ class Jobs:
                 ini.write(outfile)
 
             # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, self._bench_fs)
+            script = _build_compile_script(req, self._bench_fs, exitcode)
         else:
             raise ValueError(f'unsupported job kind in {reqid}')
 
@@ -2599,7 +2603,9 @@ def _build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def _build_compile_script(req, bfiles):
+def _build_compile_script(req, bfiles, exitcode=None):
+    if exitcode is None:
+        exitcode = ''
     python = 'python3.9'  # On the bench host:
     numjobs = 20
 
@@ -2627,9 +2633,6 @@ def _build_compile_script(req, bfiles):
     _check_shell_str(bfiles.work.pyperformance_results_glob)
 
     _check_shell_str(python)
-
-    # Set this to a number to skip actually running pyperformance.
-    exitcode = ''
 
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
@@ -2835,6 +2838,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               benchmarks=None,
                               optimize=False,
                               debug=False,
+                              exitcode=None,
                               ):
     if not reqid:
         raise NotImplementedError
@@ -2850,6 +2854,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
             benchmarks=benchmarks,
             optimize=optimize,
             debug=debug,
+            exitcode=exitcode,
         ),
         ['pyperformance_results', 'pyperformance_log'],
     )
@@ -3228,8 +3233,11 @@ COMMANDS = {
 def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
 
+    add_hidden = ('-h' not in argv and '--help' not in argv)
+
     ##########
     # First, pull out the common args.
+
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('--config', dest='cfgfile')
     args, argv = common.parse_known_args(argv)
@@ -3237,6 +3245,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     ##########
     # Create the top-level parser.
+
     parser = argparse.ArgumentParser(
         prog=prog,
         parents=[common],
@@ -3246,8 +3255,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add the subcommands for managing jobs.
 
-    def add_cmd(name, subs=subs, **kwargs):
-        return subs.add_parser(name, parents=[common], **kwargs)
+    def add_cmd(name, subs=subs, *, parents=(), **kwargs):
+        return subs.add_parser(name, parents=[common, *parents], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
 
@@ -3303,10 +3312,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                          action='store_const', const=('run',))
     _common.add_argument('--no-run', dest='after',
                          action='store_const', const=())
+    add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
 
     # This is the default (and the only one, for now).
-    sub = jobs.add_parser('compile-bench', parents=[common, _common],
-                          help='Request a compile-and-run-benchmarks job')
+    sub = add_job('compile-bench',
+                  help='Request a compile-and-run-benchmarks job')
     sub.add_argument('--optimize', dest='optimize',
                      action='store_const', const=True,
                      help='(the default)')
@@ -3316,6 +3326,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub.add_argument('--branch')
     sub.add_argument('--remote', required=True)
     sub.add_argument('revision')
+    if add_hidden:
+        # Use these flags to skip actually running pyperformance.
+        sub.add_argument('--fake-success', dest='exitcode',
+                         action='store_const', const=0)
+        sub.add_argument('--fake-failure', dest='exitcode',
+                         action='store_const', const=1)
 
     ##########
     # Add the "queue" subcomamnds.
@@ -3356,10 +3372,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add internal commands.
 
-    sub = add_cmd('internal-finish-run', help='(internal-only; do not use)')
-    sub.add_argument('reqid')
+    if add_hidden:
+        sub = add_cmd('internal-finish-run')
+        sub.add_argument('reqid')
 
-    sub = add_cmd('internal-run-next', help='(internal-only; do not use)')
+        sub = add_cmd('internal-run-next')
 
     ##########
     # Finally, parse the args.
@@ -3372,7 +3389,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     cmd = ns.pop('cmd')
 
     if cmd in ('add', 'request'):
-        cmd = 'request-' + ns.pop('job')
+        job = ns.pop('job')
+        cmd = f'request-{job}'
     elif cmd == 'config':
         cmd = 'config-show'
     elif cmd == 'queue':
