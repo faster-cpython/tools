@@ -885,6 +885,29 @@ def _is_proc_running(pid):
         return True
 
 
+class MetadataError(ValueError):
+    def __init__(self, msg=None):
+        super().__init__(msg or 'metadata-related error')
+
+
+class MissingMetadataError(MetadataError):
+    def __init__(self, msg=None, source=None):
+        if not msg:
+            msg = 'missing metadata'
+            if source:
+                msg = f'{msg} (in {{source}})'
+        super().__init__(msg.format(source=source))
+
+
+class InvalidMetadataError(MetadataError):
+    def __init__(self, msg=None, source=None):
+        if not msg:
+            msg = 'invalid metadata'
+            if source:
+                msg = f'{msg} (in {{source}})'
+        super().__init__(msg.format(source=source))
+
+
 class Metadata(types.SimpleNamespace):
 
     FIELDS = None
@@ -1367,8 +1390,24 @@ class Job:
     def load_result(self):
         return Result.load(self._fs.result.metadata)
 
-    def get_status(self):
-        return Result.read_status(self._fs.result.metadata)
+    def get_status(self, *, fail=True):
+        try:
+            return Result.read_status(self._fs.result.metadata)
+        except FileNotFoundError:
+            # XXX Create it?
+            if fail:
+                raise
+            return None
+        except MissingMetadataError:
+            # XXX Re-create it?
+            if fail:
+                raise
+            return None
+        except InvalidMetadataError:
+            # XXX Fix it?
+            if fail:
+                raise
+            return None
 
     def set_status(self, status):
         status = Result.resolve_status(status)
@@ -1851,7 +1890,7 @@ def _get_staged_request(pfiles):
 
 def stage_request(reqid, pfiles):
     jobfs = pfiles.resolve_request(reqid)
-    status = Result.read_status(jobfs.result.metadata)
+    status = Result.read_status(jobfs.result.metadata, fail=False)
     if status is not Result.STATUS.PENDING:
         raise RequestNotPendingError(reqid, status)
     try:
@@ -2347,12 +2386,33 @@ class Result(Metadata):
             raise ValueError(f'unsupported status {status!r}')
 
     @classmethod
-    def read_status(cls, metafile):
-       text = _read_file(metafile, fail=False)
-       if not text:
-           return None
-       data = json.loads(text)
-       return cls._STATUS_BY_VALUE.get(data.get('status'))
+    def read_status(cls, metafile, *, fail=True):
+        missing = None
+        text = _read_file(metafile, fail=fail)
+        if text is None:
+            return None
+        elif not text:
+            missing = True
+        elif text:
+            try:
+                data = json.loads(text)
+            except json.decoder.JSONDecodeError:
+                missing = False
+            else:
+                if 'status' not in data:
+                    missing = True
+                else:
+                    status = data['status']
+                    try:
+                        return cls._STATUS_BY_VALUE[status]
+                    except KeyError:
+                        missing = False
+        if not fail:
+            return None
+        elif missing:
+            raise MissingMetadataError(source=metafile)
+        else:
+            raise InvalidMetadataError(source=metafile)
 
     def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
         if not reqid:
@@ -2829,7 +2889,7 @@ def cmd_list(jobs, range=None):
         #for line in job.render(fmt='row'):
         #    print(line)
         reqid = job.reqid
-        status = job.get_status()
+        status = job.get_status(fail=False)
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
     logger.info('')
     if count != total:
