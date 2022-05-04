@@ -153,6 +153,9 @@ class FSTree(types.SimpleNamespace):
     def __str__(self):
         return self.root
 
+    def __fspath__(self):
+        return self.root
+
 
 class InvalidPIDFileError(RuntimeError):
 
@@ -1231,6 +1234,9 @@ class JobFS(types.SimpleNamespace):
             raise ValueError(f'unsupported job kind for {reqid}')
 
     def __str__(self):
+        return str(self.request)
+
+    def __fspath__(self):
         return str(self.request)
 
     @property
