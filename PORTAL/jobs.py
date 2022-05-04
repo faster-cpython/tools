@@ -1428,7 +1428,7 @@ class Job:
     def set_status(self, status):
         status = Result.resolve_status(status)
         result = self.load_result()
-        result.set_status(Result.STATUS.ACTIVE)
+        result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
     def run(self, *, background=False):
