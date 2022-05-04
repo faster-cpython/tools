@@ -462,7 +462,7 @@ class LogSection(types.SimpleNamespace):
 # git utils
 
 def git(*args, GIT=shutil.which('git')):
-    logger.info(f'# running: {" ".join(args)}')
+    logger.debug('# running: %s', ' '.join(args))
     proc = subprocess.run(
         [GIT, *args],
         stdout=subprocess.PIPE,
@@ -1716,21 +1716,25 @@ class Jobs:
         return job
 
     def ensure_next(self):
+        logger.debug('Making sure a job is running, if possible')
         # XXX Return (queued job, already running job).
         job = self.get_current()
         if job is not None:
-            # The running job will kick off the next one.
+            logger.debug('A job is already running (and will kick off the next one from the queue)')
             # XXX Check the pidfile.
             return
         queue = self.queue.snapshot
         if queue.paused:
+            logger.debug('No job is running but the queue is paused')
             return
         if not queue:
+            logger.debug('No job is running and none are queued')
             return
         # Run in the background.
         cfgfile = self._cfg.filename
         if not cfgfile:
             raise NotImplementedError
+        logger.debug('No job is running so we will run the next one from the queue')
         cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
         subprocess.run(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &', shell=True)
         #cmd_run_next(common)
@@ -3071,6 +3075,8 @@ def cmd_queue_pause(jobs):
        jobs.queue.pause()
     except JobQueuePausedError:
         logger.warn('job queue was already paused')
+    else:
+        logger.info('job queue paused')
 
 
 def cmd_queue_unpause(jobs):
@@ -3079,6 +3085,7 @@ def cmd_queue_unpause(jobs):
     except JobQueueNotPausedError:
         logger.warn('job queue was not paused')
     else:
+        logger.info('job queue unpaused')
         jobs.ensure_next()
 
 
@@ -3475,14 +3482,14 @@ def main(cmd, cmd_kwargs, cfgfile=None):
             sys.exit(f'unsupported "after" cmd {_cmd!r}')
         after.append((_cmd, _run_cmd))
 
-    logger.info('')
-    logger.info('# PID: %s', PID)
+    logger.debug('')
+    logger.debug('# PID: %s', PID)
 
     # Load the config.
     if not cfgfile:
         cfgfile = PortalConfig.find_config()
-    logger.info('')
-    logger.info('# loading config from %s', cfgfile)
+    logger.debug('')
+    logger.debug('# loading config from %s', cfgfile)
     cfg = PortalConfig.load(cfgfile)
 
     jobs = Jobs(cfg)
