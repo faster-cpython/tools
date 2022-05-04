@@ -3036,6 +3036,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
             except NoRunningJobError:
                 logger.warn('job just finished')
         else:
+            cmd_queue_remove(jobs, reqid)
             job = jobs.get(reqid)
             job.cancel(ifstatus=_status)
 
