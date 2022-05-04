@@ -462,7 +462,7 @@ class LogSection(types.SimpleNamespace):
 # git utils
 
 def git(*args, GIT=shutil.which('git')):
-    print(f'# running: {" ".join(args)}')
+    logger.info(f'# running: {" ".join(args)}')
     proc = subprocess.run(
         [GIT, *args],
         stdout=subprocess.PIPE,
@@ -1749,7 +1749,7 @@ class Jobs:
             unstage_request(job.reqid, self._fs)
         except RequestNotStagedError:
             pass
-        print('# done unstaging request')
+        logger.info('# done unstaging request')
         return job
 
     def finish_successful(self, reqid):
@@ -1758,7 +1758,7 @@ class Jobs:
             unstage_request(reqid, self._fs)
         except RequestNotStagedError:
             pass
-        print('# done unstaging request')
+        logger.info('# done unstaging request')
 
         job = self._get(reqid)
         job.close()
@@ -2787,11 +2787,11 @@ def _build_compile_script(req, bfiles, exitcode=None):
 # commands
 
 def show_file(filename):
-    print(f'(from {filename})')
-    print()
+    logger.info('(from %s)', filename)
+    logger.info('')
     text = _read_file(filename)
     for line in text.splitlines():
-        print(f'  {line}')
+        logger.info(f'  %s', line)
 
 
 def cmd_list(jobs):
@@ -2838,7 +2838,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
         raise NotImplementedError
     assert reqid.kind == 'compile-bench', reqid
     reqroot = jobs.fs.resolve_request(reqid).request.root
-    print(f'generating request files in {reqroot}...')
+    logger.info('generating request files in %s...', reqroot)
     job = jobs.create(
         reqid,
         dict(
@@ -2852,8 +2852,8 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
         ),
         ['pyperformance_results', 'pyperformance_log'],
     )
-    print('...done (generating request files)')
-    print()
+    logger.info('...done (generating request files)')
+    logger.info('')
     # XXX Show something better?
     show_file(job.fs.request.metadata)
 
@@ -2881,15 +2881,15 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
             return
 
     # Try staging it directly.
-    print('# staging request')
+    logger.info('# staging request')
     try:
         job = jobs.activate(reqid)
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
         sys.exit(f'ERROR: {exc}')
     except Exception:
-        print('ERROR: Could not stage request')
-        print()
+        logger.error('could not stage request')
+        logger.info()
         job = jobs.get(reqid)
         job.set_status('failed')
         raise  # re-raise
@@ -2901,13 +2901,14 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
     if not reqid:
         job = jobs.get_current()
         if not job:
-            sys.exit('ERROR: no current request to attach')
+            logger.error('no current request to attach')
+            sys.exit(1)
     else:
         job = jobs.get(reqid)
     try:
         job.attach(lines)
     except JobNeverStartedError:
-        print(f'WARNING: job not started')
+        logger.warn('job not started')
 
 
 def cmd_cancel(jobs, reqid=None, *, _status=None):
@@ -2915,20 +2916,21 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         try:
             job = jobs.cancel_current(ifstatus=_status)
         except NoRunningJobError:
-            sys.exit('ERROR: no current request to cancel')
+            logger.error('no current request to cancel')
+            sys.exit(1)
     else:
         current = jobs.get_current()
         if current and reqid == current.reqid:
             try:
                 job = jobs.cancel_current(current, ifstatus=_status)
             except NoRunningJobError:
-                print('WARNING: job just finished')
+                logger.warn('job just finished')
         else:
             job = jobs.get(reqid)
             job.cancel(ifstatus=_status)
 
-    print()
-    print('Results:')
+    logger.info('')
+    logger.info('Results:')
     # XXX Show something better?
     show_file(job.fs.result.metadata)
 
@@ -2936,25 +2938,25 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
 def cmd_finish_run(jobs, reqid):
     job = jobs.finish_successful(reqid)
 
-    print()
-    print('Results:')
+    logger.info('')
+    logger.info('Results:')
     # XXX Show something better?
     show_file(job.fs.result.metadata)
 
 
 def cmd_run_next(jobs):
     logentry = LogSection.from_title('Running next queued job')
-    print()
+    logger.critical('')
     for line in logentry.render():
-        print(line)
-    print()
+        logger.critical(line)
+    logger.critical('')
 
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
-        print('done (job queue is paused)')
+        logger.info('done (job queue is paused)')
     except JobQueueEmptyError:
-        print('done (job queue is empty)')
+        logger.info('done (job queue is empty)')
         return
 
     try:
@@ -2962,38 +2964,38 @@ def cmd_run_next(jobs):
             job = jobs.get(reqid)
             status = job.get_status()
         except Exception:
-            print(f'ERROR: Could not load results metadata')
-            print(f'WARNING: {reqid} status could not be updated (to "failed")')
-            print()
+            logger.error('could not load results metadata')
+            logger.warning('%s status could not be updated (to "failed")', reqid)
+            logger.error('')
             traceback.print_exc()
-            print()
-            print('trying next job...')
+            logger.info('')
+            logger.info('trying next job...')
             cmd_run_next(jobs)
             return
 
         if not status:
-            print(f'WARNING: queued request ({reqid}) not found')
-            print('trying next job...')
+            logger.warn('queued request (%s) not found', reqid)
+            logger.info('trying next job...')
             cmd_run_next(jobs)
             return
         elif status is not Result.STATUS.PENDING:
-            print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
+            logger.warn('expected "pending" status for queued request %s, got %r', reqid, status)
             # XXX Give the option to force the status to "active"?
-            print('trying next job...')
+            logger.info('trying next job...')
             cmd_run_next(jobs)
             return
 
         # We're okay to run the job.
-        print(f'Running next job from queue ({reqid})')
-        print()
+        logger.info('Running next job from queue (%s)', reqid)
+        logger.info()
         try:
             cmd_run(jobs, reqid, _usequeue=False)
         except RequestAlreadyStagedError:
             if reqid == exc.curid:
-                print(f'{reqid} is already running')
+                logger.warn('%s is already running', reqid)
                 # XXX Check the pidfile?
             else:
-                print(f'another job is already running, adding {reqid} back to the queue')
+                logger.warn('another job is already running, adding %s back to the queue', reqid)
                 jobs.queue.unpop(reqid)
     except KeyboardInterrupt:
         cmd_cancel(jobs, reqid, _status=Result.STATUS.PENDING)
@@ -3047,25 +3049,9 @@ def cmd_queue_info(jobs, *, withlog=True):
             print('  (log is empty)')
 
 
-def cmd_queue_pause(jobs):
-    try:
-       jobs.queue.pause()
-    except JobQueuePausedError:
-        print('WARNING: job queue was already paused')
-
-
-def cmd_queue_unpause(jobs):
-    try:
-       jobs.queue.unpause()
-    except JobQueueNotPausedError:
-        print('WARNING: job queue was not paused')
-    else:
-        jobs.ensure_next()
-
-
 def cmd_queue_list(jobs):
     if jobs.queue.paused:
-        print('WARNING: job queue is paused')
+        logger.warn('job queue is paused')
 
     if not jobs.queue:
         print('no jobs queued')
@@ -3078,51 +3064,70 @@ def cmd_queue_list(jobs):
     print(f'(total: {i})')
 
 
+def cmd_queue_pause(jobs):
+    try:
+       jobs.queue.pause()
+    except JobQueuePausedError:
+        logger.warn('job queue was already paused')
+
+
+def cmd_queue_unpause(jobs):
+    try:
+       jobs.queue.unpause()
+    except JobQueueNotPausedError:
+        logger.warn('job queue was not paused')
+    else:
+        jobs.ensure_next()
+
+
 def cmd_queue_push(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
-    print(f'Adding job {reqid} to the queue')
+    logger.info(f'Adding job {reqid} to the queue')
     job = jobs.get(reqid)
 
     status = job.get_status()
     if not status:
-        sys.exit(f'ERROR: request {reqid} not found')
+        logger.error('request %s not found', reqid)
+        sys.exit(1)
     elif status is not Result.STATUS.CREATED:
-        sys.exit(f'ERROR: request {reqid} has already been used')
+        logger.error('request %s has already been used', reqid)
+        sys.exit(1)
 
     if jobs.queue.paused:
-        print('WARNING: job queue is paused')
+        logger.warn('job queue is paused')
 
     try:
         pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
         for pos, queued in enumerate(jobs.queue, 1):
             if queued == reqid:
-                print(f'WARNING: {reqid} was already queued')
+                logger.warn('%s was already queued', reqid)
                 break
         else:
             raise NotImplementedError
 
     job.set_status('pending')
 
-    print(f'{reqid} added to the job queue at position {pos}')
+    logger.info('%s added to the job queue at position %s', reqid, pos)
 
 
 def cmd_queue_pop(jobs):
-    print(f'Popping the next job from the queue...')
+    logger.info(f'Popping the next job from the queue...')
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
-        print('WARNING: job queue is paused')
+        logger.warn('job queue is paused')
         return
     except JobQueueEmptyError:
-        sys.exit('ERROR: job queue is empty')
+        logger.error('job queue is empty')
+        sys.exit(1)
     job = jobs.get(reqid)
 
     status = job.get_status()
     if not status:
-        print(f'WARNING: queued request ({reqid}) not found')
+        logger.warn('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        print(f'WARNING: expected "pending" status for queued request {reqid}, got {status!r}')
+        logger.warn(f'expected "pending" status for queued request %s, got %r', reqid, status)
         # XXX Give the option to force the status to "active"?
     else:
         # XXX Set the status to "active"?
@@ -3140,47 +3145,48 @@ def cmd_queue_move(jobs, reqid, position, relative=None):
 
     reqid = RequestID.from_raw(reqid)
     if relative:
-        print(f'Moving job {reqid} {relative}{position} in the queue...')
+        logger.info('Moving job %s %s%s in the queue...', reqid, relative, position)
     else:
-        print(f'Moving job {reqid} to position {position} in the queue...')
+        logger.info('Moving job %s to position %s in the queue...', reqid, position)
     job = jobs.get(reqid)
 
     if jobs.queue.paused:
-        print('WARNING: job queue is paused')
+        logger.warn('job queue is paused')
 
     status = job.get_status()
     if not status:
-        sys.exit(f'ERROR: request {reqid} not found')
+        logger.error('request %s not found', reqid)
+        sys.exit(1)
     elif status is not Result.STATUS.PENDING:
-        print(f'WARNING: request {reqid} has been updated since queued')
+        logger.warn('request %s has been updated since queued', reqid)
 
     pos = jobs.queue.move(reqid, position, relative)
-    print(f'...moved to position {pos}')
+    logger.info('...moved to position %s', pos)
 
 
 def cmd_queue_remove(jobs, reqid):
     reqid = RequestID.from_raw(reqid)
-    print(f'Removing job {reqid} from the queue...')
+    logger.info('Removing job %s from the queue...', reqid)
     job = jobs.get(reqid)
 
     if jobs.queue.paused:
-        print('WARNING: job queue is paused')
+        logger.warn('job queue is paused')
 
     status = job.get_status()
     if not status:
-        print(f'WARNING: request {reqid} not found')
+        logger.warn('request %s not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        print(f'WARNING: request {reqid} has been updated since queued')
+        logger.warn('request %s has been updated since queued', reqid)
 
     try:
         jobs.queue.remove(reqid)
     except JobNotQueuedError:
-        print(f'WARNING: {reqid} was not queued')
+        logger.warn('%s was not queued', reqid)
 
     if status is Result.STATUS.PENDING:
         job.set_status('created')
 
-    print('...done!')
+    logger.info('...done!')
 
 
 def cmd_config_show(jobs):
@@ -3467,14 +3473,14 @@ def main(cmd, cmd_kwargs, cfgfile=None):
             sys.exit(f'unsupported "after" cmd {_cmd!r}')
         after.append((_cmd, _run_cmd))
 
-    print()
-    print(f'# PID: {PID}')
+    logger.info('')
+    logger.info('# PID: %s', PID)
 
     # Load the config.
     if not cfgfile:
         cfgfile = PortalConfig.find_config()
-    print()
-    print(f'# loading config from {cfgfile}')
+    logger.info('')
+    logger.info('# loading config from %s', cfgfile)
     cfg = PortalConfig.load(cfgfile)
 
     jobs = Jobs(cfg)
@@ -3495,24 +3501,24 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     reqid = cmd_kwargs.get('reqid')
 
     # Run the command.
-    print()
-    print('#'*40)
+    logger.info('')
+    logger.info('#'*40)
     if reqid:
-        print(f'# Running {cmd!r} command for request {reqid}')
+        logger.info('# Running %r command for request %s', cmd, reqid)
     else:
-        print(f'# Running {cmd!r} command')
-    print()
+        logger.info('# Running %r command', cmd)
+    logger.info('')
     run_cmd(jobs, **cmd_kwargs)
 
     # Run "after" commands, if any
     for cmd, run_cmd in after:
-        print()
-        print('#'*40)
+        logger.info('')
+        logger.info('#'*40)
         if reqid:
-            print(f'# Running {cmd!r} command for request {reqid}')
+            logger.info('# Running %r command for request %s', cmd, reqid)
         else:
-            print(f'# Running {cmd!r} command')
-        print()
+            logger.info('# Running %r command', cmd)
+        logger.info('')
         # XXX Add --lines='-1' for attach.
         run_cmd(jobs, reqid=reqid)
 
