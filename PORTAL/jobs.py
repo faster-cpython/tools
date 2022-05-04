@@ -36,6 +36,9 @@ JOBS_SCRIPT = os.path.abspath(__file__)
 # XXX "bench" -> "worker"?
 
 
+logger = logging.getLogger(__name__)
+
+
 ##################################
 # string utils
 
@@ -80,8 +83,7 @@ def _read_file(filename, *, fail=True):
         if fail:
             raise  # re-raise
         if os.path.exists(filename):
-            # XXX Use a logger.
-            print(f'WARNING: could not load PID file {filename!r}')
+            logger.warn('could not load PID file %r', filename)
         return None
 
 
@@ -175,8 +177,7 @@ class PIDFile:
                 raise InvalidPIDFileError(self._filename, text)
         elif invalid == 'remove':
             def handle_invalid(text):
-                # XXX Use a logger.
-                print(f'WARNING: Removing invalid PID file ({self._filename})')
+                logger.warn('removing invalid PID file (%s)', self._filename)
                 self.remove()
                 return None
         else:
@@ -200,8 +201,7 @@ class PIDFile:
             if orphaned == 'fail':
                 raise OrphanedPIDFileError(self._filename, pid)
             elif orphaned == 'remove':
-                # XXX Use a logger.
-                print(f'WARNING: Removing orphaned PID file ({self._filename})')
+                logger.warn('removing orphaned PID file (%s)', self._filename)
                 self.remove()
                 return None
             else:
@@ -231,16 +231,14 @@ class PIDFile:
                 pidfile.write(f'{pid}')
             return pid
         except OSError as exc:
-            # XXX Use a logger.
-            print(f'WARNING: Failed to create PID file ({self._filename}): {exc}')
+            logger.warn('failed to create PID file (%s): %s', self._filename, exc)
             return None
 
     def remove(self):
         try:
             os.unlink(self._filename)
         except FileNotFoundError:
-            # XXX Use a logger.
-            print(f'WARNING: lock file not found ({self._filename})')
+            logger.warn('lock file not found (%s)', self._filename)
 
 
 class LockFile:
@@ -1377,8 +1375,7 @@ class Job:
     def kill(self):
         pid = self.get_pid()
         if pid:
-            # XXX Use a logger.
-            print(f'# killing PID {pid}')
+            logger.info('# killing PID %s', pid)
             os.kill(pid, signal.SIGKILL)
 
     def attach(self, lines=None):
@@ -1747,8 +1744,7 @@ class Jobs:
             job = self._get(reqid)
         job.cancel(ifstatus=_status)
 
-        # XXX Use a logger.
-        print(f'# unstaging request {reqid}')
+        logger.info('# unstaging request %s', reqid)
         try:
             unstage_request(job.reqid, self._fs)
         except RequestNotStagedError:
@@ -1757,8 +1753,7 @@ class Jobs:
         return job
 
     def finish_successful(self, reqid):
-        # XXX Use a logger.
-        print(f'# unstaging request {reqid}')
+        logger.info('# unstaging request %s', reqid)
         try:
             unstage_request(reqid, self._fs)
         except RequestNotStagedError:
@@ -1992,8 +1987,7 @@ class JobQueue:
         else:
             jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
-                # XXX Use a logger.
-                print(f'WARNING: job queue at {self._datafile} has bad entries')
+                logger.warn('job queue at %s has bad entries', self._datafile)
                 fixed = True
             data['jobs'] = [r for r in jobs if r]
         # Save and return the data.
@@ -3230,6 +3224,33 @@ COMMANDS = {
 ##################################
 # the script
 
+VERBOSITY = 3
+
+
+def configure_logger(logger, verbosity=VERBOSITY, *,
+                     maxlevel=logging.CRITICAL,
+                     ):
+    level = max(1,  # 0 disables it, so we use the next lowest.
+                min(maxlevel,
+                    maxlevel - verbosity * 10))
+    logger.setLevel(level)
+    #logger.propagate = False
+
+    assert not logger.handlers, logger.handlers
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(level)
+    #formatter = logging.Formatter()
+    class Formatter(logging.Formatter):
+        def format(self, record):
+            text = super().format(record)
+            if record.levelname not in ('DEBUG', 'INFO'):
+                text = f'{record.levelname}: {text}'
+            return text
+    formatter = Formatter()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+
 def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     import argparse
 
@@ -3240,8 +3261,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('--config', dest='cfgfile')
+    common.add_argument('-v', '--verbose', action='count', default=0)
+    common.add_argument('-q', '--quiet', action='count', default=0)
     args, argv = common.parse_known_args(argv)
     cfgfile = args.cfgfile
+    verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
 
     ##########
     # Create the top-level parser.
@@ -3384,10 +3408,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     args = parser.parse_args(argv)
     ns = vars(args)
 
-    ns.pop('cfgfile')  # We already got it earlier.
+    # Drop args we already handled earlier.
+    ns.pop('cfgfile')
+    ns.pop('verbose')
+    ns.pop('quiet')
 
     cmd = ns.pop('cmd')
-
     if cmd in ('add', 'request'):
         job = ns.pop('job')
         cmd = f'request-{job}'
@@ -3424,7 +3450,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         action = ns.pop('action')
         cmd = f'bench-host-{action}'
 
-    return cmd, ns, cfgfile
+    return cmd, ns, cfgfile, verbosity
 
 
 def main(cmd, cmd_kwargs, cfgfile=None):
@@ -3492,5 +3518,6 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile = parse_args()
+    cmd, cmd_kwargs, cfgfile, verbosity = parse_args()
+    configure_logger(logger, verbosity)
     main(cmd, cmd_kwargs, cfgfile)
