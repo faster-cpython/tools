@@ -2099,6 +2099,8 @@ class JobQueue:
             raise NotImplementedError
         elif any(not isinstance(v, RequestID) for v in data['jobs']):
             raise NotImplementedError
+        else:
+            data['jobs'] = [str(req) for req in data['jobs']]
         # Write to the queue file.
         with open(self._datafile, 'w') as outfile:
             json.dump(data, outfile, indent=4)
