@@ -3456,10 +3456,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     _common.add_argument('--run-attached', dest='after',
                          action='store_const', const=('run', 'attach'))
     _common.add_argument('--run-detached', dest='after',
-                         action='store_const', const=('run',),
-                         help='(the default)')
+                         action='store_const', const=('run',))
     _common.add_argument('--no-run', dest='after',
-                         action='store_const', const=())
+                         action='store_const', const=(),
+                         help='(the default)')
     add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
 
     # This is the default (and the only one, for now).
