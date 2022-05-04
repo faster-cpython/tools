@@ -2082,16 +2082,16 @@ class JobQueue:
         return data
 
     def _save(self, data=None):
-        if not data:
+        if data is None:
             data = self._data
-        elif data is not self._data:
-            raise NotImplementedError
+        elif isinstance(data, types.SimpleNamespace):
+            if data is not self._data:
+                raise NotImplementedError
+            data = dict(vars(data))
         self._data = None
         if not data:
             # Nothing to save.
             return
-        if isinstance(data, types.SimpleNamespace):
-            data = vars(data)
         # Validate.
         if 'paused' not in data or data['paused'] not in (True, False):
             raise NotImplementedError
@@ -2202,7 +2202,7 @@ class JobQueue:
 
     def remove(self, reqid):
         with self._lock:
-            data= self._load()
+            data = self._load()
 
             if reqid not in data.jobs:
                 raise JobNotQueuedError(reqid)
