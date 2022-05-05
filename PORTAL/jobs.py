@@ -110,7 +110,7 @@ def get_utc_datetime(timestamp=None, *, fail=True):
     elif not isinstance(timestamp, datetime.date):
         raise TypeError(f'unsupported timestamp {timestamp!r}')
     hastime = True
-    if isinstance(timestamp, datetime.date):
+    if type(timestamp) is datetime.date:
         d = timestamp
         timestamp = datetime.datetime(d.year, d.month, d.day, tzinfo=tzinfo)
         #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
