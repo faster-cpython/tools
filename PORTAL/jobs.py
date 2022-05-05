@@ -1775,7 +1775,7 @@ class Jobs:
             fi
 
             # Unstage the request.
-            {sys.executable} {jobs_script} internal-finish-run --config {cfgfile} {reqid}
+            {sys.executable} {jobs_script} internal-finish-run -v --config {cfgfile} {reqid}
 
             # Mark the script as complete.
             echo
@@ -1783,7 +1783,7 @@ class Jobs:
             #rm -f {pidfile}
 
             # Trigger the next job.
-            {sys.executable} {jobs_script} internal-run-next --config {cfgfile} >> {queue_log} 2>&1 &
+            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} >> {queue_log} 2>&1 &
 
             exit $exitcode
         '''[1:-1])
@@ -1816,7 +1816,7 @@ class Jobs:
         if not cfgfile:
             raise NotImplementedError
         logger.debug('No job is running so we will run the next one from the queue')
-        cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
+        cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" -v internal-run-next --config "{cfgfile}"'
         cmd = f'{cmd} >> "{self._fs.queue.log}" 2>&1 &'
         logger.debug('# running: %s', cmd)
         subprocess.run(cmd, shell=True)
