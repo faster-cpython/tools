@@ -2243,7 +2243,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
             try:
                 args = tuple(raw)
             except TypeError:
-                raise NotImplementedError(raw)
+                raise NotImplementedError(repr(raw))
             return cls(*args)
 
     @classmethod
@@ -3037,7 +3037,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         current = jobs.get_current()
         if current and reqid == current.reqid:
             try:
-                job = jobs.cancel_current(current, ifstatus=_status)
+                job = jobs.cancel_current(current.reqid, ifstatus=_status)
             except NoRunningJobError:
                 logger.warn('job just finished')
         else:
