@@ -1433,7 +1433,7 @@ class Job:
 
     def run(self, *, background=False):
         if background:
-            cmd = '"{self.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &'
+            cmd = f'"{self.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &'
             logger.debug('# running: %s', cmd)
             subprocess.run(cmd, shell=True)
             return 0
