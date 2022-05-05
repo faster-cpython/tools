@@ -1792,7 +1792,7 @@ class Jobs:
     def activate(self, reqid):
         stage_request(reqid, self.fs)
         job = self._get(reqid)
-        job.set_active()
+        job.set_status('active')
         return job
 
     def ensure_next(self):
