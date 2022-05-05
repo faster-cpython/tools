@@ -3048,6 +3048,7 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
     show_file(job.fs.result.metadata)
 
 
+# internal
 def cmd_finish_run(jobs, reqid):
     job = jobs.finish_successful(reqid)
 
@@ -3057,12 +3058,13 @@ def cmd_finish_run(jobs, reqid):
     show_file(job.fs.result.metadata)
 
 
+# internal
 def cmd_run_next(jobs):
     logentry = LogSection.from_title('Running next queued job')
-    logger.critical('')
+    print()
     for line in logentry.render():
-        logger.critical(line)
-    logger.critical('')
+        print(line)
+    print()
 
     try:
         reqid = jobs.queue.pop()
