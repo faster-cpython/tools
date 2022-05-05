@@ -1433,10 +1433,9 @@ class Job:
 
     def run(self, *, background=False):
         if background:
-            subprocess.run(
-                '"{self.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &',
-                shell=True,
-            )
+            cmd = '"{self.fs.portal_script}" > "{job.fs.logfile}" 2>&1 &'
+            logger.debug('# running: %s', cmd)
+            subprocess.run(cmd, shell=True)
             return 0
         else:
             proc = subprocess.run([self.fs.portal_script])
@@ -1790,7 +1789,9 @@ class Jobs:
         '''[1:-1])
 
     def activate(self, reqid):
+        logger.debug('# staging request')
         stage_request(reqid, self.fs)
+        logger.debug('# done staging request')
         job = self._get(reqid)
         job.set_status('active')
         return job
@@ -1816,8 +1817,9 @@ class Jobs:
             raise NotImplementedError
         logger.debug('No job is running so we will run the next one from the queue')
         cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
-        logger.debug(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &')
-        subprocess.run(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &', shell=True)
+        cmd = f'{cmd} >> "{self._fs.queue.log}" 2>&1 &'
+        logger.debug('# running: %s', cmd)
+        subprocess.run(cmd, shell=True)
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
         if not reqid:
@@ -2994,7 +2996,6 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
             return
 
     # Try staging it directly.
-    logger.info('# staging request')
     try:
         job = jobs.activate(reqid)
     except RequestAlreadyStagedError as exc:
