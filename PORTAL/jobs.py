@@ -1828,7 +1828,7 @@ class Jobs:
                 raise NoRunningJobError()
         else:
             job = self._get(reqid)
-        job.cancel(ifstatus=_status)
+        job.cancel(ifstatus=ifstatus)
 
         logger.info('# unstaging request %s', reqid)
         try:
