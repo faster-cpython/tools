@@ -1887,6 +1887,7 @@ def select_jobs(jobs, criteria=None):
             criteria = [criteria]
     if len(criteria) > 1:
         raise NotImplementedError(criteria)
+    jobs = sorted(jobs, key=(lambda j: j.reqid))
     selection = _get_slice(criteria[0])
     yield from jobs[selection]
 
@@ -2950,8 +2951,8 @@ def cmd_list(jobs, selections=None):
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     alljobs = list(jobs.iter_all())
     total = len(alljobs)
-    selected = sorted(select_jobs(alljobs, selections), key=(lambda j: j.reqid))
-    print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
+    selected = list(select_jobs(alljobs, selections))
+    print(f'{"request ID".center(48)} {"status".center(10)} {"created".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
     for job in selected:
         reqid = job.reqid
