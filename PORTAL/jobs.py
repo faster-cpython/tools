@@ -1816,8 +1816,8 @@ class Jobs:
             raise NotImplementedError
         logger.debug('No job is running so we will run the next one from the queue')
         cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" internal-run-next --config "{cfgfile}"'
+        logger.debug(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &')
         subprocess.run(f'{cmd} >> "{self._fs.queue.log}" 2>&1 &', shell=True)
-        #cmd_run_next(common)
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
         if not reqid:
@@ -3225,6 +3225,8 @@ def cmd_queue_push(jobs, reqid):
     job.set_status('pending')
 
     logger.info('%s added to the job queue at position %s', reqid, pos)
+
+    jobs.ensure_next()
 
 
 def cmd_queue_pop(jobs):
