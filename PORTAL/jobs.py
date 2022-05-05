@@ -60,24 +60,6 @@ def _validate_string(value, argname=None, *, required=True):
         raise TypeError(f'expected str{label}, got {value!r}')
 
 
-def _parse_slice(raw, length):
-    start = 0
-    stop = length
-    if not raw:
-        pass
-    elif not isinstance(raw, str):
-        raise TypeError(f'expected str, got {raw!r}')
-    elif raw.startswith('-') and raw[1:].isdigit():
-        start = int(raw)
-    elif raw.isdigit():
-        stop = int(raw)
-    else:
-        raise ValueError(f'expected int, got {raw!r}')
-    s = slice(start, stop)
-    start, stop, _ = s.indices(length)
-    return s, stop - start
-
-
 ##################################
 # date/time utils
 
@@ -825,6 +807,25 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 
 ##################################
 # other utils
+
+def _get_slice(raw):
+    if isinstance(raw, int):
+        start = stop = None
+        if raw < 0:
+            start = raw
+        elif criteria > 0:
+            stop = raw
+        return slice(start, stop)
+    elif isinstance(raw, str):
+        if raw.isdigit():
+            return _get_slice(int(raw))
+        elif raw.startswith('-') and raw[1:].isdigit():
+            return _get_slice(int(raw))
+        else:
+            raise NotImplementedError(repr(raw))
+    else:
+        raise TypeError(f'expected str, got {criteria!r}')
+
 
 def _resolve_user(cfg, user=None):
     if not user:
@@ -1863,6 +1864,31 @@ class Jobs:
         job = self._get(reqid)
         job.close()
         return job
+
+
+def select_job(jobs, criteria=None):
+    raise NotImplementedError
+
+
+def select_jobs(jobs, criteria=None):
+    # CSV
+    # ranges (i.e. slice)
+    if isinstance(jobs, Jobs):
+        jobs = list(jobs.iter_all())
+    if not criteria:
+        yield from jobs
+        return
+    if isinstance(criteria, str):
+        criteria = [criteria]
+    else:
+        try:
+            criteria = list(criteria)
+        except TypeError:
+            criteria = [criteria]
+    if len(criteria) > 1:
+        raise NotImplementedError(criteria)
+    selection = _get_slice(criteria[0])
+    yield from jobs[selection]
 
 
 ##################################
@@ -2920,23 +2946,25 @@ def show_file(filename):
         logger.info(f'  %s', line)
 
 
-def cmd_list(jobs, range=None):
+def cmd_list(jobs, selections=None):
+#    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
+    alljobs = list(jobs.iter_all())
+    total = len(alljobs)
+    selected = sorted(select_jobs(alljobs, selections), key=(lambda j: j.reqid))
     print(f'{"request ID".center(48)} {"status".center(10)} {"date".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
-    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
-    jobs = sorted(jobs.iter_all(), key=(lambda j: j.reqid))
-    total = len(jobs)
-    range, count = _parse_slice(range, total)
-    for job in jobs[range]:
-        #for line in job.render(fmt='row'):
-        #    print(line)
+    for job in selected:
         reqid = job.reqid
         status = job.get_status(fail=False)
         print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
+        #for line in job.render(fmt='row'):
+        #    print(line)
     logger.info('')
-    if count != total:
-        logger.info('(showing: %s)', count)
-    logger.info('(total: %s)', total)
+    if len(selected) == total:
+        logger.info('(total: %s)', total)
+    else:
+        logger.info('(matched: %s)', len(selected))
+        logger.info('(total:   %s)', total)
 
 
 def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
@@ -3427,7 +3455,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         return subs.add_parser(name, parents=[common, *parents], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
-    sub.add_argument('--range')
+    sub.add_argument('selections', nargs='*')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=0,
