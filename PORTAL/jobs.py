@@ -2929,7 +2929,8 @@ def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
         job = jobs.get_current()
         if not job:
             # XXX Use the last finished?
-            sys.exit('ERROR: no job currently running')
+            logger.error('no job currently running')
+            sys.exit(1)
 
     for line in job.render(fmt=fmt):
         print(line)
@@ -2998,7 +2999,8 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         job = jobs.activate(reqid)
     except RequestAlreadyStagedError as exc:
         # XXX Offer to clear CURRENT?
-        sys.exit(f'ERROR: {exc}')
+        logger.error('%s', exc)
+        sys.exit(1)
     except Exception:
         logger.error('could not stage request')
         logger.info('')
@@ -3585,14 +3587,16 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     try:
         run_cmd = COMMANDS[cmd]
     except KeyError:
-        sys.exit(f'unsupported cmd {cmd!r}')
+        logger.error('unsupported cmd %r', cmd)
+        sys.exit(1)
 
     after = []
     for _cmd in cmd_kwargs.pop('after', None) or ():
         try:
             _run_cmd = COMMANDS[_cmd]
         except KeyError:
-            sys.exit(f'unsupported "after" cmd {_cmd!r}')
+            logger.error('unsupported "after" cmd %r', _cmd)
+            sys.exit(1)
         after.append((_cmd, _run_cmd))
 
     logger.debug('')
