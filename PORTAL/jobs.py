@@ -79,6 +79,64 @@ def _parse_slice(raw, length):
 
 
 ##################################
+# date/time utils
+
+SECOND = datetime.timedelta(seconds=1)
+DAY = datetime.timedelta(days=1)
+
+
+def _utcnow():
+    if time.tzname[0] == 'UTC':
+        return time.time()
+    return time.mktime(time.gmtime())
+
+
+def get_utc_datetime(timestamp=None, *, fail=True):
+    tzinfo = datetime.timezone.utc
+    if timestamp is None:
+        timestamp = int(_utcnow())
+    if isinstance(timestamp, int):
+        timestamp = datetime.datetime.fromtimestamp(timestamp, tzinfo)
+    elif isinstance(timestamp, str):
+        if re.match(r'^\d{4}-\d\d-\d\d$', timestamp):
+            timestamp = datetime.date(*(int(v) for v in timestamp.split('-')))
+        elif hasattr(datetime.datetime, 'fromisoformat'):  # 3.7+
+            timestamp = datetime.datetime.fromisoformat(timestamp)
+            timestamp = timestamp.astimezone(tzinfo)
+        else:
+            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
+            if not m:
+                if fail:
+                    raise NotImplementedError(repr(timestamp))
+                return None, None
+            body, sep, subzero, tz = m.groups()
+            timestamp = body
+            fmt = f'%Y-%m-%d{sep}%H:%M:%S'
+            if subzero:
+                if len(subzero) == 4:
+                    subzero += '000'
+                timestamp += subzero
+                fmt += '.%f'
+            if tz:
+                timestamp += tz.replace(':', '')
+                fmt += '%z'
+            timestamp = datetime.datetime.strptime(timestamp, fmt)
+            timestamp = timestamp.astimezone(tzinfo)
+    elif isinstance(timestamp, datetime.datetime):
+        # XXX Treat naive as UTC?
+        timestamp = timestamp.astimezone(tzinfo)
+    elif not isinstance(timestamp, datetime.date):
+        raise TypeError(f'unsupported timestamp {timestamp!r}')
+    hastime = True
+    if isinstance(timestamp, datetime.date):
+        d = timestamp
+        timestamp = datetime.datetime(d.year, d.month, d.day, tzinfo=tzinfo)
+        #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
+        hastime = False
+    return timestamp, hastime
+
+
+##################################
 # file utils
 
 def _check_shell_str(value, *, required=True, allowspaces=False):
@@ -400,7 +458,7 @@ class LogSection(types.SimpleNamespace):
     def from_title(cls, title, timestamp=None, **logrecord_kwargs):
         if not title or not title.strip():
             raise ValueError('missing title')
-        timestamp = get_utc_datetime(timestamp or None)
+        timestamp, _ = get_utc_datetime(timestamp or None)
 
         logrecord_kwargs.setdefault('name', None)
         logrecord_kwargs.setdefault('level', None)
@@ -767,50 +825,6 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 
 ##################################
 # other utils
-
-def _utcnow():
-    if time.tzname[0] == 'UTC':
-        return time.time()
-    return time.mktime(time.gmtime())
-
-
-def get_utc_datetime(timestamp=None):
-    if timestamp is None:
-        return datetime.datetime.fromtimestamp(
-            int(_utcnow()),
-            datetime.timezone.utc,
-        )
-    elif isinstance(timestamp, datetime.datetime):
-        pass
-    elif isinstance(timestamp, int):
-        return datetime.datetime.fromtimestamp(
-            timestamp,
-            datetime.timezone.utc,
-        )
-    elif isinstance(timestamp, str):
-        if hasattr(datetime.datetime, 'fromisoformat'):  # 3.7+
-            timestamp = datetime.datetime.fromisoformat(timestamp)
-        else:
-            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
-            if not m:
-                raise NotImplementedError(repr(timestamp))
-            body, sep, subzero, tz = m.groups()
-            timestamp = body
-            fmt = f'%Y-%m-%d{sep}%H:%M:%S'
-            if subzero:
-                if len(subzero) == 4:
-                    subzero += '000'
-                timestamp += subzero
-                fmt += '.%f'
-            if tz:
-                timestamp += tz.replace(':', '')
-                fmt += '%z'
-            timestamp = datetime.datetime.strptime(timestamp, fmt)
-    else:
-        raise TypeError(f'unsupported timestamp {timestamp!r}')
-    # XXX Treat naive as UTC?
-    return timestamp.astimezone(datetime.timezone.utc)
-
 
 def _resolve_user(cfg, user=None):
     if not user:
@@ -2301,7 +2315,8 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
 
     @property
     def date(self):
-        return get_utc_datetime(self.timestamp)
+        dt, _ = get_utc_datetime(self.timestamp)
+        return dt
 
 
 class Request(Metadata):
@@ -2471,9 +2486,9 @@ class Result(Metadata):
                 if not date:
                     date = None
                 elif isinstance(date, str):
-                    date = get_utc_datetime(date)
+                    date, _ = get_utc_datetime(date)
                 elif isinstance(date, int):
-                    date = get_utc_datetime(date)
+                    date, _ = get_utc_datetime(date)
                 elif not isinstance(date, datetime.datetime):
                     raise TypeError(f'unsupported history date {date!r}')
                 h.append((st, date))
