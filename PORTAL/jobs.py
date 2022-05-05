@@ -3001,7 +3001,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         sys.exit(f'ERROR: {exc}')
     except Exception:
         logger.error('could not stage request')
-        logger.info()
+        logger.info('')
         job = jobs.get(reqid)
         job.set_status('failed')
         raise  # re-raise
@@ -3102,7 +3102,7 @@ def cmd_run_next(jobs):
 
         # We're okay to run the job.
         logger.info('Running next job from queue (%s)', reqid)
-        logger.info()
+        logger.info('')
         try:
             cmd_run(jobs, reqid, _usequeue=False)
         except RequestAlreadyStagedError:
