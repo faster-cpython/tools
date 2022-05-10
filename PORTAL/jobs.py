@@ -1423,6 +1423,67 @@ class JobsFS(FSTree):
 
 
 ##################################
+# workers
+
+class Worker:
+
+    @classmethod
+    def from_config(cls, cfg, JobsFS=JobsFS):
+        fs = JobsFS.from_user(cfg.bench_user, 'bench')
+        ssh = SSHClient(cfg.send_host, cfg.send_port, cfg.bench_user)
+        return cls(fs, ssh)
+
+    def __init__(self, fs, ssh):
+        self._fs = fs
+        self._ssh = ssh
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'fs ssh'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def ssh(self):
+        return self._ssh
+
+    def resolve(self, reqid):
+        fs = self._fs.resolve_request(reqid)
+        return JobWorker(self, fs)
+
+
+class JobWorker:
+
+    def __init__(self, worker, fs):
+        self._worker = worker
+        self._fs = fs
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'worker fs'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    @property
+    def worker(self):
+        return self._worker
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def topfs(self):
+        return self._worker.fs
+
+    @property
+    def ssh(self):
+        return self._worker.ssh
+
+
+##################################
 # jobs
 
 class JobsError(RuntimeError):
@@ -1455,25 +1516,26 @@ class JobNeverStartedError(JobNotRunningError):
 
 class Job:
 
-    def __init__(self, reqid, fs, bench_fs):
+    def __init__(self, reqid, fs, worker, cfg):
         if not reqid:
             raise ValueError('missing reqid')
         if not fs:
             raise ValueError('missing fs')
         elif not isinstance(fs, JobFS):
             raise TypeError(f'expected JobFS for fs, got {fs!r}')
-        if not bench_fs:
-            raise ValueError('missing bench_fs')
-        elif not isinstance(bench_fs, JobFS):
-            raise TypeError(f'expected JobFS for bench_fs, got {bench_fs!r}')
+        if not worker:
+            raise ValueError('missing worker')
+        elif not isinstance(worker, JobWorker):
+            raise TypeError(f'expected JobWorker for worker, got {worker!r}')
         self._reqid = RequestID.from_raw(reqid)
         self._fs = fs
-        self._bench_fs = bench_fs
+        self._worker = worker
+        self._cfg = cfg
         self._pidfile = PIDFile(fs.pidfile)
 
     def __repr__(self):
         args = (f'{n}={str(getattr(self, "_"+n))!r}'
-                for n in 'reqid fs bench_fs'.split())
+                for n in 'reqid fs worker cfg'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
     def __str__(self):
@@ -1488,8 +1550,12 @@ class Job:
         return self._fs
 
     @property
-    def bench_fs(self):
-        return self._bench_fs
+    def worker(self):
+        return self._worker
+
+    @property
+    def cfg(self):
+        return self._cfg
 
     @property
     def kind(self):
@@ -1527,7 +1593,7 @@ class Job:
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
-    def _create(self, kind_kwargs, reqfsattrs, cfg, queue_log, top_bfiles):
+    def _create(self, kind_kwargs, reqfsattrs, queue_log):
         os.makedirs(self._fs.request.root, exist_ok=True)
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
@@ -1541,17 +1607,17 @@ class Job:
             )
 
             # Write the benchmarks manifest.
-            manifest = _build_pyperformance_manifest(req, top_bfiles)
+            manifest = _build_pyperformance_manifest(req, self._worker.topfs)
             with open(self._fs.request.manifest, 'w') as outfile:
                 outfile.write(manifest)
 
             # Write the config.
-            ini = _build_pyperformance_config(req, top_bfiles)
+            ini = _build_pyperformance_config(req, self._worker.topfs)
             with open(self._fs.request.pyperformance_config, 'w') as outfile:
                 ini.write(outfile)
 
             # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, top_bfiles, fake)
+            script = _build_compile_script(req, self._worker.topfs, fake)
         else:
             raise ValueError(f'unsupported job kind in {self._reqid}')
 
@@ -1565,31 +1631,31 @@ class Job:
         os.chmod(self._fs.bench_script, 0o755)
 
         # Write the commands to execute locally.
-        script = self._build_send_script(cfg, queue_log, reqfsattrs)
+        script = self._build_send_script(queue_log, reqfsattrs)
         with open(self._fs.portal_script, 'w') as outfile:
             outfile.write(script)
         os.chmod(self._fs.portal_script, 0o755)
 
-    def _build_send_script(self, cfg, queue_log, resfsfields=None, *,
+    def _build_send_script(self, queue_log, resfsfields=None, *,
                            hidecfg=False,
                            ):
         reqid = self.reqid
         pfiles = self._fs
-        bfiles = self._bench_fs
+        bfiles = self._worker.fs
 
         jobs_script = _quote_shell_str(JOBS_SCRIPT)
 
-        if not cfg.filename:
-            raise NotImplementedError(cfg)
-        cfgfile = _quote_shell_str(cfg.filename)
+        if not self._cfg.filename:
+            raise NotImplementedError(self._cfg)
+        cfgfile = _quote_shell_str(self._cfg.filename)
         if hidecfg:
             ssh = SSHShellCommands('$host', '$port', '$benchuser')
             user = '$user'
         else:
-            user = _check_shell_str(cfg.send_user)
-            _check_shell_str(cfg.send_host)
-            _check_shell_str(cfg.bench_user)
-            ssh = SSHShellCommands(cfg.send_host, cfg.send_port, cfg.bench_user)
+            user = _check_shell_str(self._cfg.send_user)
+            _check_shell_str(self._cfg.send_host)
+            _check_shell_str(self._cfg.bench_user)
+            ssh = self._worker.ssh.shell_commands
 
         queue_log = _quote_shell_str(queue_log)
 
@@ -1829,7 +1895,7 @@ class Jobs:
     def __init__(self, cfg):
         self._cfg = cfg
         self._fs = self.FS(cfg.data_dir)
-        self._bench_fs = self.FS.from_user(cfg.bench_user, 'bench')
+        self._worker = Worker.from_config(cfg, self.FS)
 
     def __str__(self):
         return self.fs.root
@@ -1842,11 +1908,6 @@ class Jobs:
     def fs(self):
         """Files on the portal host."""
         return self._fs.copy()
-
-    @property
-    def bench_fs(self):
-        """Files on the bench host."""
-        return self._bench_fs.copy()
 
     @property
     def queue(self):
@@ -1867,7 +1928,8 @@ class Jobs:
         return Job(
             reqid,
             self._fs.resolve_request(reqid),
-            self._bench_fs.resolve_request(reqid),
+            self._worker.resolve(reqid),
+            self._cfg,
         )
 
     def get_current(self):
@@ -1884,8 +1946,7 @@ class Jobs:
             kind_kwargs = {}
 
         job = self._get(reqid)
-        job._create(kind_kwargs, reqfsattrs,
-                    self._cfg, self._fs.queue.log, self._bench_fs)
+        job._create(kind_kwargs, reqfsattrs, self._fs.queue.log)
         return job
 
     def activate(self, reqid):
