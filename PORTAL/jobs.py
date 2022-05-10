@@ -1820,7 +1820,14 @@ class Job:
         pid = self.get_pid()
         if pid:
             logger.info('# killing PID %s', pid)
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                logger.warn(f'job {self._reqid} no longer (PID: {pid})')
+        # Kill the worker process, if running.
+        text = self._worker.ssh.read(self._worker.fs.pidfile)
+        if text and text.isdigit():
+            self._worker.ssh.run_shell('kill', text)
 
     def attach(self, lines=None):
         # Wait for the request to start.
@@ -1842,9 +1849,9 @@ class Job:
         if ifstatus is not None:
             if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
                 return
-        self.set_status('canceled')
-        # XXX Try to download the results directly?
         self.kill()
+        # XXX Try to download the results directly?
+        self.set_status('canceled')
 
     def close(self):
         result = self.load_result()
