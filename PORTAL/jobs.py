@@ -1018,10 +1018,10 @@ class Metadata(types.SimpleNamespace):
 
 class SSHCommands:
 
-    SSH = 'ssh'
-    SCP = 'scp'
+    SSH = shutil.which('ssh')
+    SCP = shutil.which('scp')
 
-    def __init__(self, host, port, user):
+    def __init__(self, host, port, user, *, ssh=None, scp=None):
         self.host = _check_shell_str(host)
         self.port = int(port)
         if self.port < 1:
@@ -1031,20 +1031,45 @@ class SSHCommands:
         opts = []
         if self.host == 'localhost':
             opts.extend(['-o', 'StrictHostKeyChecking=no'])
+        self._ssh = ssh or self.SSH
         self._ssh_opts = [*opts, '-p', str(self.port)]
+        self._scp = scp or self.SCP
         self._scp_opts = [*opts, '-P', str(self.port)]
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, n)!r}'
+                for n in 'host port user'.split())
+        return f'{type(self).__name__}({"".join(args)})'
 
     def run(self, *args):
         conn = f'{self.user}@{self.host}'
-        return [self.SSH, *self._ssh_opts, conn, *args]
+        return [self._ssh, *self._ssh_opts, conn, *args]
 
     def push(self, source, target):
         conn = f'{self.user}@{self.host}'
-        return [self.SCP, *self._scp_opts, '-rp', source, f'{conn}:{target}']
+        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
 
     def pull(self, source, target):
         conn = f'{self.user}@{self.host}'
-        return [self.SCP, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+
+    def ensure_user_with_agent(self, user):
+        raise NotImplementedError
+
+
+class SSHShellCommands(SSHCommands):
+
+    SSH = 'ssh'
+    SCP = 'scp'
+
+    def run(self, *args):
+        return ' '.join(shlex.quote(a) for a in super().run(*args))
+
+    def push(self, source, target):
+        return ' '.join(shlex.quote(a) for a in super().push(source, target))
+
+    def pull(self, source, target):
+        return ' '.join(shlex.quote(a) for a in super().pull(source, target))
 
     def ensure_user_with_agent(self, user):
         return [
@@ -1558,13 +1583,13 @@ class Job:
             raise NotImplementedError(cfg)
         cfgfile = _quote_shell_str(cfg.filename)
         if hidecfg:
-            ssh = SSHCommands('$host', '$port', '$benchuser')
+            ssh = SSHShellCommands('$host', '$port', '$benchuser')
             user = '$user'
         else:
             user = _check_shell_str(cfg.send_user)
             _check_shell_str(cfg.send_host)
             _check_shell_str(cfg.bench_user)
-            ssh = SSHCommands(cfg.send_host, cfg.send_port, cfg.bench_user)
+            ssh = SSHShellCommands(cfg.send_host, cfg.send_port, cfg.bench_user)
 
         queue_log = _quote_shell_str(queue_log)
 
@@ -1588,11 +1613,11 @@ class Job:
             _check_shell_str(bvalue)
             resfiles.append((bvalue, pvalue))
         resfiles = (ssh.pull(s, t) for s, t in resfiles)
-        resfiles = '\n                '.join(" ".join(c) for c in resfiles)
+        resfiles = '\n                '.join(resfiles)
 
-        push = lambda *a: ' '.join(ssh.push(*a))
-        pull = lambda *a: ' '.join(ssh.pull(*a))
-        ssh = lambda *a, _ssh=ssh: ' '.join(_ssh.run(*a))
+        push = ssh.push
+        pull = ssh.pull
+        ssh = ssh.run
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
