@@ -917,6 +917,15 @@ def _is_proc_running(pid):
         return True
 
 
+def _run_cmd(cmd, *args):
+    return subprocess.run(
+        [cmd, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8',
+    )
+
+
 class MetadataError(ValueError):
     def __init__(self, msg=None):
         super().__init__(msg or 'metadata-related error')
@@ -1041,9 +1050,15 @@ class SSHCommands:
                 for n in 'host port user'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
-    def run(self, *args):
+    def run(self, cmd, *args):
         conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *args]
+        if not os.path.isabs(cmd):
+            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
+        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
+
+    def run_shell(self, cmd, *args):
+        conn = f'{self.user}@{self.host}'
+        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
 
     def push(self, source, target):
         conn = f'{self.user}@{self.host}'
@@ -1062,8 +1077,11 @@ class SSHShellCommands(SSHCommands):
     SSH = 'ssh'
     SCP = 'scp'
 
-    def run(self, *args):
-        return ' '.join(shlex.quote(a) for a in super().run(*args))
+    def run(self, cmd, *args):
+        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
+
+    def run_shell(self, cmd, *args):
+        return ' '.join(shlex.quote(a) for a in super().run_shell(cmd, *args))
 
     def push(self, source, target):
         return ' '.join(shlex.quote(a) for a in super().push(source, target))
@@ -1090,17 +1108,27 @@ class SSHClient(SSHCommands):
     def shell_commands(self):
         return SSHShellCommands(self.host, self.port, self.user)
 
-    def run(self, *args):
-        argv = self.commands.run(*args)
-        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+    def run(self, cmd, *args):
+        argv = super().run(cmd, *args)
+        return _run_cmd(*argv)
+
+    def run_shell(self, cmd, *args):
+        argv = super().run_shell(cmd, *args)
+        return _run_cmd(*argv)
 
     def push(self, source, target):
-        argv = self.commands.push(*args)
-        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+        argv = super().push(*args)
+        return _run_cmd(*argv)
 
     def pull(self, source, target):
-        argv = self.commands.push(*args)
-        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+        argv = super().push(*args)
+        return _run_cmd(*argv)
+
+    def read(self, filename):
+        proc = self.run_shell('cat', filename)
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
 
 
 ##################################
@@ -1706,7 +1734,7 @@ class Job:
 
         push = ssh.push
         pull = ssh.pull
-        ssh = ssh.run
+        ssh = ssh.run_shell
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
