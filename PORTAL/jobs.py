@@ -31,6 +31,8 @@ PID = os.getpid()
 
 JOBS_SCRIPT = os.path.abspath(__file__)
 
+FAKE_DELAY = 3
+
 
 # XXX "portal" -> "control"?
 # XXX "bench" -> "worker"?
@@ -807,6 +809,18 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 
 ##################################
 # other utils
+
+def _ensure_int(raw, min=None):
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        value = int(raw)
+    else:
+        raise TypeError(raw)
+    if value < min:
+        raise ValueError(raw)
+    return value
+
 
 def _get_slice(raw):
     if isinstance(raw, int):
@@ -1640,6 +1654,7 @@ class Jobs:
 
         if reqid.kind == 'compile-bench':
             exitcode = kind_kwargs.pop('exitcode', None)
+            fakedelay = kind_kwargs.pop('fakedelay', None)
             req = _resolve_bench_compile_request(
                 reqid,
                 job.fs.work.root,
@@ -1657,7 +1672,8 @@ class Jobs:
                 ini.write(outfile)
 
             # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, self._bench_fs, exitcode)
+            script = _build_compile_script(req, self._bench_fs,
+                                           exitcode, fakedelay)
         else:
             raise ValueError(f'unsupported job kind in {reqid}')
 
@@ -2748,12 +2764,21 @@ def _build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def _build_compile_script(req, bfiles, exitcode=None):
+def _build_compile_script(req, bfiles, exitcode=None, fakedelay=None):
+    if fakedelay is None:
+        fakedelay = FAKE_DELAY
+    else:
+        fakedelay = _ensure_int(fakedelay, min=0)
+        if exitcode is None:
+            exitcode = 0
+        elif exitcode == '':
+            logger.warn(f'fakedelay ({fakedelay}) will not be used')
     if exitcode is None:
         exitcode = ''
     elif exitcode != '':
+        exitcode = _ensure_int(exitcode, min=0)
         logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
-    python = 'python3.9'  # On the bench host:
+    python = 'python3.9'  # On the bench host.
     numjobs = 20
 
     _check_shell_str(str(req.id) if req.id else '')
@@ -2884,6 +2909,7 @@ def _build_compile_script(req, bfiles, exitcode=None):
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
+            sleep {fakedelay}
             touch {bfiles.result.pyperformance_log}
             touch {bfiles.request}/pyperformance-dummy-results.json.gz
             )
@@ -2992,6 +3018,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               optimize=False,
                               debug=False,
                               exitcode=None,
+                              fakedelay=None,
                               ):
     if not reqid:
         raise NotImplementedError
@@ -3000,7 +3027,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
     logger.info('generating request files in %s...', reqroot)
     job = jobs.create(
         reqid,
-        dict(
+        kind_kwargs=dict(
             revision=revision,
             remote=remote,
             branch=branch,
@@ -3008,8 +3035,9 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
             optimize=optimize,
             debug=debug,
             exitcode=exitcode,
+            fakedelay=fakedelay,
         ),
-        ['pyperformance_results', 'pyperformance_log'],
+        reqfsattrs=['pyperformance_results', 'pyperformance_log'],
     )
     logger.info('...done (generating request files)')
     logger.info('')
@@ -3531,6 +3559,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                          action='store_const', const=0)
         sub.add_argument('--fake-failure', dest='exitcode',
                          action='store_const', const=1)
+        sub.add_argument('--fake-delay', dest='fakedelay')
 
     ##########
     # Add the "queue" subcomamnds.
