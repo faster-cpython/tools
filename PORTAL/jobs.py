@@ -1232,6 +1232,9 @@ class JobFS(types.SimpleNamespace):
             work.portal_script = f'{work}/send.sh'
             work.pidfile = f'{work}/send.pid'
             work.logfile = f'{work}/job.log'
+        elif context == 'bench':
+            work.pidfile = f'{work}/job.pid'
+            work.logfile = f'{work}/job.log'
         # the results
         result.metadata = f'{result}/results.json'
 
@@ -2813,6 +2816,8 @@ def _build_compile_script(req, bfiles, fake=None):
     pyston_benchmarks_repo = _quote_shell_str(bfiles.repos.pyston_benchmarks)
 
     bfiles = bfiles.resolve_request(req.id)
+    _check_shell_str(bfiles.work.pidfile)
+    _check_shell_str(bfiles.work.logfile)
     _check_shell_str(bfiles.work.scratch_dir)
     _check_shell_str(bfiles.request.pyperformance_config)
     _check_shell_str(bfiles.result.pyperformance_log)
@@ -2834,6 +2839,8 @@ def _build_compile_script(req, bfiles, fake=None):
 
         #####################
         # Mark the result as running.
+
+        echo "$$" > {bfiles.work.pidfile}
 
         status=$(jq -r '.status' {bfiles.result.metadata})
         if [ "$status" != 'active' ]; then
@@ -2923,12 +2930,12 @@ def _build_compile_script(req, bfiles, fake=None):
         )
 
         echo "running the benchmarks..."
-        echo "(logging to {bfiles.result.pyperformance_log})"
+        echo "(logging to {bfiles.work.logfile})"
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
             sleep {fakedelay}
-            touch {bfiles.result.pyperformance_log}
+            touch {bfiles.work.logfile}
             touch {bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
@@ -2937,13 +2944,17 @@ def _build_compile_script(req, bfiles, fake=None):
                 {python} {pyperformance_repo}/dev.py compile \\
                 {bfiles.request.pyperformance_config} \\
                 {req.ref} {maybe_branch} \\
-                2>&1 | tee {bfiles.result.pyperformance_log}
+                2>&1 | tee {bfiles.work.logfile}
             )
             exitcode=$?
         fi
 
         #####################
-        # Record the results metadata.
+        # Record the results.
+
+        if [ -e {bfiles.work.logfile} ]; then
+            ln -s {bfiles.work.logfile} {bfiles.result.pyperformance_log}
+        fi
 
         results=$(2>/dev/null ls {bfiles.work.pyperformance_results_glob})
         results_name=$(2>/dev/null basename $results)
@@ -2977,6 +2988,8 @@ def _build_compile_script(req, bfiles, fake=None):
         fi
 
         echo "...done!"
+
+        #rm -f {bfiles.work.pidfile}
     '''[1:-1])
 
 
