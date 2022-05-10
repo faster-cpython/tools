@@ -1056,9 +1056,9 @@ class SSHCommands:
             raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
         return [self._ssh, *self._ssh_opts, conn, cmd, *args]
 
-    def run_shell(self, cmd, *args):
+    def run_shell(self, cmd):
         conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
+        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
 
     def push(self, source, target):
         conn = f'{self.user}@{self.host}'
@@ -1080,14 +1080,14 @@ class SSHShellCommands(SSHCommands):
     def run(self, cmd, *args):
         return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
 
-    def run_shell(self, cmd, *args):
-        return ' '.join(shlex.quote(a) for a in super().run_shell(cmd, *args))
+    def run_shell(self, cmd):
+        return ' '.join(super().run_shell(cmd))
 
     def push(self, source, target):
-        return ' '.join(shlex.quote(a) for a in super().push(source, target))
+        return ' '.join(super().push(source, target))
 
     def pull(self, source, target):
-        return ' '.join(shlex.quote(a) for a in super().pull(source, target))
+        return ' '.join(super().pull(source, target))
 
     def ensure_user_with_agent(self, user):
         return [
@@ -1125,7 +1125,9 @@ class SSHClient(SSHCommands):
         return _run_cmd(*argv)
 
     def read(self, filename):
-        proc = self.run_shell('cat', filename)
+        if not filename:
+            raise ValueError(f'missing filename')
+        proc = self.run_shell(f'cat {filename}')
         if proc.returncode != 0:
             return None
         return proc.stdout
@@ -1827,7 +1829,7 @@ class Job:
         # Kill the worker process, if running.
         text = self._worker.ssh.read(self._worker.fs.pidfile)
         if text and text.isdigit():
-            self._worker.ssh.run_shell('kill', text)
+            self._worker.ssh.run_shell(f'kill {text}')
 
     def attach(self, lines=None):
         # Wait for the request to start.
