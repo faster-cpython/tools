@@ -1663,8 +1663,7 @@ class Jobs:
         os.makedirs(job.fs.result.root, exist_ok=True)
 
         if reqid.kind == 'compile-bench':
-            exitcode = kind_kwargs.pop('exitcode', None)
-            fakedelay = kind_kwargs.pop('fakedelay', None)
+            fake = kind_kwargs.pop('_fake', None)
             req = _resolve_bench_compile_request(
                 reqid,
                 job.fs.work.root,
@@ -1682,8 +1681,7 @@ class Jobs:
                 ini.write(outfile)
 
             # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, self._bench_fs,
-                                           exitcode, fakedelay)
+            script = _build_compile_script(req, self._bench_fs, fake)
         else:
             raise ValueError(f'unsupported job kind in {reqid}')
 
@@ -2774,7 +2772,15 @@ def _build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def _build_compile_script(req, bfiles, exitcode=None, fakedelay=None):
+def _build_compile_script(req, bfiles, fake=None):
+    fakedelay = FAKE_DELAY
+    if fake is False or fake is None:
+        fake = (None, None)
+    elif fake is True:
+        fake = (0, None)
+    elif isinstance(fake, (int, str)):
+        fake = (fake, None)
+    exitcode, fakedelay = fake
     if fakedelay is None:
         fakedelay = FAKE_DELAY
     else:
@@ -3019,8 +3025,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               benchmarks=None,
                               optimize=False,
                               debug=False,
-                              exitcode=None,
-                              fakedelay=None,
+                              _fake=None,
                               ):
     if not reqid:
         raise NotImplementedError
@@ -3036,8 +3041,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
             benchmarks=benchmarks,
             optimize=optimize,
             debug=debug,
-            exitcode=exitcode,
-            fakedelay=fakedelay,
+            _fake=_fake,
         ),
         reqfsattrs=['pyperformance_results', 'pyperformance_log'],
     )
@@ -3619,10 +3623,16 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ns.pop('verbose')
     ns.pop('quiet')
 
+    # Process commands and command-specific args.
     cmd = ns.pop('cmd')
     if cmd in ('add', 'request'):
         job = ns.pop('job')
         cmd = f'request-{job}'
+        if job == 'compile-bench':
+            # Process hidden args.
+            fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
+            if any(v is not None for v in fake):
+                args._fake = fake
     elif cmd == 'config':
         cmd = 'config-show'
     elif cmd == 'queue':
