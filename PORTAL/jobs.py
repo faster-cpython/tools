@@ -3042,10 +3042,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
         reqfsattrs=['pyperformance_results', 'pyperformance_log'],
     )
     logger.info('...done (generating request files)')
-    logger.info('')
-    # XXX Show something better?
-    for line in job.render(fmt='reqfile'):
-        logger.info(line)
+    return job
 
 
 def cmd_copy(jobs, reqid=None):
@@ -3713,7 +3710,14 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     else:
         logger.info('# Running %r command', cmd)
     logger.info('')
-    run_cmd(jobs, **cmd_kwargs)
+    job = run_cmd(jobs, **cmd_kwargs)
+
+    if cmd.startswith('request-'):
+        _fmt = 'reqfile' if after else 'summary'
+        logger.info('')
+        # XXX Show something better?
+        for line in job.render(fmt=_fmt):
+            logger.info(line)
 
     # Run "after" commands, if any
     for cmd, run_cmd in after:
