@@ -1080,6 +1080,29 @@ class SSHShellCommands(SSHCommands):
         ]
 
 
+class SSHClient(SSHCommands):
+
+    @property
+    def commands(self):
+        return SSHCommands(self.host, self.port, self.user)
+
+    @property
+    def shell_commands(self):
+        return SSHShellCommands(self.host, self.port, self.user)
+
+    def run(self, *args):
+        argv = self.commands.run(*args)
+        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+
+    def push(self, source, target):
+        argv = self.commands.push(*args)
+        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+
+    def pull(self, source, target):
+        argv = self.commands.push(*args)
+        subprocess.run(' '.join(shlex.quote(a) for a in argv))
+
+
 ##################################
 # jobs config
 
