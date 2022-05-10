@@ -1463,6 +1463,172 @@ class Job:
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
+    def _create(self, kind_kwargs, reqfsattrs, cfg, queue_log, top_bfiles):
+        os.makedirs(self._fs.request.root, exist_ok=True)
+        os.makedirs(self._fs.work.root, exist_ok=True)
+        os.makedirs(self._fs.result.root, exist_ok=True)
+
+        if self._reqid.kind == 'compile-bench':
+            fake = kind_kwargs.pop('_fake', None)
+            req = _resolve_bench_compile_request(
+                self._reqid,
+                self._fs.work.root,
+                **kind_kwargs,
+            )
+
+            # Write the benchmarks manifest.
+            manifest = _build_pyperformance_manifest(req, top_bfiles)
+            with open(self._fs.request.manifest, 'w') as outfile:
+                outfile.write(manifest)
+
+            # Write the config.
+            ini = _build_pyperformance_config(req, top_bfiles)
+            with open(self._fs.request.pyperformance_config, 'w') as outfile:
+                ini.write(outfile)
+
+            # Build the script for the commands to execute remotely.
+            script = _build_compile_script(req, top_bfiles, fake)
+        else:
+            raise ValueError(f'unsupported job kind in {self._reqid}')
+
+        # Write metadata.
+        req.save(self._fs.request.metadata)
+        req.result.save(self._fs.result.metadata)
+
+        # Write the commands to execute remotely.
+        with open(self._fs.bench_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(self._fs.bench_script, 0o755)
+
+        # Write the commands to execute locally.
+        script = self._build_send_script(cfg, queue_log, reqfsattrs)
+        with open(self._fs.portal_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(self._fs.portal_script, 0o755)
+
+    def _build_send_script(self, cfg, queue_log, resfsfields=None, *,
+                           hidecfg=False,
+                           ):
+        reqid = self.reqid
+        pfiles = self._fs
+        bfiles = self._bench_fs
+
+        jobs_script = _quote_shell_str(JOBS_SCRIPT)
+
+        if not cfg.filename:
+            raise NotImplementedError(cfg)
+        cfgfile = _quote_shell_str(cfg.filename)
+        if hidecfg:
+            benchuser = '$benchuser'
+            user = '$user'
+            host = _host = '$host'
+            port = '$port'
+        else:
+            benchuser = _check_shell_str(cfg.bench_user)
+            user = _check_shell_str(cfg.send_user)
+            host = _check_shell_str(cfg.send_host)
+            port = cfg.send_port
+        conn = f'{benchuser}@{host}'
+
+        if cfg.send_host == 'localhost':
+            ssh = 'ssh -o StrictHostKeyChecking=no'
+            scp = 'scp -o StrictHostKeyChecking=no'
+        else:
+            ssh = 'ssh'
+            scp = 'scp'
+
+        queue_log = _quote_shell_str(queue_log)
+
+        reqdir = _quote_shell_str(pfiles.request.root)
+        results_meta = _quote_shell_str(pfiles.result.metadata)
+        pidfile = _quote_shell_str(pfiles.pidfile)
+
+        _check_shell_str(bfiles.request.root)
+        _check_shell_str(bfiles.bench_script)
+        _check_shell_str(bfiles.result.root)
+        _check_shell_str(bfiles.result.metadata)
+
+        resfiles = []
+        for attr in resfsfields or ():
+            pvalue = getattr(pfiles.result, attr)
+            pvalue = _quote_shell_str(pvalue)
+            bvalue = getattr(bfiles.result, attr)
+            _check_shell_str(bvalue)
+            resfiles.append((bvalue, pvalue))
+        resfiles = (f'{scp} -rp -P {port} {conn}:{r[0]} {r[1]}'
+                    for r in resfiles)
+        resfiles = '\n                '.join(resfiles)
+
+        return textwrap.dedent(f'''
+            #!/usr/bin/env bash
+
+            # This script only runs on the portal host.
+            # It does 4 things:
+            #   1. switch to the {user} user, if necessary
+            #   2. prepare the bench host, including sending all
+            #      the request files to the bench host (over SSH)
+            #   3. run the job (e.g. run the benchmarks)
+            #   4. pull the results-related files from the bench host (over SSH)
+
+            # The commands in this script are deliberately explicit
+            # so you can copy-and-paste them selectively.
+
+            cfgfile='{cfgfile}'
+
+            # Mark the script as running.
+            echo "$$" > {pidfile}
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
+            echo
+
+            user=$(jq -r '.send_user' {cfgfile})
+            if [ "$USER" != '{user}' ]; then
+                echo "(switching users from $USER to {user})"
+                echo
+                setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
+                setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
+                # Stop running and re-run this script as the {user} user.
+                exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
+            fi
+            host=$(jq -r '.send_host' {cfgfile})
+            port=$(jq -r '.send_port' {cfgfile})
+
+            exitcode=0
+            if ssh -p {port} {conn} test -e {bfiles.request}; then
+                >&2 echo "request {reqid} was already sent"
+                exitcode=1
+            else
+                ( set -x
+
+                # Set up before running.
+                {ssh} -p {port} {conn} mkdir -p {bfiles.request}
+                {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.request}
+                {ssh} -p {port} {conn} mkdir -p {bfiles.result}
+
+                # Run the request.
+                {ssh} -p {port} {conn} {bfiles.bench_script}
+                exitcode=$?
+
+                # Finish up.
+                # XXX Push from the bench host in run.sh instead of pulling here?
+                {scp} -p -P {port} {conn}:{bfiles.result.metadata} {results_meta}
+                {resfiles}
+                )
+            fi
+
+            # Unstage the request.
+            {sys.executable} {jobs_script} internal-finish-run -v --config {cfgfile} {reqid}
+
+            # Mark the script as complete.
+            echo
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid} has finished)"
+            #rm -f {pidfile}
+
+            # Trigger the next job.
+            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} >> {queue_log} 2>&1 &
+
+            exit $exitcode
+        '''[1:-1])
+
     def run(self, *, background=False):
         if background:
             cmd = f'"{self._fs.portal_script}" > "{self._fs.logfile}" 2>&1 &'
@@ -1661,174 +1827,9 @@ class Jobs:
             kind_kwargs = {}
 
         job = self._get(reqid)
-        os.makedirs(job.fs.request.root, exist_ok=True)
-        os.makedirs(job.fs.work.root, exist_ok=True)
-        os.makedirs(job.fs.result.root, exist_ok=True)
-
-        if reqid.kind == 'compile-bench':
-            fake = kind_kwargs.pop('_fake', None)
-            req = _resolve_bench_compile_request(
-                reqid,
-                job.fs.work.root,
-                **kind_kwargs,
-            )
-
-            # Write the benchmarks manifest.
-            manifest = _build_pyperformance_manifest(req, self._bench_fs)
-            with open(job.fs.request.manifest, 'w') as outfile:
-                outfile.write(manifest)
-
-            # Write the config.
-            ini = _build_pyperformance_config(req, self._bench_fs)
-            with open(job.fs.request.pyperformance_config, 'w') as outfile:
-                ini.write(outfile)
-
-            # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, self._bench_fs, fake)
-        else:
-            raise ValueError(f'unsupported job kind in {reqid}')
-
-        # Write metadata.
-        req.save(job.fs.request.metadata)
-        req.result.save(job.fs.result.metadata)
-
-        # Write the commands to execute remotely.
-        with open(job.fs.bench_script, 'w') as outfile:
-            outfile.write(script)
-        os.chmod(job.fs.bench_script, 0o755)
-
-        # Write the commands to execute locally.
-        script = self._build_send_script(reqid, reqfsattrs)
-        with open(job.fs.portal_script, 'w') as outfile:
-            outfile.write(script)
-        os.chmod(job.fs.portal_script, 0o755)
-
+        job._create(kind_kwargs, reqfsattrs,
+                    self._cfg, self._fs.queue.log, self._bench_fs)
         return job
-
-    def _build_send_script(self, reqid, resfsfields=None, *,
-                           hidecfg=False,
-                           ):
-        cfg = self._cfg
-        pfiles = self._fs
-        bfiles = self._bench_fs
-
-        jobs_script = _quote_shell_str(JOBS_SCRIPT)
-
-        if not cfg.filename:
-            raise NotImplementedError(cfg)
-        cfgfile = _quote_shell_str(cfg.filename)
-        if hidecfg:
-            benchuser = '$benchuser'
-            user = '$user'
-            host = _host = '$host'
-            port = '$port'
-        else:
-            benchuser = _check_shell_str(cfg.bench_user)
-            user = _check_shell_str(cfg.send_user)
-            host = _check_shell_str(cfg.send_host)
-            port = cfg.send_port
-        conn = f'{benchuser}@{host}'
-
-        if cfg.send_host == 'localhost':
-            ssh = 'ssh -o StrictHostKeyChecking=no'
-            scp = 'scp -o StrictHostKeyChecking=no'
-        else:
-            ssh = 'ssh'
-            scp = 'scp'
-
-        queue_log = _quote_shell_str(pfiles.queue.log)
-        #reqdir = _quote_shell_str(pfiles.requests.current)
-        jobfs = pfiles.resolve_request(reqid)
-        reqdir = _quote_shell_str(jobfs.request.root)
-        results_meta = _quote_shell_str(jobfs.result.metadata)
-        pidfile = _quote_shell_str(jobfs.pidfile)
-
-        bfiles = bfiles.resolve_request(reqid)
-        _check_shell_str(bfiles.request.root)
-        _check_shell_str(bfiles.bench_script)
-        _check_shell_str(bfiles.result.root)
-        _check_shell_str(bfiles.result.metadata)
-
-        resfiles = []
-        for attr in resfsfields or ():
-            pvalue = getattr(jobfs.result, attr)
-            pvalue = _quote_shell_str(pvalue)
-            bvalue = getattr(bfiles.result, attr)
-            _check_shell_str(bvalue)
-            resfiles.append((bvalue, pvalue))
-        resfiles = (f'{scp} -rp -P {port} {conn}:{r[0]} {r[1]}'
-                    for r in resfiles)
-        resfiles = '\n                '.join(resfiles)
-
-        return textwrap.dedent(f'''
-            #!/usr/bin/env bash
-
-            # This script only runs on the portal host.
-            # It does 4 things:
-            #   1. switch to the {user} user, if necessary
-            #   2. prepare the bench host, including sending all
-            #      the request files to the bench host (over SSH)
-            #   3. run the job (e.g. run the benchmarks)
-            #   4. pull the results-related files from the bench host (over SSH)
-
-            # The commands in this script are deliberately explicit
-            # so you can copy-and-paste them selectively.
-
-            cfgfile='{cfgfile}'
-
-            # Mark the script as running.
-            echo "$$" > {pidfile}
-            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
-            echo
-
-            user=$(jq -r '.send_user' {cfgfile})
-            if [ "$USER" != '{user}' ]; then
-                echo "(switching users from $USER to {user})"
-                echo
-                setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
-                setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
-                # Stop running and re-run this script as the {user} user.
-                exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
-            fi
-            host=$(jq -r '.send_host' {cfgfile})
-            port=$(jq -r '.send_port' {cfgfile})
-
-            exitcode=0
-            if ssh -p {port} {conn} test -e {bfiles.request}; then
-                >&2 echo "request {reqid} was already sent"
-                exitcode=1
-            else
-                ( set -x
-
-                # Set up before running.
-                {ssh} -p {port} {conn} mkdir -p {bfiles.request}
-                {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.request}
-                {ssh} -p {port} {conn} mkdir -p {bfiles.result}
-
-                # Run the request.
-                {ssh} -p {port} {conn} {bfiles.bench_script}
-                exitcode=$?
-
-                # Finish up.
-                # XXX Push from the bench host in run.sh instead of pulling here?
-                {scp} -p -P {port} {conn}:{bfiles.result.metadata} {results_meta}
-                {resfiles}
-                )
-            fi
-
-            # Unstage the request.
-            {sys.executable} {jobs_script} internal-finish-run -v --config {cfgfile} {reqid}
-
-            # Mark the script as complete.
-            echo
-            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid} has finished)"
-            #rm -f {pidfile}
-
-            # Trigger the next job.
-            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} >> {queue_log} 2>&1 &
-
-            exit $exitcode
-        '''[1:-1])
 
     def activate(self, reqid):
         logger.debug('# staging request')
