@@ -2822,6 +2822,8 @@ def _build_compile_script(req, bfiles, fake=None):
 
     _check_shell_str(python)
 
+    # XXX Kill any zombie job processes?
+
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
