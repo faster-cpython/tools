@@ -150,7 +150,7 @@ def _read_file(filename, *, fail=True):
 def tail_file(filename, nlines, *, follow=None):
     tail_args = []
     if nlines:
-        tail_args.extend(['-n', f'{lines}' if nlines > 0 else '+0'])
+        tail_args.extend(['-n', f'{nlines}' if nlines > 0 else '+0'])
     if follow:
         tail_args.append('--follow')
         if follow is not True:
