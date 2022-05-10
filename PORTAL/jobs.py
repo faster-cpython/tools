@@ -1016,6 +1016,45 @@ class Metadata(types.SimpleNamespace):
         print(file=resfile)
 
 
+class SSHCommands:
+
+    SSH = 'ssh'
+    SCP = 'scp'
+
+    def __init__(self, host, port, user):
+        self.host = _check_shell_str(host)
+        self.port = int(port)
+        if self.port < 1:
+            raise ValueError(f'invalid port {self.port}')
+        self.user = _check_shell_str(user)
+
+        opts = []
+        if self.host == 'localhost':
+            opts.extend(['-o', 'StrictHostKeyChecking=no'])
+        self._ssh_opts = [*opts, '-p', str(self.port)]
+        self._scp_opts = [*opts, '-P', str(self.port)]
+
+    def run(self, *args):
+        conn = f'{self.user}@{self.host}'
+        return [self.SSH, *self._ssh_opts, conn, *args]
+
+    def push(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self.SCP, *self._scp_opts, '-rp', source, f'{conn}:{target}']
+
+    def pull(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self.SCP, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+
+    def ensure_user_with_agent(self, user):
+        return [
+            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
+            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+            f'# Stop running and re-run this script as the {user} user.',
+            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
+        ]
+
+
 ##################################
 # jobs config
 
@@ -1519,23 +1558,13 @@ class Job:
             raise NotImplementedError(cfg)
         cfgfile = _quote_shell_str(cfg.filename)
         if hidecfg:
-            benchuser = '$benchuser'
+            ssh = SSHCommands('$host', '$port', '$benchuser')
             user = '$user'
-            host = _host = '$host'
-            port = '$port'
         else:
-            benchuser = _check_shell_str(cfg.bench_user)
             user = _check_shell_str(cfg.send_user)
-            host = _check_shell_str(cfg.send_host)
-            port = cfg.send_port
-        conn = f'{benchuser}@{host}'
-
-        if cfg.send_host == 'localhost':
-            ssh = 'ssh -o StrictHostKeyChecking=no'
-            scp = 'scp -o StrictHostKeyChecking=no'
-        else:
-            ssh = 'ssh'
-            scp = 'scp'
+            _check_shell_str(cfg.send_host)
+            _check_shell_str(cfg.bench_user)
+            ssh = SSHCommands(cfg.send_host, cfg.send_port, cfg.bench_user)
 
         queue_log = _quote_shell_str(queue_log)
 
@@ -1548,6 +1577,9 @@ class Job:
         _check_shell_str(bfiles.result.root)
         _check_shell_str(bfiles.result.metadata)
 
+        ensure_user = ssh.ensure_user_with_agent(user)
+        ensure_user = '\n                '.join(ensure_user)
+
         resfiles = []
         for attr in resfsfields or ():
             pvalue = getattr(pfiles.result, attr)
@@ -1555,9 +1587,12 @@ class Job:
             bvalue = getattr(bfiles.result, attr)
             _check_shell_str(bvalue)
             resfiles.append((bvalue, pvalue))
-        resfiles = (f'{scp} -rp -P {port} {conn}:{r[0]} {r[1]}'
-                    for r in resfiles)
-        resfiles = '\n                '.join(resfiles)
+        resfiles = (ssh.pull(s, t) for s, t in resfiles)
+        resfiles = '\n                '.join(" ".join(c) for c in resfiles)
+
+        push = lambda *a: ' '.join(ssh.push(*a))
+        pull = lambda *a: ' '.join(ssh.pull(*a))
+        ssh = lambda *a, _ssh=ssh: ' '.join(_ssh.run(*a))
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
@@ -1584,33 +1619,30 @@ class Job:
             if [ "$USER" != '{user}' ]; then
                 echo "(switching users from $USER to {user})"
                 echo
-                setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
-                setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
-                # Stop running and re-run this script as the {user} user.
-                exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
+                {ensure_user}
             fi
             host=$(jq -r '.send_host' {cfgfile})
             port=$(jq -r '.send_port' {cfgfile})
 
             exitcode=0
-            if ssh -p {port} {conn} test -e {bfiles.request}; then
+            if {ssh(f'test -e {bfiles.request}')}; then
                 >&2 echo "request {reqid} was already sent"
                 exitcode=1
             else
                 ( set -x
 
                 # Set up before running.
-                {ssh} -p {port} {conn} mkdir -p {bfiles.request}
-                {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.request}
-                {ssh} -p {port} {conn} mkdir -p {bfiles.result}
+                {ssh(f'mkdir -p {bfiles.request}')}
+                {push(f'{reqdir}/*', bfiles.request)}
+                {ssh(f'mkdir -p {bfiles.result}')}
 
                 # Run the request.
-                {ssh} -p {port} {conn} {bfiles.bench_script}
+                {ssh(bfiles.bench_script)}
                 exitcode=$?
 
                 # Finish up.
                 # XXX Push from the bench host in run.sh instead of pulling here?
-                {scp} -p -P {port} {conn}:{bfiles.result.metadata} {results_meta}
+                {pull(bfiles.result.metadata, results_meta)}
                 {resfiles}
                 )
             fi
