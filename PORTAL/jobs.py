@@ -1509,8 +1509,18 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def render(self, fmt=None):
+        reqfile = self._fs.request.metadata
+        resfile = self._fs.result.metadata
         if not fmt:
             fmt = 'summary'
+        elif fmt in ('reqfile', 'resfile'):
+            filename = reqfile if fmt == 'reqfile' else resfile
+            yield f'(from {filename})'
+            yield ''
+            text = _read_file(filename)
+            for line in text.splitlines():
+                yield f'  {line}'
+            return
 
         reqfs_fields = [
             'bench_script',
@@ -1533,8 +1543,8 @@ class Job:
             ])
         else:
             raise NotImplementedError(kind)
-        req = req_cls.load(self._fs.request.metadata)
-        res = res_cls.load(self._fs.result.metadata)
+        req = req_cls.load(reqfile)
+        res = res_cls.load(resfile)
         pid = PIDFile(self._fs.pidfile).read()
         try:
             staged = _get_staged_request(self._fs.jobs)
@@ -2965,14 +2975,6 @@ def _build_compile_script(req, bfiles, exitcode=None, fakedelay=None):
 ##################################
 # commands
 
-def show_file(filename):
-    logger.info('(from %s)', filename)
-    logger.info('')
-    text = _read_file(filename)
-    for line in text.splitlines():
-        logger.info(f'  %s', line)
-
-
 def cmd_list(jobs, selections=None):
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     alljobs = list(jobs.iter_all())
@@ -3042,7 +3044,8 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
     logger.info('...done (generating request files)')
     logger.info('')
     # XXX Show something better?
-    show_file(job.fs.request.metadata)
+    for line in job.render(fmt='reqfile'):
+        logger.info(line)
 
 
 def cmd_copy(jobs, reqid=None):
@@ -3120,7 +3123,8 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
     logger.info('')
     logger.info('Results:')
     # XXX Show something better?
-    show_file(job.fs.result.metadata)
+    for line in job.render(fmt='resfile'):
+        logger.info(line)
 
 
 # internal
@@ -3130,7 +3134,8 @@ def cmd_finish_run(jobs, reqid):
     logger.info('')
     logger.info('Results:')
     # XXX Show something better?
-    show_file(job.fs.result.metadata)
+    for line in job.render(fmt='resfile'):
+        logger.info(line)
 
 
 # internal
