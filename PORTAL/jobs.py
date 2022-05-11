@@ -135,6 +135,11 @@ def _quote_shell_str(value, *, required=True):
     return shlex.quote(value)
 
 
+def _write_json(data, outfile, *, _print=print):
+    json.dump(data, outfile, indent=4)
+    _print(file=outfile)
+
+
 def _read_file(filename, *, fail=True):
     try:
         with open(filename) as infile:
@@ -928,25 +933,34 @@ def _run_fg(cmd, *args):
     )
 
 
-def _run_bg(argv, logfile):
-    if not isinstance(argv, str):
-        cmd = ' '.join(shlex.quote(a) for a in argv)
-    elif argv.strip():
+def _run_bg(argv, logfile=None):
+    if not argv:
+        raise ValueError('missing argv')
+    elif isinstance(argv, str):
+        if not argv.strip():
+            raise ValueError('missing argv')
         cmd = argv
     else:
-        raise ValueError('missing argv')
-    logfile = _quote_shell_str(logfile)
+        cmd = ' '.join(shlex.quote(a) for a in argv)
 
-    cmd = f'{cmd} >> {logfile} 2>&1'
+    if logfile:
+        logfile = _quote_shell_str(logfile)
+        cmd = f'{cmd} >> {logfile} 2>&1'
+    else:
+        cmd = f'{cmd} >/dev/null 2>&1'
+
     logger.debug('# running (background): %s', cmd)
     #subprocess.run(cmd, shell=True)
     subprocess.Popen(
         cmd,
         #creationflags=subprocess.DETACHED_PROCESS,
         #creationflags=subprocess.CREATE_NEW_CONSOLE,
+        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
+        close_fds=True,
         shell=True,
     )
 
@@ -1046,8 +1060,7 @@ class Metadata(types.SimpleNamespace):
             with open(filename, 'w') as resfile:
                 return self.save(resfile, withextra=withextra)
         data = self.as_jsonable(withextra=withextra)
-        json.dump(data, resfile, indent=4)
-        print(file=resfile)
+        _write_json(data, resfile)
 
 
 class SSHCommands:
@@ -1825,16 +1838,16 @@ class Job:
             #rm -f {pidfile}
 
             # Trigger the next job.
-            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} >> {queue_log} 2>&1 &
+            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} --logfile {queue_log} &
 
             exit $exitcode
         '''[1:-1])
 
     def run(self, *, background=False):
         if background:
-            cmd = f'"{self._fs.portal_script}" > "{self._fs.logfile}" 2>&1 &'
-            logger.debug('# running: %s', cmd)
-            subprocess.run(cmd, shell=True)
+            script = _quote_shell_str(self._fs.portal_script)
+            logfile = _quote_shell_str(self._fs.logfile)
+            _run_bg(f'{script} > {logfile}')
             return 0
         else:
             proc = subprocess.run([self.fs.portal_script])
@@ -2067,8 +2080,8 @@ class Jobs:
                 sys.executable, '-u', JOBS_SCRIPT, '-v',
                 'internal-run-next',
                 '--config', cfgfile,
+                '--logfile', self._fs.queue.log,
             ],
-            logfile=self._fs.queue.log,
         )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
@@ -2381,8 +2394,7 @@ class JobQueue:
             data['jobs'] = [str(req) for req in data['jobs']]
         # Write to the queue file.
         with open(self._datafile, 'w') as outfile:
-            json.dump(data, outfile, indent=4)
-            print(file=outfile)
+            _write_json(data, outfile)
 
     @property
     def snapshot(self):
@@ -3657,7 +3669,7 @@ COMMANDS = {
 VERBOSITY = 3
 
 
-def configure_logger(logger, verbosity=VERBOSITY, *,
+def configure_logger(logger, verbosity=VERBOSITY, logfile=None, *,
                      maxlevel=logging.CRITICAL,
                      ):
     level = max(1,  # 0 disables it, so we use the next lowest.
@@ -3667,7 +3679,10 @@ def configure_logger(logger, verbosity=VERBOSITY, *,
     #logger.propagate = False
 
     assert not logger.handlers, logger.handlers
-    handler = logging.StreamHandler(sys.stdout)
+    if logfile:
+        handler = logging.FileHandler(logfile)
+    else:
+        handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     #formatter = logging.Formatter()
     class Formatter(logging.Formatter):
@@ -3693,9 +3708,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common.add_argument('--config', dest='cfgfile')
     common.add_argument('-v', '--verbose', action='count', default=0)
     common.add_argument('-q', '--quiet', action='count', default=0)
+    common.add_argument('--logfile')
     args, argv = common.parse_known_args(argv)
     cfgfile = args.cfgfile
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
+    logfile = args.logfile
 
     ##########
     # Create the top-level parser.
@@ -3845,6 +3862,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ns.pop('cfgfile')
     ns.pop('verbose')
     ns.pop('quiet')
+    ns.pop('logfile')
 
     # Process commands and command-specific args.
     cmd = ns.pop('cmd')
@@ -3889,7 +3907,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         action = ns.pop('action')
         cmd = f'bench-host-{action}'
 
-    return cmd, ns, cfgfile, verbosity
+    return cmd, ns, cfgfile, verbosity, logfile
 
 
 def main(cmd, cmd_kwargs, cfgfile=None):
@@ -3966,6 +3984,8 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, verbosity = parse_args()
-    configure_logger(logger, verbosity)
+    cmd, cmd_kwargs, cfgfile, verbosity, logfile = parse_args()
+    configure_logger(logger, verbosity, logfile)
+    if not os.isatty(sys.stdout.fileno()):
+        print = (lambda m='': logger.info(m))
     main(cmd, cmd_kwargs, cfgfile)
