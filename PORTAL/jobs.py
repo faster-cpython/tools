@@ -917,12 +917,37 @@ def _is_proc_running(pid):
         return True
 
 
-def _run_cmd(cmd, *args):
+def _run_fg(cmd, *args):
+    argv = [cmd, *args]
+    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
     return subprocess.run(
-        [cmd, *args],
+        argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding='utf-8',
+    )
+
+
+def _run_bg(argv, logfile):
+    if not isinstance(argv, str):
+        cmd = ' '.join(shlex.quote(a) for a in argv)
+    elif argv.strip():
+        cmd = argv
+    else:
+        raise ValueError('missing argv')
+    logfile = _quote_shell_str(logfile)
+
+    cmd = f'{cmd} >> {logfile} 2>&1'
+    logger.debug('# running (background): %s', cmd)
+    #subprocess.run(cmd, shell=True)
+    subprocess.Popen(
+        cmd,
+        #creationflags=subprocess.DETACHED_PROCESS,
+        #creationflags=subprocess.CREATE_NEW_CONSOLE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        shell=True,
     )
 
 
@@ -2037,10 +2062,14 @@ class Jobs:
         if not cfgfile:
             raise NotImplementedError
         logger.debug('No job is running so we will run the next one from the queue')
-        cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" -v internal-run-next --config "{cfgfile}"'
-        cmd = f'{cmd} >> "{self._fs.queue.log}" 2>&1 &'
-        logger.debug('# running: %s', cmd)
-        subprocess.run(cmd, shell=True)
+        _run_bg(
+            [
+                sys.executable, '-u', JOBS_SCRIPT, '-v',
+                'internal-run-next',
+                '--config', cfgfile,
+            ],
+            logfile=self._fs.queue.log,
+        )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
         if not reqid:
@@ -3873,11 +3902,11 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     after = []
     for _cmd in cmd_kwargs.pop('after', None) or ():
         try:
-            _run_cmd = COMMANDS[_cmd]
+            run_after = COMMANDS[_cmd]
         except KeyError:
             logger.error('unsupported "after" cmd %r', _cmd)
             sys.exit(1)
-        after.append((_cmd, _run_cmd))
+        after.append((_cmd, run_after))
 
     logger.debug('')
     logger.debug('# PID: %s', PID)
