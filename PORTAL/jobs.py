@@ -945,9 +945,8 @@ def _run_bg(argv, logfile=None):
 
     if logfile:
         logfile = _quote_shell_str(logfile)
-        cmd = f'{cmd} >> {logfile} 2>&1'
-    else:
-        cmd = f'{cmd} >/dev/null 2>&1'
+        cmd = f'{cmd} >> {logfile}'
+    cmd = f'{cmd} 2>&1'
 
     logger.debug('# running (background): %s', cmd)
     #subprocess.run(cmd, shell=True)
@@ -2080,8 +2079,9 @@ class Jobs:
                 sys.executable, '-u', JOBS_SCRIPT, '-v',
                 'internal-run-next',
                 '--config', cfgfile,
-                '--logfile', self._fs.queue.log,
+                #'--logfile', self._fs.queue.log,
             ],
+            logfile=self._fs.queue.log,
         )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
