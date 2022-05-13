@@ -3423,7 +3423,7 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
 def cmd_cancel(jobs, reqid=None, *, _status=None):
     if not reqid:
         try:
-            job = jobs.cancel_current(ifstatus=_status)
+            job = current = jobs.cancel_current(ifstatus=_status)
         except NoRunningJobError:
             logger.error('no current request to cancel')
             sys.exit(1)
@@ -3444,6 +3444,9 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
     # XXX Show something better?
     for line in job.render(fmt='resfile'):
         logger.info(line)
+
+    if current:
+        jobs.ensure_next()
 
 
 # internal
