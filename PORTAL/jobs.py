@@ -140,6 +140,20 @@ def _write_json(data, outfile, *, _print=print):
     _print(file=outfile)
 
 
+def _wait_for_file(filename, *, timeout=None):
+    if timeout is not None and timeout > 0:
+        if not isinstance(timeout, (int, float)):
+            raise TypeError(f'timeout must be an float or int, got {timeout!r}')
+        end = time.time() + int(timeout)
+        while not os.path.exists(filename):
+            time.sleep(0.01)
+            if time.time() >= end:
+                raise TimeoutError
+    else:
+        while not os.path.exists(filename):
+            time.sleep(0.01)
+
+
 def _read_file(filename, *, fail=True):
     try:
         with open(filename) as infile:
@@ -1145,6 +1159,9 @@ class SSHClient(SSHCommands):
     def shell_commands(self):
         return SSHShellCommands(self.host, self.port, self.user)
 
+    def check(self):
+        return (self.run_shell('true').returncode == 0)
+
     def run(self, cmd, *args):
         argv = super().run(cmd, *args)
         return _run_fg(*argv)
@@ -1386,6 +1403,7 @@ class JobFS(types.SimpleNamespace):
             work.portal_script = f'{work}/send.sh'
             work.pidfile = f'{work}/send.pid'
             work.logfile = f'{work}/job.log'
+            work.ssh_okay = f'{work}/ssh.ok'
         elif context == 'bench':
             work.pidfile = f'{work}/job.pid'
             work.logfile = f'{work}/job.log'
@@ -1450,6 +1468,10 @@ class JobFS(types.SimpleNamespace):
     @property
     def logfile(self):
         return self.work.logfile
+
+    @property
+    def ssh_okay(self):
+        return self.work.ssh_okay
 
     def copy(self):
         return type(self)(
@@ -1842,7 +1864,49 @@ class Job:
             exit $exitcode
         '''[1:-1])
 
+    def check_ssh(self, *, onunknown=None, fail=True, _print=print):
+        filename = self._fs.ssh_okay
+        if onunknown is None:
+            save = False
+        elif isinstance(onunknown, str):
+            if onunknown == 'save':
+                save = True
+            elif onunknown == 'wait':
+                _wait_for_file(self._fs.ssh_okay)
+                save = False
+            elif onunknown.startswith('wait:'):
+                _, _, timeout = onunknown.partition(':')
+                if not timeout or not timeout.isdigit():
+                    raise ValueError(f'invalid onunknown timeout ({onunknown})')
+                _wait_for_file(filename, timeout=int(timeout))
+                save = False
+            else:
+                raise NotImplementedError(repr(onunknown))
+        else:
+            raise TypeError(f'expected str, got {onunknown!r}')
+        text = _read_file(filename, fail=False)
+        if text is None:
+            okay = self._worker.ssh.check()
+            if save:
+                with open(filename, 'w') as outfile:
+                    outfile.write('0' if okay else '1')
+                    _print(file=outfile)
+        else:
+            text = text.strip()
+            if text == '0':
+                okay = True
+            elif text == '1':
+                okay = False
+            else:
+                if fail:
+                    raise Exception(f'invalid ssh_okay {text!r} in {filename}')
+                okay = False
+        if fail and not okay:
+            raise ConnectionRefusedError('SSH failed (is your SSH agent running and up-to-date?)')
+        return okay
+
     def run(self, *, background=False):
+        self.check_ssh(onunknown='save')
         if background:
             script = _quote_shell_str(self._fs.portal_script)
             logfile = _quote_shell_str(self._fs.logfile)
@@ -1868,16 +1932,21 @@ class Job:
         if text and text.isdigit():
             self._worker.ssh.run_shell(f'kill {text}')
 
-    def attach(self, lines=None):
-        # Wait for the request to start.
+    def wait_until_started(self, *, checkssh=False):
+        # XXX Add a timeout?
         pid = self.get_pid()
         while pid is None:
             status = self.get_status()
             if status in Result.FINISHED:
                 raise JobNeverStartedError(reqid)
+            if checkssh and os.path.exists(self.fs.ssh_okay):
+                break
             time.sleep(0.01)
             pid = self.get_pid()
+        return pid
 
+    def attach(self, lines=None):
+        pid = self.wait_until_started()
         # XXX Cancel the job for KeyboardInterrupt?
         if pid:
             tail_file(self.fs.logfile, lines, follow=pid)
@@ -1914,6 +1983,7 @@ class Job:
         reqfs_fields = [
             'bench_script',
             'portal_script',
+            'ssh_okay',
         ]
         resfs_fields = [
             'pidfile',
@@ -1941,6 +2011,12 @@ class Job:
             isstaged = False
         else:
             isstaged = (self.reqid == staged)
+        if self.check_ssh(fail=False):
+            ssh_okay = 'yes'
+        elif os.path.exists(self._fs.ssh_okay):
+            ssh_okay = 'no'
+        else:
+            ssh_okay = '???'
 
         if fmt == 'summary':
             yield f'Request {self.reqid}:'
@@ -1959,6 +2035,7 @@ class Job:
                 if isinstance(value, str) and value.strip() != value:
                     value = repr(value)
                 yield f'  {field + ":":22} {value}'
+            yield f'  {"ssh okay:":22} {ssh_okay}'
             yield ''
             yield 'History:'
             for st, ts in res.history:
@@ -3292,7 +3369,7 @@ def cmd_remove(jobs, reqid):
     raise NotImplementedError
 
 
-def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
+def cmd_run(jobs, reqid, *, copy=False, force=False):
     if copy:
         raise NotImplementedError
     if force:
@@ -3301,11 +3378,14 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     if not reqid:
         raise NotImplementedError
 
-    if _usequeue:
-        if not jobs.queue.paused:
-            cmd_queue_push(jobs, reqid)
-            return
+    if not jobs.queue.paused:
+        cmd_queue_push(jobs, reqid)
+    else:
+        job = _cmd_run(jobs, reqid)
+        job.check_ssh(onunknown='wait:3')
 
+
+def _cmd_run(jobs, reqid):
     # Try staging it directly.
     try:
         job = jobs.activate(reqid)
@@ -3321,6 +3401,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         raise  # re-raise
     else:
         job.run(background=True)
+        return job
 
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
@@ -3331,6 +3412,8 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
             sys.exit(1)
     else:
         job = jobs.get(reqid)
+    job.wait_until_started(checkssh=True)
+    job.check_ssh()
     try:
         job.attach(lines)
     except JobNeverStartedError:
@@ -3420,7 +3503,7 @@ def cmd_run_next(jobs):
         logger.info('Running next job from queue (%s)', reqid)
         logger.info('')
         try:
-            cmd_run(jobs, reqid, _usequeue=False)
+            _cmd_run(jobs, reqid)
         except RequestAlreadyStagedError:
             if reqid == exc.curid:
                 logger.warn('%s is already running', reqid)
