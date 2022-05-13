@@ -1147,19 +1147,19 @@ class SSHClient(SSHCommands):
 
     def run(self, cmd, *args):
         argv = super().run(cmd, *args)
-        return _run_cmd(*argv)
+        return _run_fg(*argv)
 
     def run_shell(self, cmd, *args):
         argv = super().run_shell(cmd, *args)
-        return _run_cmd(*argv)
+        return _run_fg(*argv)
 
     def push(self, source, target):
         argv = super().push(*args)
-        return _run_cmd(*argv)
+        return _run_fg(*argv)
 
     def pull(self, source, target):
         argv = super().push(*args)
-        return _run_cmd(*argv)
+        return _run_fg(*argv)
 
     def read(self, filename):
         if not filename:
