@@ -375,7 +375,7 @@ class LockFile:
             # XXX double-check the file?
             raise RuntimeError('lock not held')
         self._count -= 1
-        if self._count != 0:
+        if self._count == 0:
             self._pidfile.remove()
 
 
