@@ -162,7 +162,7 @@ def _read_file(filename, *, fail=True):
         if fail:
             raise  # re-raise
         if os.path.exists(filename):
-            logger.warn('could not load PID file %r', filename)
+            logger.warn('could not load file %r', filename)
         return None
 
 
@@ -285,6 +285,8 @@ class PIDFile:
             elif orphaned == 'remove':
                 logger.warn('removing orphaned PID file (%s)', self._filename)
                 self.remove()
+                return None
+            elif orphaned == 'ignore':
                 return None
             else:
                 raise ValueError(f'unsupported orphaned handler {orphaned!r}')
@@ -2266,15 +2268,30 @@ def _get_staged_request(pfiles):
     except FileNotFoundError:
         return None
     requests, reqidstr = os.path.split(reqdir)
+    if requests != pfiles.requests.root:
+        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     reqid = RequestID.parse(reqidstr)
     if not reqid:
         return StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
-    if requests != pfiles.requests.root:
-        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
         return StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
+    reqfs = pfiles.resolve_request(reqid)
+    # Check if the request is still running.
+    status = Result.read_status(str(reqfs.result.metadata), fail=False)
+    if not status or status in ('created', 'pending'):
+        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
+    elif status not in ('active', 'running'):
+        logger.warn(f'request {reqid} is still "current" even though it finished; unsetting...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
+    elif not PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
+        logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
     # XXX Do other checks?
     return reqid
 
