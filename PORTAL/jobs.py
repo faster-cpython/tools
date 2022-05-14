@@ -1949,11 +1949,14 @@ class Job:
 
     def attach(self, lines=None):
         pid = self.wait_until_started()
-        # XXX Cancel the job for KeyboardInterrupt?
-        if pid:
-            tail_file(self.fs.logfile, lines, follow=pid)
-        elif lines:
-            tail_file(self.fs.logfile, lines, follow=False)
+        try:
+            if pid:
+                tail_file(self.fs.logfile, lines, follow=pid)
+            elif lines:
+                tail_file(self.fs.logfile, lines, follow=False)
+        except KeyboardInterrupt:
+            # XXX Prompt to cancel the job?
+            return
 
     def cancel(self, *, ifstatus=None):
         if ifstatus is not None:
