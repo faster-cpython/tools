@@ -31,6 +31,8 @@ PID = os.getpid()
 
 JOBS_SCRIPT = os.path.abspath(__file__)
 
+FAKE_DELAY = 3
+
 
 # XXX "portal" -> "control"?
 # XXX "bench" -> "worker"?
@@ -133,6 +135,25 @@ def _quote_shell_str(value, *, required=True):
     return shlex.quote(value)
 
 
+def _write_json(data, outfile, *, _print=print):
+    json.dump(data, outfile, indent=4)
+    _print(file=outfile)
+
+
+def _wait_for_file(filename, *, timeout=None):
+    if timeout is not None and timeout > 0:
+        if not isinstance(timeout, (int, float)):
+            raise TypeError(f'timeout must be an float or int, got {timeout!r}')
+        end = time.time() + int(timeout)
+        while not os.path.exists(filename):
+            time.sleep(0.01)
+            if time.time() >= end:
+                raise TimeoutError
+    else:
+        while not os.path.exists(filename):
+            time.sleep(0.01)
+
+
 def _read_file(filename, *, fail=True):
     try:
         with open(filename) as infile:
@@ -141,14 +162,14 @@ def _read_file(filename, *, fail=True):
         if fail:
             raise  # re-raise
         if os.path.exists(filename):
-            logger.warn('could not load PID file %r', filename)
+            logger.warn('could not load file %r', filename)
         return None
 
 
 def tail_file(filename, nlines, *, follow=None):
     tail_args = []
     if nlines:
-        tail_args.extend(['-n', f'{lines}' if nlines > 0 else '+0'])
+        tail_args.extend(['-n', f'{nlines}' if nlines > 0 else '+0'])
     if follow:
         tail_args.append('--follow')
         if follow is not True:
@@ -265,6 +286,8 @@ class PIDFile:
                 logger.warn('removing orphaned PID file (%s)', self._filename)
                 self.remove()
                 return None
+            elif orphaned == 'ignore':
+                return None
             else:
                 raise ValueError(f'unsupported orphaned handler {orphaned!r}')
         return pid
@@ -368,7 +391,7 @@ class LockFile:
             # XXX double-check the file?
             raise RuntimeError('lock not held')
         self._count -= 1
-        if self._count != 0:
+        if self._count == 0:
             self._pidfile.remove()
 
 
@@ -808,6 +831,18 @@ def _resolve_git_revision_and_branch(revision, branch, remote):
 ##################################
 # other utils
 
+def _ensure_int(raw, min=None):
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        value = int(raw)
+    else:
+        raise TypeError(raw)
+    if value < min:
+        raise ValueError(raw)
+    return value
+
+
 def _get_slice(raw):
     if isinstance(raw, int):
         start = stop = None
@@ -901,6 +936,48 @@ def _is_proc_running(pid):
         return True
     else:
         return True
+
+
+def _run_fg(cmd, *args):
+    argv = [cmd, *args]
+    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
+    return subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8',
+    )
+
+
+def _run_bg(argv, logfile=None):
+    if not argv:
+        raise ValueError('missing argv')
+    elif isinstance(argv, str):
+        if not argv.strip():
+            raise ValueError('missing argv')
+        cmd = argv
+    else:
+        cmd = ' '.join(shlex.quote(a) for a in argv)
+
+    if logfile:
+        logfile = _quote_shell_str(logfile)
+        cmd = f'{cmd} >> {logfile}'
+    cmd = f'{cmd} 2>&1'
+
+    logger.debug('# running (background): %s', cmd)
+    #subprocess.run(cmd, shell=True)
+    subprocess.Popen(
+        cmd,
+        #creationflags=subprocess.DETACHED_PROCESS,
+        #creationflags=subprocess.CREATE_NEW_CONSOLE,
+        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        shell=True,
+    )
 
 
 class MetadataError(ValueError):
@@ -998,8 +1075,118 @@ class Metadata(types.SimpleNamespace):
             with open(filename, 'w') as resfile:
                 return self.save(resfile, withextra=withextra)
         data = self.as_jsonable(withextra=withextra)
-        json.dump(data, resfile, indent=4)
-        print(file=resfile)
+        _write_json(data, resfile)
+
+
+class SSHCommands:
+
+    SSH = shutil.which('ssh')
+    SCP = shutil.which('scp')
+
+    def __init__(self, host, port, user, *, ssh=None, scp=None):
+        self.host = _check_shell_str(host)
+        self.port = int(port)
+        if self.port < 1:
+            raise ValueError(f'invalid port {self.port}')
+        self.user = _check_shell_str(user)
+
+        opts = []
+        if self.host == 'localhost':
+            opts.extend(['-o', 'StrictHostKeyChecking=no'])
+        self._ssh = ssh or self.SSH
+        self._ssh_opts = [*opts, '-p', str(self.port)]
+        self._scp = scp or self.SCP
+        self._scp_opts = [*opts, '-P', str(self.port)]
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, n)!r}'
+                for n in 'host port user'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def run(self, cmd, *args):
+        conn = f'{self.user}@{self.host}'
+        if not os.path.isabs(cmd):
+            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
+        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
+
+    def run_shell(self, cmd):
+        conn = f'{self.user}@{self.host}'
+        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+
+    def push(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
+
+    def pull(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+
+    def ensure_user_with_agent(self, user):
+        raise NotImplementedError
+
+
+class SSHShellCommands(SSHCommands):
+
+    SSH = 'ssh'
+    SCP = 'scp'
+
+    def run(self, cmd, *args):
+        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
+
+    def run_shell(self, cmd):
+        return ' '.join(super().run_shell(cmd))
+
+    def push(self, source, target):
+        return ' '.join(super().push(source, target))
+
+    def pull(self, source, target):
+        return ' '.join(super().pull(source, target))
+
+    def ensure_user_with_agent(self, user):
+        return [
+            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
+            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+            f'# Stop running and re-run this script as the {user} user.',
+            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
+        ]
+
+
+class SSHClient(SSHCommands):
+
+    @property
+    def commands(self):
+        return SSHCommands(self.host, self.port, self.user)
+
+    @property
+    def shell_commands(self):
+        return SSHShellCommands(self.host, self.port, self.user)
+
+    def check(self):
+        return (self.run_shell('true').returncode == 0)
+
+    def run(self, cmd, *args):
+        argv = super().run(cmd, *args)
+        return _run_fg(*argv)
+
+    def run_shell(self, cmd, *args):
+        argv = super().run_shell(cmd, *args)
+        return _run_fg(*argv)
+
+    def push(self, source, target):
+        argv = super().push(*args)
+        return _run_fg(*argv)
+
+    def pull(self, source, target):
+        argv = super().push(*args)
+        return _run_fg(*argv)
+
+    def read(self, filename):
+        if not filename:
+            raise ValueError(f'missing filename')
+        proc = self.run_shell(f'cat {filename}')
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
 
 
 ##################################
@@ -1218,6 +1405,10 @@ class JobFS(types.SimpleNamespace):
             work.portal_script = f'{work}/send.sh'
             work.pidfile = f'{work}/send.pid'
             work.logfile = f'{work}/job.log'
+            work.ssh_okay = f'{work}/ssh.ok'
+        elif context == 'bench':
+            work.pidfile = f'{work}/job.pid'
+            work.logfile = f'{work}/job.log'
         # the results
         result.metadata = f'{result}/results.json'
 
@@ -1279,6 +1470,10 @@ class JobFS(types.SimpleNamespace):
     @property
     def logfile(self):
         return self.work.logfile
+
+    @property
+    def ssh_okay(self):
+        return self.work.ssh_okay
 
     def copy(self):
         return type(self)(
@@ -1342,6 +1537,67 @@ class JobsFS(FSTree):
 
 
 ##################################
+# workers
+
+class Worker:
+
+    @classmethod
+    def from_config(cls, cfg, JobsFS=JobsFS):
+        fs = JobsFS.from_user(cfg.bench_user, 'bench')
+        ssh = SSHClient(cfg.send_host, cfg.send_port, cfg.bench_user)
+        return cls(fs, ssh)
+
+    def __init__(self, fs, ssh):
+        self._fs = fs
+        self._ssh = ssh
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'fs ssh'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def ssh(self):
+        return self._ssh
+
+    def resolve(self, reqid):
+        fs = self._fs.resolve_request(reqid)
+        return JobWorker(self, fs)
+
+
+class JobWorker:
+
+    def __init__(self, worker, fs):
+        self._worker = worker
+        self._fs = fs
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'worker fs'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    @property
+    def worker(self):
+        return self._worker
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def topfs(self):
+        return self._worker.fs
+
+    @property
+    def ssh(self):
+        return self._worker.ssh
+
+
+##################################
 # jobs
 
 class JobsError(RuntimeError):
@@ -1374,25 +1630,26 @@ class JobNeverStartedError(JobNotRunningError):
 
 class Job:
 
-    def __init__(self, reqid, fs, bench_fs):
+    def __init__(self, reqid, fs, worker, cfg):
         if not reqid:
             raise ValueError('missing reqid')
         if not fs:
             raise ValueError('missing fs')
         elif not isinstance(fs, JobFS):
             raise TypeError(f'expected JobFS for fs, got {fs!r}')
-        if not bench_fs:
-            raise ValueError('missing bench_fs')
-        elif not isinstance(bench_fs, JobFS):
-            raise TypeError(f'expected JobFS for bench_fs, got {bench_fs!r}')
+        if not worker:
+            raise ValueError('missing worker')
+        elif not isinstance(worker, JobWorker):
+            raise TypeError(f'expected JobWorker for worker, got {worker!r}')
         self._reqid = RequestID.from_raw(reqid)
         self._fs = fs
-        self._bench_fs = bench_fs
+        self._worker = worker
+        self._cfg = cfg
         self._pidfile = PIDFile(fs.pidfile)
 
     def __repr__(self):
         args = (f'{n}={str(getattr(self, "_"+n))!r}'
-                for n in 'reqid fs bench_fs'.split())
+                for n in 'reqid fs worker cfg'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
     def __str__(self):
@@ -1407,8 +1664,12 @@ class Job:
         return self._fs
 
     @property
-    def bench_fs(self):
-        return self._bench_fs
+    def worker(self):
+        return self._worker
+
+    @property
+    def cfg(self):
+        return self._cfg
 
     @property
     def kind(self):
@@ -1446,11 +1707,212 @@ class Job:
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
+    def _create(self, kind_kwargs, reqfsattrs, queue_log):
+        os.makedirs(self._fs.request.root, exist_ok=True)
+        os.makedirs(self._fs.work.root, exist_ok=True)
+        os.makedirs(self._fs.result.root, exist_ok=True)
+
+        if self._reqid.kind == 'compile-bench':
+            fake = kind_kwargs.pop('_fake', None)
+            req = _resolve_bench_compile_request(
+                self._reqid,
+                self._fs.work.root,
+                **kind_kwargs,
+            )
+
+            # Write the benchmarks manifest.
+            manifest = _build_pyperformance_manifest(req, self._worker.topfs)
+            with open(self._fs.request.manifest, 'w') as outfile:
+                outfile.write(manifest)
+
+            # Write the config.
+            ini = _build_pyperformance_config(req, self._worker.topfs)
+            with open(self._fs.request.pyperformance_config, 'w') as outfile:
+                ini.write(outfile)
+
+            # Build the script for the commands to execute remotely.
+            script = _build_compile_script(req, self._worker.topfs, fake)
+        else:
+            raise ValueError(f'unsupported job kind in {self._reqid}')
+
+        # Write metadata.
+        req.save(self._fs.request.metadata)
+        req.result.save(self._fs.result.metadata)
+
+        # Write the commands to execute remotely.
+        with open(self._fs.bench_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(self._fs.bench_script, 0o755)
+
+        # Write the commands to execute locally.
+        script = self._build_send_script(queue_log, reqfsattrs)
+        with open(self._fs.portal_script, 'w') as outfile:
+            outfile.write(script)
+        os.chmod(self._fs.portal_script, 0o755)
+
+    def _build_send_script(self, queue_log, resfsfields=None, *,
+                           hidecfg=False,
+                           ):
+        reqid = self.reqid
+        pfiles = self._fs
+        bfiles = self._worker.fs
+
+        jobs_script = _quote_shell_str(JOBS_SCRIPT)
+
+        if not self._cfg.filename:
+            raise NotImplementedError(self._cfg)
+        cfgfile = _quote_shell_str(self._cfg.filename)
+        if hidecfg:
+            ssh = SSHShellCommands('$host', '$port', '$benchuser')
+            user = '$user'
+        else:
+            user = _check_shell_str(self._cfg.send_user)
+            _check_shell_str(self._cfg.send_host)
+            _check_shell_str(self._cfg.bench_user)
+            ssh = self._worker.ssh.shell_commands
+
+        queue_log = _quote_shell_str(queue_log)
+
+        reqdir = _quote_shell_str(pfiles.request.root)
+        results_meta = _quote_shell_str(pfiles.result.metadata)
+        pidfile = _quote_shell_str(pfiles.pidfile)
+
+        _check_shell_str(bfiles.request.root)
+        _check_shell_str(bfiles.bench_script)
+        _check_shell_str(bfiles.result.root)
+        _check_shell_str(bfiles.result.metadata)
+
+        ensure_user = ssh.ensure_user_with_agent(user)
+        ensure_user = '\n                '.join(ensure_user)
+
+        resfiles = []
+        for attr in resfsfields or ():
+            pvalue = getattr(pfiles.result, attr)
+            pvalue = _quote_shell_str(pvalue)
+            bvalue = getattr(bfiles.result, attr)
+            _check_shell_str(bvalue)
+            resfiles.append((bvalue, pvalue))
+        resfiles = (ssh.pull(s, t) for s, t in resfiles)
+        resfiles = '\n                '.join(resfiles)
+
+        push = ssh.push
+        pull = ssh.pull
+        ssh = ssh.run_shell
+
+        return textwrap.dedent(f'''
+            #!/usr/bin/env bash
+
+            # This script only runs on the portal host.
+            # It does 4 things:
+            #   1. switch to the {user} user, if necessary
+            #   2. prepare the bench host, including sending all
+            #      the request files to the bench host (over SSH)
+            #   3. run the job (e.g. run the benchmarks)
+            #   4. pull the results-related files from the bench host (over SSH)
+
+            # The commands in this script are deliberately explicit
+            # so you can copy-and-paste them selectively.
+
+            cfgfile='{cfgfile}'
+
+            # Mark the script as running.
+            echo "$$" > {pidfile}
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
+            echo
+
+            user=$(jq -r '.send_user' {cfgfile})
+            if [ "$USER" != '{user}' ]; then
+                echo "(switching users from $USER to {user})"
+                echo
+                {ensure_user}
+            fi
+            host=$(jq -r '.send_host' {cfgfile})
+            port=$(jq -r '.send_port' {cfgfile})
+
+            exitcode=0
+            if {ssh(f'test -e {bfiles.request}')}; then
+                >&2 echo "request {reqid} was already sent"
+                exitcode=1
+            else
+                ( set -x
+
+                # Set up before running.
+                {ssh(f'mkdir -p {bfiles.request}')}
+                {push(f'{reqdir}/*', bfiles.request)}
+                {ssh(f'mkdir -p {bfiles.result}')}
+
+                # Run the request.
+                {ssh(bfiles.bench_script)}
+                exitcode=$?
+
+                # Finish up.
+                # XXX Push from the bench host in run.sh instead of pulling here?
+                {pull(bfiles.result.metadata, results_meta)}
+                {resfiles}
+                )
+            fi
+
+            # Unstage the request.
+            {sys.executable} {jobs_script} internal-finish-run -v --config {cfgfile} {reqid}
+
+            # Mark the script as complete.
+            echo
+            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid} has finished)"
+            #rm -f {pidfile}
+
+            # Trigger the next job.
+            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} --logfile {queue_log} &
+
+            exit $exitcode
+        '''[1:-1])
+
+    def check_ssh(self, *, onunknown=None, fail=True, _print=print):
+        filename = self._fs.ssh_okay
+        if onunknown is None:
+            save = False
+        elif isinstance(onunknown, str):
+            if onunknown == 'save':
+                save = True
+            elif onunknown == 'wait':
+                _wait_for_file(self._fs.ssh_okay)
+                save = False
+            elif onunknown.startswith('wait:'):
+                _, _, timeout = onunknown.partition(':')
+                if not timeout or not timeout.isdigit():
+                    raise ValueError(f'invalid onunknown timeout ({onunknown})')
+                _wait_for_file(filename, timeout=int(timeout))
+                save = False
+            else:
+                raise NotImplementedError(repr(onunknown))
+        else:
+            raise TypeError(f'expected str, got {onunknown!r}')
+        text = _read_file(filename, fail=False)
+        if text is None:
+            okay = self._worker.ssh.check()
+            if save:
+                with open(filename, 'w') as outfile:
+                    outfile.write('0' if okay else '1')
+                    _print(file=outfile)
+        else:
+            text = text.strip()
+            if text == '0':
+                okay = True
+            elif text == '1':
+                okay = False
+            else:
+                if fail:
+                    raise Exception(f'invalid ssh_okay {text!r} in {filename}')
+                okay = False
+        if fail and not okay:
+            raise ConnectionRefusedError('SSH failed (is your SSH agent running and up-to-date?)')
+        return okay
+
     def run(self, *, background=False):
+        self.check_ssh(onunknown='save')
         if background:
-            cmd = f'"{self._fs.portal_script}" > "{self._fs.logfile}" 2>&1 &'
-            logger.debug('# running: %s', cmd)
-            subprocess.run(cmd, shell=True)
+            script = _quote_shell_str(self._fs.portal_script)
+            logfile = _quote_shell_str(self._fs.logfile)
+            _run_bg(f'{script} > {logfile}')
             return 0
         else:
             proc = subprocess.run([self.fs.portal_script])
@@ -1463,31 +1925,46 @@ class Job:
         pid = self.get_pid()
         if pid:
             logger.info('# killing PID %s', pid)
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                logger.warn(f'job {self._reqid} no longer (PID: {pid})')
+        # Kill the worker process, if running.
+        text = self._worker.ssh.read(self._worker.fs.pidfile)
+        if text and text.isdigit():
+            self._worker.ssh.run_shell(f'kill {text}')
 
-    def attach(self, lines=None):
-        # Wait for the request to start.
+    def wait_until_started(self, *, checkssh=False):
+        # XXX Add a timeout?
         pid = self.get_pid()
         while pid is None:
             status = self.get_status()
             if status in Result.FINISHED:
                 raise JobNeverStartedError(reqid)
+            if checkssh and os.path.exists(self.fs.ssh_okay):
+                break
             time.sleep(0.01)
             pid = self.get_pid()
+        return pid
 
-        # XXX Cancel the job for KeyboardInterrupt?
-        if pid:
-            tail_file(self.fs.logfile, lines, follow=pid)
-        elif lines:
-            tail_file(self.fs.logfile, lines, follow=False)
+    def attach(self, lines=None):
+        pid = self.wait_until_started()
+        try:
+            if pid:
+                tail_file(self.fs.logfile, lines, follow=pid)
+            elif lines:
+                tail_file(self.fs.logfile, lines, follow=False)
+        except KeyboardInterrupt:
+            # XXX Prompt to cancel the job?
+            return
 
     def cancel(self, *, ifstatus=None):
         if ifstatus is not None:
             if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
                 return
-        self.set_status('canceled')
-        # XXX Try to download the results directly?
         self.kill()
+        # XXX Try to download the results directly?
+        self.set_status('canceled')
 
     def close(self):
         result = self.load_result()
@@ -1495,12 +1972,23 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def render(self, fmt=None):
+        reqfile = self._fs.request.metadata
+        resfile = self._fs.result.metadata
         if not fmt:
             fmt = 'summary'
+        elif fmt in ('reqfile', 'resfile'):
+            filename = reqfile if fmt == 'reqfile' else resfile
+            yield f'(from {filename})'
+            yield ''
+            text = _read_file(filename)
+            for line in text.splitlines():
+                yield f'  {line}'
+            return
 
         reqfs_fields = [
             'bench_script',
             'portal_script',
+            'ssh_okay',
         ]
         resfs_fields = [
             'pidfile',
@@ -1519,8 +2007,8 @@ class Job:
             ])
         else:
             raise NotImplementedError(kind)
-        req = req_cls.load(self._fs.request.metadata)
-        res = res_cls.load(self._fs.result.metadata)
+        req = req_cls.load(reqfile)
+        res = res_cls.load(resfile)
         pid = PIDFile(self._fs.pidfile).read()
         try:
             staged = _get_staged_request(self._fs.jobs)
@@ -1528,6 +2016,12 @@ class Job:
             isstaged = False
         else:
             isstaged = (self.reqid == staged)
+        if self.check_ssh(fail=False):
+            ssh_okay = 'yes'
+        elif os.path.exists(self._fs.ssh_okay):
+            ssh_okay = 'no'
+        else:
+            ssh_okay = '???'
 
         if fmt == 'summary':
             yield f'Request {self.reqid}:'
@@ -1546,6 +2040,7 @@ class Job:
                 if isinstance(value, str) and value.strip() != value:
                     value = repr(value)
                 yield f'  {field + ":":22} {value}'
+            yield f'  {"ssh okay:":22} {ssh_okay}'
             yield ''
             yield 'History:'
             for st, ts in res.history:
@@ -1579,7 +2074,7 @@ class Jobs:
     def __init__(self, cfg):
         self._cfg = cfg
         self._fs = self.FS(cfg.data_dir)
-        self._bench_fs = self.FS.from_user(cfg.bench_user, 'bench')
+        self._worker = Worker.from_config(cfg, self.FS)
 
     def __str__(self):
         return self.fs.root
@@ -1592,11 +2087,6 @@ class Jobs:
     def fs(self):
         """Files on the portal host."""
         return self._fs.copy()
-
-    @property
-    def bench_fs(self):
-        """Files on the bench host."""
-        return self._bench_fs.copy()
 
     @property
     def queue(self):
@@ -1617,7 +2107,8 @@ class Jobs:
         return Job(
             reqid,
             self._fs.resolve_request(reqid),
-            self._bench_fs.resolve_request(reqid),
+            self._worker.resolve(reqid),
+            self._cfg,
         )
 
     def get_current(self):
@@ -1634,174 +2125,8 @@ class Jobs:
             kind_kwargs = {}
 
         job = self._get(reqid)
-        os.makedirs(job.fs.request.root, exist_ok=True)
-        os.makedirs(job.fs.work.root, exist_ok=True)
-        os.makedirs(job.fs.result.root, exist_ok=True)
-
-        if reqid.kind == 'compile-bench':
-            exitcode = kind_kwargs.pop('exitcode', None)
-            req = _resolve_bench_compile_request(
-                reqid,
-                job.fs.work.root,
-                **kind_kwargs,
-            )
-
-            # Write the benchmarks manifest.
-            manifest = _build_pyperformance_manifest(req, self._bench_fs)
-            with open(job.fs.request.manifest, 'w') as outfile:
-                outfile.write(manifest)
-
-            # Write the config.
-            ini = _build_pyperformance_config(req, self._bench_fs)
-            with open(job.fs.request.pyperformance_config, 'w') as outfile:
-                ini.write(outfile)
-
-            # Build the script for the commands to execute remotely.
-            script = _build_compile_script(req, self._bench_fs, exitcode)
-        else:
-            raise ValueError(f'unsupported job kind in {reqid}')
-
-        # Write metadata.
-        req.save(job.fs.request.metadata)
-        req.result.save(job.fs.result.metadata)
-
-        # Write the commands to execute remotely.
-        with open(job.fs.bench_script, 'w') as outfile:
-            outfile.write(script)
-        os.chmod(job.fs.bench_script, 0o755)
-
-        # Write the commands to execute locally.
-        script = self._build_send_script(reqid, reqfsattrs)
-        with open(job.fs.portal_script, 'w') as outfile:
-            outfile.write(script)
-        os.chmod(job.fs.portal_script, 0o755)
-
+        job._create(kind_kwargs, reqfsattrs, self._fs.queue.log)
         return job
-
-    def _build_send_script(self, reqid, resfsfields=None, *,
-                           hidecfg=False,
-                           ):
-        cfg = self._cfg
-        pfiles = self._fs
-        bfiles = self._bench_fs
-
-        jobs_script = _quote_shell_str(JOBS_SCRIPT)
-
-        if not cfg.filename:
-            raise NotImplementedError(cfg)
-        cfgfile = _quote_shell_str(cfg.filename)
-        if hidecfg:
-            benchuser = '$benchuser'
-            user = '$user'
-            host = _host = '$host'
-            port = '$port'
-        else:
-            benchuser = _check_shell_str(cfg.bench_user)
-            user = _check_shell_str(cfg.send_user)
-            host = _check_shell_str(cfg.send_host)
-            port = cfg.send_port
-        conn = f'{benchuser}@{host}'
-
-        if cfg.send_host == 'localhost':
-            ssh = 'ssh -o StrictHostKeyChecking=no'
-            scp = 'scp -o StrictHostKeyChecking=no'
-        else:
-            ssh = 'ssh'
-            scp = 'scp'
-
-        queue_log = _quote_shell_str(pfiles.queue.log)
-        #reqdir = _quote_shell_str(pfiles.requests.current)
-        jobfs = pfiles.resolve_request(reqid)
-        reqdir = _quote_shell_str(jobfs.request.root)
-        results_meta = _quote_shell_str(jobfs.result.metadata)
-        pidfile = _quote_shell_str(jobfs.pidfile)
-
-        bfiles = bfiles.resolve_request(reqid)
-        _check_shell_str(bfiles.request.root)
-        _check_shell_str(bfiles.bench_script)
-        _check_shell_str(bfiles.result.root)
-        _check_shell_str(bfiles.result.metadata)
-
-        resfiles = []
-        for attr in resfsfields or ():
-            pvalue = getattr(jobfs.result, attr)
-            pvalue = _quote_shell_str(pvalue)
-            bvalue = getattr(bfiles.result, attr)
-            _check_shell_str(bvalue)
-            resfiles.append((bvalue, pvalue))
-        resfiles = (f'{scp} -rp -P {port} {conn}:{r[0]} {r[1]}'
-                    for r in resfiles)
-        resfiles = '\n                '.join(resfiles)
-
-        return textwrap.dedent(f'''
-            #!/usr/bin/env bash
-
-            # This script only runs on the portal host.
-            # It does 4 things:
-            #   1. switch to the {user} user, if necessary
-            #   2. prepare the bench host, including sending all
-            #      the request files to the bench host (over SSH)
-            #   3. run the job (e.g. run the benchmarks)
-            #   4. pull the results-related files from the bench host (over SSH)
-
-            # The commands in this script are deliberately explicit
-            # so you can copy-and-paste them selectively.
-
-            cfgfile='{cfgfile}'
-
-            # Mark the script as running.
-            echo "$$" > {pidfile}
-            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
-            echo
-
-            user=$(jq -r '.send_user' {cfgfile})
-            if [ "$USER" != '{user}' ]; then
-                echo "(switching users from $USER to {user})"
-                echo
-                setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")
-                setfacl -m {user}:rwx "$SSH_AUTH_SOCK"
-                # Stop running and re-run this script as the {user} user.
-                exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"
-            fi
-            host=$(jq -r '.send_host' {cfgfile})
-            port=$(jq -r '.send_port' {cfgfile})
-
-            exitcode=0
-            if ssh -p {port} {conn} test -e {bfiles.request}; then
-                >&2 echo "request {reqid} was already sent"
-                exitcode=1
-            else
-                ( set -x
-
-                # Set up before running.
-                {ssh} -p {port} {conn} mkdir -p {bfiles.request}
-                {scp} -rp -P {port} {reqdir}/* {conn}:{bfiles.request}
-                {ssh} -p {port} {conn} mkdir -p {bfiles.result}
-
-                # Run the request.
-                {ssh} -p {port} {conn} {bfiles.bench_script}
-                exitcode=$?
-
-                # Finish up.
-                # XXX Push from the bench host in run.sh instead of pulling here?
-                {scp} -p -P {port} {conn}:{bfiles.result.metadata} {results_meta}
-                {resfiles}
-                )
-            fi
-
-            # Unstage the request.
-            {sys.executable} {jobs_script} internal-finish-run -v --config {cfgfile} {reqid}
-
-            # Mark the script as complete.
-            echo
-            echo "(the "'"'"{reqid.kind}"'"'" job, {reqid} has finished)"
-            #rm -f {pidfile}
-
-            # Trigger the next job.
-            {sys.executable} {jobs_script} internal-run-next -v --config {cfgfile} >> {queue_log} 2>&1 &
-
-            exit $exitcode
-        '''[1:-1])
 
     def activate(self, reqid):
         logger.debug('# staging request')
@@ -1831,10 +2156,15 @@ class Jobs:
         if not cfgfile:
             raise NotImplementedError
         logger.debug('No job is running so we will run the next one from the queue')
-        cmd = f'"{sys.executable}" -u "{JOBS_SCRIPT}" -v internal-run-next --config "{cfgfile}"'
-        cmd = f'{cmd} >> "{self._fs.queue.log}" 2>&1 &'
-        logger.debug('# running: %s', cmd)
-        subprocess.run(cmd, shell=True)
+        _run_bg(
+            [
+                sys.executable, '-u', JOBS_SCRIPT, '-v',
+                'internal-run-next',
+                '--config', cfgfile,
+                #'--logfile', self._fs.queue.log,
+            ],
+            logfile=self._fs.queue.log,
+        )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
         if not reqid:
@@ -1941,15 +2271,30 @@ def _get_staged_request(pfiles):
     except FileNotFoundError:
         return None
     requests, reqidstr = os.path.split(reqdir)
+    if requests != pfiles.requests.root:
+        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     reqid = RequestID.parse(reqidstr)
     if not reqid:
         return StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
-    if requests != pfiles.requests.root:
-        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     if not os.path.exists(reqdir):
         return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
         return StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
+    reqfs = pfiles.resolve_request(reqid)
+    # Check if the request is still running.
+    status = Result.read_status(str(reqfs.result.metadata), fail=False)
+    if not status or status in ('created', 'pending'):
+        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
+    elif status not in ('active', 'running'):
+        logger.warn(f'request {reqid} is still "current" even though it finished; unsetting...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
+    elif not PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
+        logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+        os.unlink(pfiles.requests.current)
+        reqid = None
     # XXX Do other checks?
     return reqid
 
@@ -2146,8 +2491,7 @@ class JobQueue:
             data['jobs'] = [str(req) for req in data['jobs']]
         # Write to the queue file.
         with open(self._datafile, 'w') as outfile:
-            json.dump(data, outfile, indent=4)
-            print(file=outfile)
+            _write_json(data, outfile)
 
     @property
     def snapshot(self):
@@ -2748,12 +3092,29 @@ def _build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def _build_compile_script(req, bfiles, exitcode=None):
+def _build_compile_script(req, bfiles, fake=None):
+    fakedelay = FAKE_DELAY
+    if fake is False or fake is None:
+        fake = (None, None)
+    elif fake is True:
+        fake = (0, None)
+    elif isinstance(fake, (int, str)):
+        fake = (fake, None)
+    exitcode, fakedelay = fake
+    if fakedelay is None:
+        fakedelay = FAKE_DELAY
+    else:
+        fakedelay = _ensure_int(fakedelay, min=0)
+        if exitcode is None:
+            exitcode = 0
+        elif exitcode == '':
+            logger.warn(f'fakedelay ({fakedelay}) will not be used')
     if exitcode is None:
         exitcode = ''
     elif exitcode != '':
+        exitcode = _ensure_int(exitcode, min=0)
         logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
-    python = 'python3.9'  # On the bench host:
+    python = 'python3.9'  # On the bench host.
     numjobs = 20
 
     _check_shell_str(str(req.id) if req.id else '')
@@ -2772,6 +3133,8 @@ def _build_compile_script(req, bfiles, exitcode=None):
     pyston_benchmarks_repo = _quote_shell_str(bfiles.repos.pyston_benchmarks)
 
     bfiles = bfiles.resolve_request(req.id)
+    _check_shell_str(bfiles.work.pidfile)
+    _check_shell_str(bfiles.work.logfile)
     _check_shell_str(bfiles.work.scratch_dir)
     _check_shell_str(bfiles.request.pyperformance_config)
     _check_shell_str(bfiles.result.pyperformance_log)
@@ -2780,6 +3143,8 @@ def _build_compile_script(req, bfiles, exitcode=None):
     _check_shell_str(bfiles.work.pyperformance_results_glob)
 
     _check_shell_str(python)
+
+    # XXX Kill any zombie job processes?
 
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
@@ -2791,6 +3156,8 @@ def _build_compile_script(req, bfiles, exitcode=None):
 
         #####################
         # Mark the result as running.
+
+        echo "$$" > {bfiles.work.pidfile}
 
         status=$(jq -r '.status' {bfiles.result.metadata})
         if [ "$status" != 'active' ]; then
@@ -2880,11 +3247,12 @@ def _build_compile_script(req, bfiles, exitcode=None):
         )
 
         echo "running the benchmarks..."
-        echo "(logging to {bfiles.result.pyperformance_log})"
+        echo "(logging to {bfiles.work.logfile})"
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
-            touch {bfiles.result.pyperformance_log}
+            sleep {fakedelay}
+            touch {bfiles.work.logfile}
             touch {bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
@@ -2893,13 +3261,17 @@ def _build_compile_script(req, bfiles, exitcode=None):
                 {python} {pyperformance_repo}/dev.py compile \\
                 {bfiles.request.pyperformance_config} \\
                 {req.ref} {maybe_branch} \\
-                2>&1 | tee {bfiles.result.pyperformance_log}
+                2>&1 | tee {bfiles.work.logfile}
             )
             exitcode=$?
         fi
 
         #####################
-        # Record the results metadata.
+        # Record the results.
+
+        if [ -e {bfiles.work.logfile} ]; then
+            ln -s {bfiles.work.logfile} {bfiles.result.pyperformance_log}
+        fi
 
         results=$(2>/dev/null ls {bfiles.work.pyperformance_results_glob})
         results_name=$(2>/dev/null basename $results)
@@ -2933,19 +3305,13 @@ def _build_compile_script(req, bfiles, exitcode=None):
         fi
 
         echo "...done!"
+
+        #rm -f {bfiles.work.pidfile}
     '''[1:-1])
 
 
 ##################################
 # commands
-
-def show_file(filename):
-    logger.info('(from %s)', filename)
-    logger.info('')
-    text = _read_file(filename)
-    for line in text.splitlines():
-        logger.info(f'  %s', line)
-
 
 def cmd_list(jobs, selections=None):
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
@@ -2991,7 +3357,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               benchmarks=None,
                               optimize=False,
                               debug=False,
-                              exitcode=None,
+                              _fake=None,
                               ):
     if not reqid:
         raise NotImplementedError
@@ -3000,21 +3366,19 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
     logger.info('generating request files in %s...', reqroot)
     job = jobs.create(
         reqid,
-        dict(
+        kind_kwargs=dict(
             revision=revision,
             remote=remote,
             branch=branch,
             benchmarks=benchmarks,
             optimize=optimize,
             debug=debug,
-            exitcode=exitcode,
+            _fake=_fake,
         ),
-        ['pyperformance_results', 'pyperformance_log'],
+        reqfsattrs=['pyperformance_results', 'pyperformance_log'],
     )
     logger.info('...done (generating request files)')
-    logger.info('')
-    # XXX Show something better?
-    show_file(job.fs.request.metadata)
+    return job
 
 
 def cmd_copy(jobs, reqid=None):
@@ -3025,7 +3389,7 @@ def cmd_remove(jobs, reqid):
     raise NotImplementedError
 
 
-def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
+def cmd_run(jobs, reqid, *, copy=False, force=False):
     if copy:
         raise NotImplementedError
     if force:
@@ -3034,11 +3398,14 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
     if not reqid:
         raise NotImplementedError
 
-    if _usequeue:
-        if not jobs.queue.paused:
-            cmd_queue_push(jobs, reqid)
-            return
+    if not jobs.queue.paused:
+        cmd_queue_push(jobs, reqid)
+    else:
+        job = _cmd_run(jobs, reqid)
+        job.check_ssh(onunknown='wait:3')
 
+
+def _cmd_run(jobs, reqid):
     # Try staging it directly.
     try:
         job = jobs.activate(reqid)
@@ -3054,6 +3421,7 @@ def cmd_run(jobs, reqid, *, copy=False, force=False, _usequeue=True):
         raise  # re-raise
     else:
         job.run(background=True)
+        return job
 
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
@@ -3064,6 +3432,8 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
             sys.exit(1)
     else:
         job = jobs.get(reqid)
+    job.wait_until_started(checkssh=True)
+    job.check_ssh()
     try:
         job.attach(lines)
     except JobNeverStartedError:
@@ -3073,7 +3443,7 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
 def cmd_cancel(jobs, reqid=None, *, _status=None):
     if not reqid:
         try:
-            job = jobs.cancel_current(ifstatus=_status)
+            job = current = jobs.cancel_current(ifstatus=_status)
         except NoRunningJobError:
             logger.error('no current request to cancel')
             sys.exit(1)
@@ -3092,7 +3462,11 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
     logger.info('')
     logger.info('Results:')
     # XXX Show something better?
-    show_file(job.fs.result.metadata)
+    for line in job.render(fmt='resfile'):
+        logger.info(line)
+
+    if current:
+        jobs.ensure_next()
 
 
 # internal
@@ -3102,7 +3476,8 @@ def cmd_finish_run(jobs, reqid):
     logger.info('')
     logger.info('Results:')
     # XXX Show something better?
-    show_file(job.fs.result.metadata)
+    for line in job.render(fmt='resfile'):
+        logger.info(line)
 
 
 # internal
@@ -3151,7 +3526,7 @@ def cmd_run_next(jobs):
         logger.info('Running next job from queue (%s)', reqid)
         logger.info('')
         try:
-            cmd_run(jobs, reqid, _usequeue=False)
+            _cmd_run(jobs, reqid)
         except RequestAlreadyStagedError:
             if reqid == exc.curid:
                 logger.warn('%s is already running', reqid)
@@ -3400,7 +3775,7 @@ COMMANDS = {
 VERBOSITY = 3
 
 
-def configure_logger(logger, verbosity=VERBOSITY, *,
+def configure_logger(logger, verbosity=VERBOSITY, logfile=None, *,
                      maxlevel=logging.CRITICAL,
                      ):
     level = max(1,  # 0 disables it, so we use the next lowest.
@@ -3410,7 +3785,10 @@ def configure_logger(logger, verbosity=VERBOSITY, *,
     #logger.propagate = False
 
     assert not logger.handlers, logger.handlers
-    handler = logging.StreamHandler(sys.stdout)
+    if logfile:
+        handler = logging.FileHandler(logfile)
+    else:
+        handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     #formatter = logging.Formatter()
     class Formatter(logging.Formatter):
@@ -3436,9 +3814,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common.add_argument('--config', dest='cfgfile')
     common.add_argument('-v', '--verbose', action='count', default=0)
     common.add_argument('-q', '--quiet', action='count', default=0)
+    common.add_argument('--logfile')
     args, argv = common.parse_known_args(argv)
     cfgfile = args.cfgfile
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
+    logfile = args.logfile
 
     ##########
     # Create the top-level parser.
@@ -3531,6 +3911,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                          action='store_const', const=0)
         sub.add_argument('--fake-failure', dest='exitcode',
                          action='store_const', const=1)
+        sub.add_argument('--fake-delay', dest='fakedelay')
 
     ##########
     # Add the "queue" subcomamnds.
@@ -3587,11 +3968,18 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ns.pop('cfgfile')
     ns.pop('verbose')
     ns.pop('quiet')
+    ns.pop('logfile')
 
+    # Process commands and command-specific args.
     cmd = ns.pop('cmd')
     if cmd in ('add', 'request'):
         job = ns.pop('job')
         cmd = f'request-{job}'
+        if job == 'compile-bench':
+            # Process hidden args.
+            fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
+            if any(v is not None for v in fake):
+                args._fake = fake
     elif cmd == 'config':
         cmd = 'config-show'
     elif cmd == 'queue':
@@ -3625,7 +4013,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         action = ns.pop('action')
         cmd = f'bench-host-{action}'
 
-    return cmd, ns, cfgfile, verbosity
+    return cmd, ns, cfgfile, verbosity, logfile
 
 
 def main(cmd, cmd_kwargs, cfgfile=None):
@@ -3638,11 +4026,11 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     after = []
     for _cmd in cmd_kwargs.pop('after', None) or ():
         try:
-            _run_cmd = COMMANDS[_cmd]
+            run_after = COMMANDS[_cmd]
         except KeyError:
             logger.error('unsupported "after" cmd %r', _cmd)
             sys.exit(1)
-        after.append((_cmd, _run_cmd))
+        after.append((_cmd, run_after))
 
     logger.debug('')
     logger.debug('# PID: %s', PID)
@@ -3679,7 +4067,14 @@ def main(cmd, cmd_kwargs, cfgfile=None):
     else:
         logger.info('# Running %r command', cmd)
     logger.info('')
-    run_cmd(jobs, **cmd_kwargs)
+    job = run_cmd(jobs, **cmd_kwargs)
+
+    if cmd.startswith('request-'):
+        _fmt = 'reqfile' if after else 'summary'
+        logger.info('')
+        # XXX Show something better?
+        for line in job.render(fmt=_fmt):
+            logger.info(line)
 
     # Run "after" commands, if any
     for cmd, run_cmd in after:
@@ -3695,6 +4090,8 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, verbosity = parse_args()
-    configure_logger(logger, verbosity)
+    cmd, cmd_kwargs, cfgfile, verbosity, logfile = parse_args()
+    configure_logger(logger, verbosity, logfile)
+    if not os.isatty(sys.stdout.fileno()):
+        print = (lambda m='': logger.info(m))
     main(cmd, cmd_kwargs, cfgfile)
