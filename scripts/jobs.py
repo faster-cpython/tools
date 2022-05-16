@@ -5,7 +5,7 @@ import sys
 if __name__ != '__main__':
     sys.exit('not a module')
 
-SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 TOOLS_ROOT = os.path.dirname(SCRIPTS_DIR)
 
 proc = subprocess.run(
