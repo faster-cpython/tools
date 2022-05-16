@@ -4,11 +4,11 @@ import sys
 
 
 proc = subprocess.run(
-    [sys.executable,
-     os.path.join(os.path.dirname(__file__), 'jobs.py'),
+    [sys.executable, '-u', '-m', 'jobs',
      # XXX Change the flag to --run-attached once that works.
      'add', 'compile-bench', '--run-attached',
      *sys.argv[1:],
-    ]
+    ],
+    cwd=os.path.join(os.path.dirname(__file__)),
 )
 sys.exit(proc.returncode)
