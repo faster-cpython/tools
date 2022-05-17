@@ -21,13 +21,25 @@ logger = logging.getLogger(__name__)
 ##################################
 # jobs config
 
-class PortalConfig(_utils.Config):
+class PortalConfig(_utils.TopConfig):
 
+    CONFIG_DIRS = _utils.TopConfig.CONFIG_DIRS + [
+        f'{_utils.HOME}/BENCH',
+    ]
     CONFIG = 'benchmarking-portal.json'
-    ALT_CONFIG = 'portal.json'
 
     FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
     OPTIONAL = ['data_dir']
+
+    @classmethod
+    def find_config(cls, cfgdirs=None):
+        try:
+            return super().find_config(cfgdirs)
+        except FileNotFoundError:
+            filename = f'{_utils.HOME}/BENCH/portal.json'
+            if os.path.exists(filename):
+                return filename
+            raise  # re-raise
 
     def __init__(self,
                  bench_user,
@@ -59,8 +71,7 @@ class PortalConfig(_utils.Config):
 
 #class BenchConfig(_utils.Config):
 #
-#    CONFIG = f'benchmarking-bench.json'
-#    ALT_CONFIG = f'bench.json'
+#    CONFIG = f'bench.json'
 #
 #    FIELDS = ['portal']
 #

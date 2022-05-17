@@ -1127,35 +1127,18 @@ def resolve_git_revision_and_branch(revision, branch, remote):
 class Config(types.SimpleNamespace):
     """The base config for the benchmarking machinery."""
 
-    CONFIG_DIRS = [
-        f'{HOME}/.config',
-        HOME,
-        f'{HOME}/BENCH',
-    ]
-    CONFIG = 'benchmarking.json'
-    ALT_CONFIG = None
-
     # XXX Get FIELDS from the __init__() signature?
     FIELDS = ()
     OPTIONAL = ()
 
-    @classmethod
-    def find_config(cls):
-        for dirname in cls.CONFIG_DIRS:
-            filename = f'{dirname}/{cls.CONFIG}'
-            if os.path.exists(filename):
-                return filename
-        else:
-            if cls.ALT_CONFIG:
-                filename = f'{HOME}/BENCH/{cls.ALT_CONFIG}'
-                if os.path.exists(filename):
-                    return filename
-            raise FileNotFoundError('could not find config file')
+    FILE = 'benchmarking.json'
 
     @classmethod
-    def load(cls, filename=None, *, preserveorig=True):
-        if not filename:
-            filename = cls.find_config()
+    def load(cls, filename, *, preserveorig=True):
+        if os.path.isdir(filename):
+            if not cls.FILE:
+                raise AttributeError(f'missing {cls.__name__}.FILE')
+            filename = os.path.join(filename, cls.FILE)
 
         with open(filename) as infile:
             data = json.load(infile)
@@ -1240,6 +1223,40 @@ class Config(types.SimpleNamespace):
         data = self.as_jsonable()
         text = json.dumps(data, indent=4)
         yield from text.splitlines()
+
+
+class TopConfig(Config):
+
+    CONFIG_DIRS = [
+        f'{HOME}/.config',
+        HOME,
+    ]
+
+    @classmethod
+    def find_config(cls, cfgdirs=None):
+        if not cfgdirs:
+            cfgdirs = cls.CONFIG_DIRS
+            if not cfgdirs:
+                raise ValueError('missing cfgdirs')
+        elif isinstance(cfgdirs, str):
+            cfgdirs = [cfgdirs]
+        if not cls.FILE:
+            raise AttributeError(f'missing {cls.__name__}.FILE')
+        for dirname in cfgdirs:
+            filename = f'{dirname}/{cls.FILE}'
+            if os.path.exists(filename):
+                if os.path.isdir(filename):
+                    logger.warn(f'expected file, found {filename}')
+                else:
+                    return filename
+        else:
+            raise FileNotFoundError('could not find config file')
+
+    @classmethod
+    def load(cls, filename=None, **kwargs):
+        if not filename:
+            filename = cls.find_config()
+        return super().load(filename, **kwargs)
 
 
 ##################################
