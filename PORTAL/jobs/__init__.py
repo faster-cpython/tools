@@ -69,20 +69,6 @@ class PortalConfig(_utils.TopConfig):
         )
 
 
-#class BenchConfig(_utils.Config):
-#
-#    CONFIG = f'bench.json'
-#
-#    FIELDS = ['portal']
-#
-#    def __init__(self,
-#                 portal,
-#                 ):
-#        super().__init__(
-#            portal=portal,
-#        )
-
-
 ##################################
 # job files
 
