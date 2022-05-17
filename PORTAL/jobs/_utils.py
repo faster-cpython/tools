@@ -577,14 +577,7 @@ def looks_like_git_ref(value):
 
 
 def git(*args, cwd=HOME, GIT=shutil.which('git')):
-    logger.debug('# running: %s', ' '.join(args))
-    proc = subprocess.run(
-        [GIT, *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding='utf-8',
-        cwd=cwd,
-    )
+    proc = run_fg(GIT, *args, cwd=cwd)
     return proc.returncode, proc.stdout
 
 
@@ -984,6 +977,11 @@ class GitRefs(types.SimpleNamespace):
     def from_url(cls, url):
         ec, text = git('ls-remote', '--refs', '--tags', '--heads', url)
         if ec != 0:
+            if text.strip():
+                for line in text.splitlines():
+                    logger.debug(line)
+            else:
+                logger.debug('(no output)')
             return None, None, None
         return cls._parse_ls_remote(text.splitlines())
 
@@ -1770,7 +1768,7 @@ def _is_proc_running(pid):
         return True
 
 
-def run_fg(cmd, *args):
+def run_fg(cmd, *args, cwd=None):
     argv = [cmd, *args]
     logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
     return subprocess.run(
@@ -1778,6 +1776,7 @@ def run_fg(cmd, *args):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding='utf-8',
+        cwd=cwd,
     )
 
 
