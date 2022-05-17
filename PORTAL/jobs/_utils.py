@@ -1210,7 +1210,7 @@ class Config(types.SimpleNamespace):
 
     def as_jsonable(self, *, withmissingoptional=True):
         # XXX Hide sensitive data?
-        data = {k: v
+        data = {k: as_jsonable(v)
                 for k, v in vars(self).items()
                 if not k.startswith('_')}
         if withmissingoptional:
@@ -1257,6 +1257,149 @@ class TopConfig(Config):
         if not filename:
             filename = cls.find_config()
         return super().load(filename, **kwargs)
+
+
+##################################
+# network utils
+
+class SSHConnectionConfig(Config):
+
+    FIELDS = ['user', 'host', 'port']
+
+    CONFIG = 'ssh-conn.json'
+
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif not raw:
+            raise ValueError('missing data')
+        else:
+            return cls(**raw)
+
+    def __init__(self, user, host, port):
+        if not user:
+            raise ValueError('missing user')
+        if not host:
+            raise ValueError('missing host')
+        if not port:
+            raise ValueError('missing port')
+        super().__init__(
+            user=user,
+            host=host,
+            port=port,
+        )
+
+
+class SSHCommands:
+
+    SSH = shutil.which('ssh')
+    SCP = shutil.which('scp')
+
+    def __init__(self, host, port, user, *, ssh=None, scp=None):
+        self.host = check_shell_str(host)
+        self.port = int(port)
+        if self.port < 1:
+            raise ValueError(f'invalid port {self.port}')
+        self.user = check_shell_str(user)
+
+        opts = []
+        if self.host == 'localhost':
+            opts.extend(['-o', 'StrictHostKeyChecking=no'])
+        self._ssh = ssh or self.SSH
+        self._ssh_opts = [*opts, '-p', str(self.port)]
+        self._scp = scp or self.SCP
+        self._scp_opts = [*opts, '-P', str(self.port)]
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, n)!r}'
+                for n in 'host port user'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def run(self, cmd, *args):
+        conn = f'{self.user}@{self.host}'
+        if not os.path.isabs(cmd):
+            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
+        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
+
+    def run_shell(self, cmd):
+        conn = f'{self.user}@{self.host}'
+        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+
+    def push(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
+
+    def pull(self, source, target):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+
+    def ensure_user_with_agent(self, user):
+        raise NotImplementedError
+
+
+class SSHShellCommands(SSHCommands):
+
+    SSH = 'ssh'
+    SCP = 'scp'
+
+    def run(self, cmd, *args):
+        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
+
+    def run_shell(self, cmd):
+        return ' '.join(super().run_shell(cmd))
+
+    def push(self, source, target):
+        return ' '.join(super().push(source, target))
+
+    def pull(self, source, target):
+        return ' '.join(super().pull(source, target))
+
+    def ensure_user_with_agent(self, user):
+        return [
+            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
+            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+            f'# Stop running and re-run this script as the {user} user.',
+            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
+        ]
+
+
+class SSHClient(SSHCommands):
+
+    @property
+    def commands(self):
+        return SSHCommands(self.host, self.port, self.user)
+
+    @property
+    def shell_commands(self):
+        return SSHShellCommands(self.host, self.port, self.user)
+
+    def check(self):
+        return (self.run_shell('true').returncode == 0)
+
+    def run(self, cmd, *args):
+        argv = super().run(cmd, *args)
+        return run_fg(*argv)
+
+    def run_shell(self, cmd, *args):
+        argv = super().run_shell(cmd, *args)
+        return run_fg(*argv)
+
+    def push(self, source, target):
+        argv = super().push(*args)
+        return run_fg(*argv)
+
+    def pull(self, source, target):
+        argv = super().push(*args)
+        return run_fg(*argv)
+
+    def read(self, filename):
+        if not filename:
+            raise ValueError(f'missing filename')
+        proc = self.run_shell(f'cat {filename}')
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
 
 
 ##################################
@@ -1341,6 +1484,23 @@ def get_slice(raw):
             raise NotImplementedError(repr(raw))
     else:
         raise TypeError(f'expected str, got {criteria!r}')
+
+
+def as_jsonable(data):
+    if hasattr(data, 'as_jsonable'):
+        return data.as_jsonable()
+    elif data in (True, False, None):
+        return data
+    elif type(data) in (int, float, str):
+        return data
+    else:
+        # Recurse into containers.
+        if hasattr(data, 'items'):
+            return {k: as_jsonable(v) for k, v in data.items()}
+        elif hasattr(data, '__getitem__'):
+            return [as_jsonable(v) for v in data]
+        else:
+            raise TypeError(f'unsupported data {data!r}')
 
 
 def resolve_user(cfg, user=None):
@@ -1745,114 +1905,3 @@ class Metadata(types.SimpleNamespace):
                 return self.save(resfile, withextra=withextra)
         data = self.as_jsonable(withextra=withextra)
         write_json(data, resfile)
-
-
-class SSHCommands:
-
-    SSH = shutil.which('ssh')
-    SCP = shutil.which('scp')
-
-    def __init__(self, host, port, user, *, ssh=None, scp=None):
-        self.host = check_shell_str(host)
-        self.port = int(port)
-        if self.port < 1:
-            raise ValueError(f'invalid port {self.port}')
-        self.user = check_shell_str(user)
-
-        opts = []
-        if self.host == 'localhost':
-            opts.extend(['-o', 'StrictHostKeyChecking=no'])
-        self._ssh = ssh or self.SSH
-        self._ssh_opts = [*opts, '-p', str(self.port)]
-        self._scp = scp or self.SCP
-        self._scp_opts = [*opts, '-P', str(self.port)]
-
-    def __repr__(self):
-        args = (f'{n}={getattr(self, n)!r}'
-                for n in 'host port user'.split())
-        return f'{type(self).__name__}({"".join(args)})'
-
-    def run(self, cmd, *args):
-        conn = f'{self.user}@{self.host}'
-        if not os.path.isabs(cmd):
-            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
-        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
-
-    def run_shell(self, cmd):
-        conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
-
-    def push(self, source, target):
-        conn = f'{self.user}@{self.host}'
-        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
-
-    def pull(self, source, target):
-        conn = f'{self.user}@{self.host}'
-        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
-
-    def ensure_user_with_agent(self, user):
-        raise NotImplementedError
-
-
-class SSHShellCommands(SSHCommands):
-
-    SSH = 'ssh'
-    SCP = 'scp'
-
-    def run(self, cmd, *args):
-        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
-
-    def run_shell(self, cmd):
-        return ' '.join(super().run_shell(cmd))
-
-    def push(self, source, target):
-        return ' '.join(super().push(source, target))
-
-    def pull(self, source, target):
-        return ' '.join(super().pull(source, target))
-
-    def ensure_user_with_agent(self, user):
-        return [
-            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
-            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
-            f'# Stop running and re-run this script as the {user} user.',
-            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
-        ]
-
-
-class SSHClient(SSHCommands):
-
-    @property
-    def commands(self):
-        return SSHCommands(self.host, self.port, self.user)
-
-    @property
-    def shell_commands(self):
-        return SSHShellCommands(self.host, self.port, self.user)
-
-    def check(self):
-        return (self.run_shell('true').returncode == 0)
-
-    def run(self, cmd, *args):
-        argv = super().run(cmd, *args)
-        return run_fg(*argv)
-
-    def run_shell(self, cmd, *args):
-        argv = super().run_shell(cmd, *args)
-        return run_fg(*argv)
-
-    def push(self, source, target):
-        argv = super().push(*args)
-        return run_fg(*argv)
-
-    def pull(self, source, target):
-        argv = super().push(*args)
-        return run_fg(*argv)
-
-    def read(self, filename):
-        if not filename:
-            raise ValueError(f'missing filename')
-        proc = self.run_shell(f'cat {filename}')
-        if proc.returncode != 0:
-            return None
-        return proc.stdout
