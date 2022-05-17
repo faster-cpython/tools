@@ -7,7 +7,7 @@ import traceback
 
 from . import (
     NoRunningJobError, JobNeverStartedError, RequestAlreadyStagedError,
-    PortalConfig, Jobs, Worker, RequestID, Result,
+    JobsConfig, Jobs, Worker, RequestID, Result,
     sort_jobs, select_jobs,
 )
 from .queue import (
@@ -915,10 +915,10 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
 
     # Load the config.
     if not cfgfile:
-        cfgfile = PortalConfig.find_config()
+        cfgfile = JobsConfig.find_config()
     logger.debug('')
     logger.debug('# loading config from %s', cfgfile)
-    cfg = PortalConfig.load(cfgfile)
+    cfg = JobsConfig.load(cfgfile)
 
     jobs = Jobs(cfg, devmode=devmode)
 

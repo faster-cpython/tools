@@ -1296,12 +1296,16 @@ class SSHCommands:
     SSH = shutil.which('ssh')
     SCP = shutil.which('scp')
 
-    def __init__(self, host, port, user, *, ssh=None, scp=None):
+    @classmethod
+    def from_config(cls, cfg, **kwargs):
+        return cls(cfg.user, cfg.host, cfg.port, **kwargs)
+
+    def __init__(self, user, host, port, *, ssh=None, scp=None):
+        self.user = check_shell_str(user)
         self.host = check_shell_str(host)
         self.port = int(port)
         if self.port < 1:
             raise ValueError(f'invalid port {self.port}')
-        self.user = check_shell_str(user)
 
         opts = []
         if self.host == 'localhost':

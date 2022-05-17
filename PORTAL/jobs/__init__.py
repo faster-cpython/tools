@@ -21,52 +21,37 @@ logger = logging.getLogger(__name__)
 ##################################
 # jobs config
 
-class PortalConfig(_utils.TopConfig):
+class JobsConfig(_utils.TopConfig):
 
-    CONFIG_DIRS = _utils.TopConfig.CONFIG_DIRS + [
-        f'{_utils.HOME}/BENCH',
-    ]
-    CONFIG = 'benchmarking-portal.json'
-
-    FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
+    FIELDS = ['worker_user', 'bench_ssh', 'data_dir']
     OPTIONAL = ['data_dir']
 
-    @classmethod
-    def find_config(cls, cfgdirs=None):
-        try:
-            return super().find_config(cfgdirs)
-        except FileNotFoundError:
-            filename = f'{_utils.HOME}/BENCH/portal.json'
-            if os.path.exists(filename):
-                return filename
-            raise  # re-raise
+    FILE = 'jobs.json'
+    CONFIG_DIRS = [
+        f'{_utils.HOME}/BENCH',
+    ]
 
     def __init__(self,
-                 bench_user,
-                 send_user,
-                 send_host,
-                 send_port,
+                 worker_user,
+                 bench_ssh,
                  data_dir=None,
                  ):
-        if not bench_user:
-            raise ValueError('missing bench_user')
-        if not send_user:
-            send_user = bench_user
-        if not send_host:
-            raise ValueError('missing send_host')
-        if not send_port:
-            raise ValueError('missing send_port')
+        if not worker_user:
+            raise ValueError('missing worker_user')
+        bench_ssh = _utils.SSHConnectionConfig.from_raw(bench_ssh)
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
-            data_dir = f'/home/{send_user}/BENCH'  # This matches DATA_ROOT.
+            data_dir = f'/home/{worker_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
-            bench_user=bench_user,
-            send_user=send_user,
-            send_host=send_host,
-            send_port=send_port,
+            worker_user=worker_user,
+            bench_ssh=bench_ssh,
             data_dir=data_dir or None,
         )
+
+    @property
+    def ssh(self):
+        return self.bench_ssh
 
 
 ##################################
@@ -252,8 +237,8 @@ class Worker:
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.bench_user, 'bench')
-        ssh = _utils.SSHClient(cfg.send_host, cfg.send_port, cfg.bench_user)
+        fs = JobsFS.from_user(cfg.worker_user, 'bench')
+        ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
     def __init__(self, fs, ssh):
@@ -473,9 +458,9 @@ class Job:
             ssh = _utils.SSHShellCommands('$host', '$port', '$benchuser')
             user = '$user'
         else:
-            user = _utils.check_shell_str(self._cfg.send_user)
-            _utils.check_shell_str(self._cfg.send_host)
-            _utils.check_shell_str(self._cfg.bench_user)
+            user = _utils.check_shell_str(self._cfg.worker_user)
+            _utils.check_shell_str(self._cfg.ssh.user)
+            _utils.check_shell_str(self._cfg.ssh.host)
             ssh = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
@@ -527,14 +512,15 @@ class Job:
             echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
             echo
 
-            user=$(jq -r '.send_user' {cfgfile})
+            user=$(jq -r '.worker_user' {cfgfile})
             if [ "$USER" != '{user}' ]; then
                 echo "(switching users from $USER to {user})"
                 echo
                 {ensure_user}
             fi
-            host=$(jq -r '.send_host' {cfgfile})
-            port=$(jq -r '.send_port' {cfgfile})
+            ssh_user=$(jq -r '.bench_ssh.user' {cfgfile})
+            ssh_host=$(jq -r '.bench_ssh.host' {cfgfile})
+            ssh_port=$(jq -r '.bench_ssh.port' {cfgfile})
 
             exitcode=0
             if {ssh(f'test -e {bfiles.request}')}; then
