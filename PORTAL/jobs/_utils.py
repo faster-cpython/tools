@@ -531,13 +531,14 @@ class LogSection(types.SimpleNamespace):
 ##################################
 # git utils
 
-def git(*args, GIT=shutil.which('git')):
+def git(*args, cwd=HOME, GIT=shutil.which('git')):
     logger.debug('# running: %s', ' '.join(args))
     proc = subprocess.run(
         [GIT, *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding='utf-8',
+        cwd=cwd,
     )
     return proc.returncode, proc.stdout
 
