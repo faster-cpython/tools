@@ -98,6 +98,10 @@ echo "BENCH_HOST:       $BENCH_HOST"
 echo "BENCH_PORT:       $BENCH_PORT"
 echo "BENCH_CONN:       $BENCH_CONN"
 echo
+echo " other info:"
+echo
+echo "run benchmarks:  bench BENCH/jobs.py ..."
+echo
 echo '==================================='
 echo '===   done (for benchmarking)   ==='
 echo '==================================='
