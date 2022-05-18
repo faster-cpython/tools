@@ -1,3 +1,5 @@
+#! /usr/bin/python3.8
+
 import os.path
 import subprocess
 import sys
