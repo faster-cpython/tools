@@ -385,7 +385,7 @@ class BenchCompileRequest(Request):
         self.remote = remote
         self.branch = branch
         self.benchmarks = benchmarks
-        self.optimize = optimize
+        self.optimize = True if optimize is None else optimize
         self.debug = debug
 
     @property

@@ -66,7 +66,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               remote=None,
                               branch=None,
                               benchmarks=None,
-                              optimize=False,
+                              optimize=True,
                               debug=False,
                               _fake=None,
                               ):
@@ -614,7 +614,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_job('compile-bench',
                   help='Request a compile-and-run-benchmarks job')
     sub.add_argument('--optimize', dest='optimize',
-                     action='store_const', const=True,
+                     action='store_const', const=True, default=True,
                      help='(the default)')
     sub.add_argument('--no-optimize', dest='optimize', action='store_false')
     sub.add_argument('--debug', action='store_true')
@@ -768,13 +768,19 @@ def main(cmd, cmd_kwargs, cfgfile=None):
 
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
-        if cmd_kwargs['reqid']:
-            cmd_kwargs['reqid'] = RequestID.parse(cmd_kwargs['reqid'])
-        else:
-            cmd_kwargs['reqid'] = None
+        reqid = cmd_kwargs['reqid'] or None
+        if reqid:
+            parsed = RequestID.parse(reqid)
+            if parsed is None:
+                logger.error(f'expected a valid reqid, got {reqid!r}')
+                sys.exit(1)
+            reqid = parsed
+        cmd_kwargs['reqid'] = reqid
     elif cmd.startswith('request-'):
-        cmd_kwargs['reqid'] = RequestID.generate(cfg, kind=cmd[8:])
-    reqid = cmd_kwargs.get('reqid')
+        reqid = RequestID.generate(cfg, kind=cmd[8:])
+        cmd_kwargs['reqid'] = reqid
+    else:
+        reqid = None
 
     # Run the command.
     logger.info('')
