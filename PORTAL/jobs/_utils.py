@@ -1068,7 +1068,7 @@ def run_bg(argv, logfile=None, cwd=None):
         cmd = ' '.join(shlex.quote(a) for a in argv)
 
     if logfile:
-        logfile = _utils.quote_shell_str(logfile)
+        logfile = quote_shell_str(logfile)
         cmd = f'{cmd} >> {logfile}'
     cmd = f'{cmd} 2>&1'
 
