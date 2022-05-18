@@ -564,7 +564,7 @@ class Job:
 
             # Unstage the request.
             pushd {SYS_PATH_ENTRY}
-            {sys.executable} -u -m _jobs internal-finish-run -v --config {cfgfile} {reqid}
+            {sys.executable} -u -m jobs internal-finish-run -v --config {cfgfile} {reqid}
             popd
 
             # Mark the script as complete.
@@ -574,7 +574,7 @@ class Job:
 
             # Trigger the next job.
             pushd {SYS_PATH_ENTRY}
-            {sys.executable} -u -m _jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} &
+            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} &
 
             exit $exitcode
         '''[1:-1])
@@ -871,7 +871,7 @@ class Jobs:
         logger.debug('No job is running so we will run the next one from the queue')
         _utils.run_bg(
             [
-                sys.executable, '-u', '-m', '_jobs', '-v',
+                sys.executable, '-u', '-m', 'jobs', '-v',
                 'internal-run-next',
                 '--config', cfgfile,
                 #'--logfile', self._fs.queue.log,
