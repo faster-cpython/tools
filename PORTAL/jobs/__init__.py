@@ -81,15 +81,15 @@ class JobFS(types.SimpleNamespace):
     @classmethod
     def from_jobsfs(cls, jobsfs, reqid):
         self = cls(
-            f'{jobsfs.requests}/{reqid}',
-            f'{jobsfs.requests}/{reqid}',
-            f'{jobsfs.work}/{reqid}',
-            reqid,
-            jobsfs.context,
+            request=f'{jobsfs.requests}/{reqid}',
+            result=f'{jobsfs.requests}/{reqid}',
+            work=f'{jobsfs.work}/{reqid}',
+            reqid=reqid,
+            context=jobsfs.context,
         )
         return self
 
-    def __init__(self, request, work, result, reqid=None, context='portal'):
+    def __init__(self, request, result, work, reqid=None, context='portal'):
         request = _utils.FSTree.from_raw(request, name='request')
         work = _utils.FSTree.from_raw(work, name='work')
         result = _utils.FSTree.from_raw(result, name='result')
@@ -103,6 +103,7 @@ class JobFS(types.SimpleNamespace):
             reqid = RequestID.from_raw(reqid)
             if not reqid:
                 raise ValueError(f'unsupported reqid {orig!r}')
+
         if not context:
             context = 'portal'
         elif context not in ('portal', 'bench'):
@@ -209,7 +210,12 @@ class JobsFS(_utils.FSTree):
         if not root:
             root = '~/BENCH'
         super().__init__(root)
-        self.context = context or 'portal'
+
+        if not context:
+            context = 'portal'
+        elif context not in ('portal', 'bench'):
+            raise ValueError(f'unsupported context {context!r}')
+        self.context = context
 
         self.requests = _utils.FSTree(f'{root}/REQUESTS')
         if context == 'portal':
@@ -217,11 +223,6 @@ class JobsFS(_utils.FSTree):
 
         self.work = _utils.FSTree(self.requests.root)
         self.results = _utils.FSTree(self.requests.root)
-
-        if not context:
-            context = 'portal'
-        elif context not in ('portal', 'bench'):
-            raise ValueError(f'unsupported context {context!r}')
 
         if context == 'portal':
             self.queue = _utils.FSTree(f'{self.requests}/queue.json')
