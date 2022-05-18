@@ -6,7 +6,7 @@ import traceback
 
 from . import (
     NoRunningJobError, JobNeverStartedError, RequestAlreadyStagedError,
-    PortalConfig, Jobs, Worker, RequestID,
+    PortalConfig, Jobs, Worker, RequestID, Result,
     select_jobs,
 )
 from .queue import (
