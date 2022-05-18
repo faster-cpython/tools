@@ -66,7 +66,7 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
                               remote=None,
                               branch=None,
                               benchmarks=None,
-                              optimize=False,
+                              optimize=True,
                               debug=False,
                               _fake=None,
                               ):
@@ -614,7 +614,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_job('compile-bench',
                   help='Request a compile-and-run-benchmarks job')
     sub.add_argument('--optimize', dest='optimize',
-                     action='store_const', const=True,
+                     action='store_const', const=True, default=True,
                      help='(the default)')
     sub.add_argument('--no-optimize', dest='optimize', action='store_false')
     sub.add_argument('--debug', action='store_true')
