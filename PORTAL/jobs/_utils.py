@@ -749,37 +749,37 @@ def _find_git_ref(remote, ref, latest=False):
             return branch, key.as_tag(), commit
         # Fall back to the branch.
         for name in branches:
-            if name != branch:
-                continue
-            commit = branches[branch]
-            return branch, None, commit
+            if name == branch:
+                commit = branches[branch]
+                return branch, None, commit
         else:
             return None, None, None
     else:
         # Match branches first.
         for branch in branches:
-            if branch != ref:
-                continue
-            commit = branches[branch]
-            return branch, None, commit
+            if branch == ref:
+                commit = branches[branch]
+                return branch, None, commit
         # Then try tags.
         if version:
+            # Find a tag that matches the version.
             for tag in tags:
                 tagver = Version.parse(tag)
-                if tagver != version:
-                    continue
-                commit = tags[tag]
-                branch = f'{version.major}.{version.minor}'
-                if branch not in branches:
-                    branch = None
-                return branch, version.as_tag(), commit
+                if tagver == version:
+                    commit = tags[tag]
+                    branch = f'{version.major}.{version.minor}'
+                    if branch not in branches:
+                        branch = None
+                    #return branch, version.as_tag(), commit
+                    return branch, tag, commit
         else:
+            # Find a tag that matches exactly.
             for tag in tags:
-                if name != tag:
-                    continue
-                branch = None
-                commit = tags[tag]
-                return branch, version.as_tag(), commit
+                if name == tag:
+                    branch = None
+                    commit = tags[tag]
+                    return branch, tag, commit
+        # No tags or branches matched!
         return None, None, None
 
 
