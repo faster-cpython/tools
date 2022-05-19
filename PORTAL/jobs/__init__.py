@@ -910,6 +910,33 @@ class Jobs:
         return job
 
 
+_SORT = {
+    'reqid': (lambda j: j.reqid),
+}
+
+
+def sort_jobs(jobs, sortby=None, *, ascending=False):
+    if isinstance(jobs, Jobs):
+        jobs = list(jobs.iter_all())
+    if not sortby:
+        sortby = ['reqid']
+    elif isinstance(sortby, str):
+        sortby = sortby.split(',')
+    done = set()
+    for kind in sortby:
+        if not kind:
+            raise NotImplementedError(repr(kind))
+        if kind in done:
+            raise NotImplementedError(kind)
+        done.add(kind)
+        try:
+            key = _SORT[kind]
+        except KeyError:
+            raise ValueError(f'unsupported sort kind {kind!r}')
+        jobs = sorted(jobs, key=key, reverse=ascending)
+    return jobs
+
+
 def select_job(jobs, criteria=None):
     raise NotImplementedError
 
@@ -931,8 +958,9 @@ def select_jobs(jobs, criteria=None):
             criteria = [criteria]
     if len(criteria) > 1:
         raise NotImplementedError(criteria)
-    jobs = sorted(jobs, key=(lambda j: j.reqid))
     selection = _utils.get_slice(criteria[0])
+    if not isinstance(jobs, (list, tuple)):
+        jobs = list(jobs)
     yield from jobs[selection]
 
 

@@ -7,7 +7,7 @@ import traceback
 from . import (
     NoRunningJobError, JobNeverStartedError, RequestAlreadyStagedError,
     PortalConfig, Jobs, Worker, RequestID, Result,
-    select_jobs,
+    sort_jobs, select_jobs,
 )
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
@@ -28,6 +28,7 @@ def cmd_list(jobs, selections=None):
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     alljobs = list(jobs.iter_all())
     total = len(alljobs)
+    alljobs = sort_jobs(alljobs)
     selected = list(select_jobs(alljobs, selections))
     print(f'{"request ID".center(48)} {"status".center(10)} {"created".center(19)}')
     print(f'{"-"*48} {"-"*10} {"-"*19}')
