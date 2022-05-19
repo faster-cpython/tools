@@ -685,18 +685,25 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def render(self, fmt=None):
-        reqfile = self._fs.request.metadata
-        resfile = self._fs.result.metadata
         if not fmt:
             fmt = 'summary'
-        elif fmt in ('reqfile', 'resfile'):
+        reqfile = self._fs.request.metadata
+        resfile = self._fs.result.metadata
+        if fmt in ('reqfile', 'resfile'):
             filename = reqfile if fmt == 'reqfile' else resfile
             yield f'(from {filename})'
             yield ''
             text = _utils.read_file(filename)
             for line in text.splitlines():
                 yield f'  {line}'
-            return
+        elif fmt == 'summary':
+            yield from self._render_summary('verbose')
+        else:
+            raise ValueError(f'unsupported fmt {fmt!r}')
+
+    def _render_summary(self, fmt=None):
+        if not fmt:
+            fmt = 'verbose'
 
         reqfs_fields = [
             'bench_script',
@@ -719,24 +726,28 @@ class Job:
                 'pyperformance_results',
             ])
         else:
-            raise NotImplementedError(kind)
-        req = req_cls.load(reqfile)
-        res = res_cls.load(resfile)
-        pid = _utils.PIDFile(self._fs.pidfile).read()
+            raise NotImplementedError(self.kind)
+
+        fs = self._fs
+        req = req_cls.load(fs.request.metadata)
+        res = res_cls.load(fs.result.metadata)
+        pid = _utils.PIDFile(fs.pidfile).read()
+
         try:
-            staged = _get_staged_request(self._fs.jobs)
+            staged = _get_staged_request(fs.jobs)
         except StagedRequestError:
             isstaged = False
         else:
             isstaged = (self.reqid == staged)
+
         if self.check_ssh(fail=False):
             ssh_okay = 'yes'
-        elif os.path.exists(self._fs.ssh_okay):
+        elif os.path.exists(fs.ssh_okay):
             ssh_okay = 'no'
         else:
             ssh_okay = '???'
 
-        if fmt == 'summary':
+        if fmt == 'verbose':
             yield f'Request {self.reqid}:'
             yield f'  {"kind:":22} {req.kind}'
             yield f'  {"user:":22} {req.user}'
@@ -761,20 +772,20 @@ class Job:
             yield ''
             yield 'Request files:'
             yield f'  {"data root:":22} {_utils.render_file(req.reqdir)}'
-            yield f'  {"metadata:":22} {_utils.render_file(self._fs.request.metadata)}'
+            yield f'  {"metadata:":22} {_utils.render_file(fs.request.metadata)}'
             for field in reqfs_fields:
-                value = getattr(self._fs.request, field, None)
+                value = getattr(fs.request, field, None)
                 if value is None:
-                    value = getattr(self._fs.work, field, None)
+                    value = getattr(fs.work, field, None)
                 yield f'  {field + ":":22} {_utils.render_file(value)}'
             yield ''
             yield 'Result files:'
-            yield f'  {"data root:":22} {_utils.render_file(self._fs.result)}'
-            yield f'  {"metadata:":22} {_utils.render_file(self._fs.result.metadata)}'
+            yield f'  {"data root:":22} {_utils.render_file(fs.result)}'
+            yield f'  {"metadata:":22} {_utils.render_file(fs.result.metadata)}'
             for field in resfs_fields:
-                value = getattr(self._fs.result, field, None)
+                value = getattr(fs.result, field, None)
                 if value is None:
-                    value = getattr(self._fs.work, field, None)
+                    value = getattr(fs.work, field, None)
                 yield f'  {field + ":":22} {_utils.render_file(value)}'
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
