@@ -306,6 +306,31 @@ class Result(_utils.Metadata):
             self._request = Request(self.reqid, self.reqdir)
             return self._request
 
+    @property
+    def started(self):
+        history = list(self.history)
+        if not history:
+            return None
+        last_st, last_date = history[-1]
+        if last_st == Result.STATUS.ACTIVE:
+            return last_date, last_st
+        for st, date in reversed(history):
+            if st == Result.STATUS.RUNNING:
+                return date, st
+        else:
+            return None, None
+
+    @property
+    def finished(self):
+        history = list(self.history)
+        if not history:
+            return None
+        for st, date in reversed(history):
+            if st in Result.FINISHED:
+                return date, st
+        else:
+            return None, None
+
     def set_status(self, status):
         if not status:
             raise ValueError('missing status')
