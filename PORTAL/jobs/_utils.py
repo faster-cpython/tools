@@ -1029,6 +1029,24 @@ class Version(namedtuple('Version', 'major minor micro level serial')):
         return f'v{self.major}.{self.minor}{micro}{release}'
 
 
+def parse_bool_env_var(valstr, *, failunknown=False):
+    m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
+                 valstr.lower())
+    if not m:
+        if failunknown:
+            raise ValueError(f'unsupported env var bool value {valstr!r}')
+        return None
+    yes, no = m.groups()
+    return True if yes else False
+
+
+def get_bool_env_var(name, default=None, *, failunknown=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return parse_bool_env_var(value, failunknown=failunknown)
+
+
 def _is_proc_running(pid):
     if pid == PID:
         return True
