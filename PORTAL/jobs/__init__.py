@@ -701,6 +701,57 @@ class Job:
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
 
+    def render_for_row(self, attrs):
+        if isinstance(attrs, str):
+            raise NotImplementedError(attrs)
+        try:
+            res = self.load_result()
+        except FileNotFoundError:
+            status = started = finished = None
+        else:
+            status = res.status or 'created'
+            started, _ = res.started
+            finished, _ = res.finished
+
+        def render_attr(name):
+            if name == 'reqid':
+                return str(self.reqid)
+            elif name == 'status':
+                return str(status) if status else '???'
+            elif name == 'created':
+                return f'{self.reqid.date:%Y-%m-%d %H:%M:%S}'
+            elif name == 'started':
+                return f'{started:%Y-%m-%d %H:%M:%S}' if started else '---'
+            elif name == 'finished':
+                return f'{finished:%Y-%m-%d %H:%M:%S}' if finished else '---'
+            elif name == 'duration':
+                if not started:
+                    return '---'
+                elif not finished:
+                    return '...'
+                else:
+                    duration = finished - started
+                    # The following is mostly borrowed from Timedelta.__str__().
+                    mm, ss = divmod(duration.seconds, 60)
+                    hh, mm = divmod(mm, 60)
+                    hh += 24 * duration.days
+                    return "%d:%02d:%02d" % (hh, mm, ss)
+            else:
+                raise NotImplementedError(name)
+
+        for name in attrs:
+            if ',' in name:
+                primary, _, secondary = name.partition(',')
+                primary = render_attr(primary)
+                if primary in ('---', '...', '???'):
+                    secondary = render_attr(secondary)
+                    if secondary not in ('---', '...', '???'):
+                        yield f'({secondary})'
+                        continue
+                yield f' {primary} '
+            else:
+                yield render_attr(name)
+
     def _render_summary(self, fmt=None):
         if not fmt:
             fmt = 'verbose'
