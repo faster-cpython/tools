@@ -784,8 +784,9 @@ class Jobs:
 
     FS = JobsFS
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, *, devmode=False):
         self._cfg = cfg
+        self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
 
@@ -795,6 +796,10 @@ class Jobs:
     @property
     def cfg(self):
         return self._cfg
+
+    @property
+    def devmode(self):
+        return self._devmode
 
     @property
     def fs(self):
