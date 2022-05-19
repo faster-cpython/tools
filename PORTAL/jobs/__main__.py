@@ -561,7 +561,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('reqid', nargs='?')
 
-    sub = add_cmd('request', aliases=['add'], help='Create a new job request')
+    sub = add_cmd('add', aliases=['request'], help='Create a new job request')
     jobs = sub.add_subparsers(dest='job')
     # Subcommands for different jobs are added below.
 
@@ -601,14 +601,17 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     _common = argparse.ArgumentParser(add_help=False)
     _common.add_argument('--run', dest='after',
-                         action='store_const', const=('run', 'attach'))
+                         action='store_const', const=('run', 'attach'),
+                         help='(default) queue and attach once created')
     _common.add_argument('--run-attached', dest='after',
-                         action='store_const', const=('run', 'attach'))
+                         action='store_const', const=('run', 'attach'),
+                         help='queue and attach once created')
     _common.add_argument('--run-detached', dest='after',
-                         action='store_const', const=('run',))
+                         action='store_const', const=('run',),
+                         help='queue (but no attach) once created')
     _common.add_argument('--no-run', dest='after',
                          action='store_const', const=(),
-                         help='(the default)')
+                         help='create-only')
     add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
 
     # This is the default (and the only one, for now).
@@ -698,6 +701,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
             fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
             if any(v is not None for v in fake):
                 args._fake = fake
+        if not args.after:
+            args.after = ('run', 'attach')
     elif cmd == 'config':
         cmd = 'config-show'
     elif cmd == 'queue':
