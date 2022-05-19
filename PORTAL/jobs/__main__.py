@@ -523,8 +523,13 @@ def configure_root_logger(verbosity=VERBOSITY, logfile=None, *,
 
 def _add_request_cli(add_cmd, add_hidden=True):
     sub = add_cmd('add', aliases=['request'], help='Create a new job request')
-    jobs = sub.add_subparsers(dest='job')
-    # Subcommands for different jobs are added below.
+    jobs = sub.add_subparsers(
+        dest='job',
+        metavar='JOB',
+        title='subcommands',
+        #required=False,
+        #default='compile-bench',
+    )
 
     _common = argparse.ArgumentParser(add_help=False)
     _common.add_argument('--run', dest='after',
@@ -532,13 +537,13 @@ def _add_request_cli(add_cmd, add_hidden=True):
                          help='(alias for --run-attached)')
     _common.add_argument('--run-attached', dest='after',
                          action='store_const', const=('run', 'attach'),
-                         help='(default) queue and attach once created')
+                         help='queue and attach once created (default)')
     _common.add_argument('--run-detached', dest='after',
                          action='store_const', const=('run',),
-                         help='queue (but no attach) once created')
+                         help='queue once created (but do not attach)')
     _common.add_argument('--no-run', dest='after',
                          action='store_const', const=(),
-                         help='create-only')
+                         help='only create the job')
     add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
 
     # This is the default (and the only one, for now).
@@ -546,13 +551,15 @@ def _add_request_cli(add_cmd, add_hidden=True):
                   help='Request a compile-and-run-benchmarks job')
     sub.add_argument('--optimize', dest='optimize',
                      action='store_const', const=True, default=True,
-                     help='(the default)')
+                     help='do PGO and LTO (default)')
     sub.add_argument('--no-optimize', dest='optimize', action='store_false')
     sub.add_argument('--debug', action='store_true')
     sub.add_argument('--benchmarks')
-    sub.add_argument('--branch')
+    sub.add_argument('--branch', help='(default: None)')
     sub.add_argument('--remote', required=True)
-    sub.add_argument('revision')
+    #sub.add_argument('--remote', help='(default: origin)')
+    sub.add_argument('revision',
+                     help='CPython tag/commit/branch to benchmark (default: latest)')
     if add_hidden:
         # Use these flags to skip actually running pyperformance.
         sub.add_argument('--fake-success', dest='exitcode',
@@ -581,12 +588,20 @@ def _add_request_cli(add_cmd, add_hidden=True):
 
 def _add_queue_cli(add_cmd, add_hidden=True):
     sub = add_cmd('queue', help='Manage the job queue')
-    queue = sub.add_subparsers(dest='action')
+    queue = sub.add_subparsers(
+        dest='queue_cmd',
+        metavar='CMD',
+        title='subcommands',
+        #required=False,
+        #default='list',
+    )
 
     sub = add_cmd('info', queue, help='Print a summary of the state of the jobs queue')
-    sub.add_argument('--without-log', dest='withlog', action='store_false')
+    sub.add_argument('--without-log', dest='withlog', action='store_false',
+                     help='do not show any of the job queue log file')
     sub.add_argument('--with-log', dest='withlog',
-                     action='store_const', const=True)
+                     action='store_const', const=True,
+                     help='also show last 10 lines of the job queue log file')
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
 
@@ -594,14 +609,14 @@ def _add_queue_cli(add_cmd, add_hidden=True):
 
     sub = add_cmd('list', queue, help='List the queued jobs')
 
-    sub = add_cmd('push', queue, help='Add a job to the queue')
+    sub = add_cmd('push', queue, help='Add a job to the back of the queue')
     sub.add_argument('reqid')
 
-    sub = add_cmd('pop', queue, help='Get the next job from the queue')
+    sub = add_cmd('pop', queue, help='Get the next job from the front of the queue')
 
     sub = add_cmd('move', queue, help='Move a job up or down in the queue')
     sub.add_argument('reqid')
-    sub.add_argument('position')
+    sub.add_argument('position', help='the new index for the job (1-based or relative)')
 
     sub = add_cmd('remove', queue, help='Remove a job from the queue')
     sub.add_argument('reqid')
@@ -609,7 +624,7 @@ def _add_queue_cli(add_cmd, add_hidden=True):
     def handle_args(args, parser):
         assert args.cmd == 'queue', args.cmd
         ns = vars(args)
-        action = ns.pop('action')
+        action = ns.pop('queue_cmd')
         args.cmd = f'queue-{action}'
         if action == 'move':
             pos = args.position
@@ -645,10 +660,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     # First, pull out the common args.
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument('--config', dest='cfgfile')
+    common.add_argument('--config', dest='cfgfile', metavar='FILE',
+                        help='(default: ~benchmarking/BENCH/portal.json))')
     common.add_argument('-v', '--verbose', action='count', default=0)
     common.add_argument('-q', '--quiet', action='count', default=0)
-    common.add_argument('--logfile')
+    common.add_argument('--logfile', metavar='FILE')
     args, argv = common.parse_known_args(argv)
     cfgfile = args.cfgfile
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
@@ -661,7 +677,11 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         prog=prog,
         parents=[common],
     )
-    subs = parser.add_subparsers(dest='cmd', metavar='CMD')
+    subs = parser.add_subparsers(
+        dest='cmd',
+        metavar='CMD',
+        title='subcommands',
+    )
 
     ##########
     # Add the subcommands for managing jobs.
@@ -670,39 +690,43 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         return subs.add_parser(name, parents=[common, *parents], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
-    sub.add_argument('selections', nargs='*')
+    sub.add_argument('selections', nargs='*', metavar='SELECTION',
+                     help='a specifier for a subset (e.g. -10 for the last 10)')
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
-    sub.add_argument('-n', '--lines', type=int, default=0,
-                     help='Show the last n lines of the job\'s output')
-    sub.add_argument('reqid', nargs='?')
+    sub.add_argument('-n', '--lines', type=int, default=0, metavar='N',
+                     help='show the last N lines of the job\'s output (default: 0)')
+    sub.add_argument('reqid', nargs='?',
+                     help='(default: the currently running job, if any)')
 
     handle_request_args = _add_request_cli(add_cmd, add_hidden)
 
-#    sub = add_cmd('copy', help='Create a new copy of an existing job request')
-#    sub.add_argument('reqid', nargs='?')
+    #sub = add_cmd('copy', help='Create a new copy of an existing job request')
+    #sub.add_argument('reqid', nargs='?')
 
-#    sub = add_cmd('remove', help='Delete a job request')
-#    sub.add_argument('reqid', nargs='+', help='the requests to delete (globs okay)')
+    #sub = add_cmd('remove', help='Delete a job request')
+    #sub.add_argument('reqid', nargs='+', help='the requests to delete (globs okay)')
 
     sub = add_cmd('run', help='Run a previously created job request')
     sub.add_argument('--attach', dest='after',
                      action='store_const', const=('attach',))
     sub.add_argument('--no-attach', dest='after',
                      action='store_const', const=())
-#    sub.add_argument('--copy', action='store_true',
-#                     help='Run a new copy of the given job request')
-#    sub.add_argument('--force', action='store_true',
-#                     help='Run the job even if another is already running')
+    #sub.add_argument('--copy', action='store_true',
+    #                 help='Run a new copy of the given job request')
+    #sub.add_argument('--force', action='store_true',
+    #                 help='Run the job even if another is already running')
     sub.add_argument('reqid')
 
     sub = add_cmd('attach', help='Tail the job log file')
-    sub.add_argument('-n', '--lines', type=int, default=0,
-                     help='Show the last n lines of the job\'s output')
-    sub.add_argument('reqid', nargs='?')
+    sub.add_argument('-n', '--lines', type=int, default=0, metavar='N',
+                     help='show the last N lines of the job\'s output (default: 0)')
+    sub.add_argument('reqid', nargs='?',
+                     help='(default: the currently running job, if any)')
 
     sub = add_cmd('cancel', help='Stop the current job (or prevent a pending one)')
-    sub.add_argument('reqid', nargs='?')
+    sub.add_argument('reqid', nargs='?',
+                     help='(default: the currently running job, if any)')
 
     # XXX Also add export and import?
 
@@ -711,12 +735,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ##########
     # Add other public commands.
 
-    sub = add_cmd('config', help='show the config')
+    sub = add_cmd('config', help='Show the config')
 
-#    sub = add_cmd('bench-host', help='manage the host where benchmarks run')
-#    benchhost = sub.add_subparsers(dest='action')
-#
-#    sub = add_cmd('clean', benchhost, help='clean up old files')
+    #sub = add_cmd('bench-host', help='manage the host where benchmarks run')
+    #benchhost = sub.add_subparsers(dest='action')
+
+    #sub = add_cmd('clean', benchhost, help='clean up old files')
 
     ##########
     # Add internal commands.
@@ -746,9 +770,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         args.cmd = 'config-show'
     elif args.cmd == 'queue':
         handle_queue_args(args, parser)
-    elif args.cmd == 'bench-host':
-        action = ns.pop('action')
-        args.cmd = f'bench-host-{action}'
+    #elif args.cmd == 'bench-host':
+    #    action = ns.pop('action')
+    #    args.cmd = f'bench-host-{action}'
     cmd = ns.pop('cmd')
 
     return cmd, ns, cfgfile, verbosity, logfile
