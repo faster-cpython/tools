@@ -31,19 +31,59 @@ def cmd_list(jobs, selections=None):
     total = len(alljobs)
     alljobs = sort_jobs(alljobs)
     selected = list(select_jobs(alljobs, selections))
-    print(f'{"request ID".center(48)} {"status".center(10)} {"created".center(19)}')
-    print(f'{"-"*48} {"-"*10} {"-"*19}')
-    for job in selected:
-        reqid = job.reqid
-        status = job.get_status(fail=False)
-        print(f'{reqid!s:48} {status or "???":10} {reqid.date:%Y-%m-%d %H:%M:%S}')
-        #for line in job.render(fmt='row'):
-        #    print(line)
-    logger.info('')
-    if len(selected) == total:
+    count = len(selected)
+
+    columns = [
+        ('reqid', 'request ID', 48, None),
+        ('status', None, 10, None),
+        ('duration', None, 8, '>'),
+    ]
+    minwidth = sum(w for _, _, w, _ in columns)
+    if os.isatty(sys.stdout.fileno()):
+        try:
+            termsize = os.get_terminal_size()
+        except OSError:
+            termwidth = 80
+        else:
+            termwidth = termsize.columns
+    else:
+        termwidth = 1000
+    if termwidth > minwidth + (19 + 3) * 3:
+        columns.extend([
+            ('created', None, 19, None),
+            ('started', None, 19, None),
+            ('finished', None, 19, None),
+        ])
+    elif termwidth > minwidth + (21 + 3) + (19 + 3):
+        columns.extend([
+            ('started,created', 'started / (created)', 21, None),
+            ('finished', None, 19, None),
+        ])
+    elif termwidth > minwidth + (21 + 3):
+        columns.append(
+            ('started,created', 'start / (created)', 21, None),
+        )
+
+    header = ' '.join((c or n).center(w+2) for n, c, w, _ in columns)
+    div = ' '.join('-' * (w+2) for _, _, w, _ in columns)
+    rowfmt = ' '.join(f' {{:{s or ""}{w}}} ' for _, _, w, s in columns)
+    attrs = [n for n, _, _, _ in columns]
+
+    logger.info(div)
+    print(header)
+    print(div)
+    for i, job in enumerate(selected, 1):
+        if count - i >= 15 and i % 25 == 0:
+            logger.info(div)
+            logger.info(header)
+            logger.info(div)
+        row = job.render_for_row(attrs)
+        print(rowfmt.format(*row))
+    logger.info(div)
+    if count == total:
         logger.info('(total: %s)', total)
     else:
-        logger.info('(matched: %s)', len(selected))
+        logger.info('(matched: %s)', count)
         logger.info('(total:   %s)', total)
     logger.info('')
 
