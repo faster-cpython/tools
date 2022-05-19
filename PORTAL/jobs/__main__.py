@@ -532,13 +532,13 @@ def _add_request_cli(add_cmd, add_hidden=True):
                          help='(alias for --run-attached)')
     _common.add_argument('--run-attached', dest='after',
                          action='store_const', const=('run', 'attach'),
-                         help='queue and attach once created')
+                         help='(default) queue and attach once created')
     _common.add_argument('--run-detached', dest='after',
                          action='store_const', const=('run',),
                          help='queue (but no attach) once created')
     _common.add_argument('--no-run', dest='after',
                          action='store_const', const=(),
-                         help='(default) create-only')
+                         help='create-only')
     add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
 
     # This is the default (and the only one, for now).
@@ -573,6 +573,9 @@ def _add_request_cli(add_cmd, add_hidden=True):
                 args._fake = fake
         else:
             raise NotImplementedError(repr(job))
+        if args.after is None:
+            # Use --run-attached as the default.
+            args.after = ('run', 'attach')
     return handle_args
 
 
