@@ -461,22 +461,23 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
                                   optimize,
                                   debug,
                                   ):
-    commit, branch, tag = _utils.resolve_git_revision_and_branch(revision, branch, remote)
-    remote = _utils.resolve_git_remote(remote, reqid.user, branch, commit)
-
     if isinstance(benchmarks, str):
         benchmarks = benchmarks.replace(',', ' ').split()
     if benchmarks:
         benchmarks = (b.strip() for b in benchmarks)
         benchmarks = [b for b in benchmarks if b]
 
+    ref = _utils.resolve_git_revision_and_branch(revision, branch, remote)
+    if not ref:
+        raise Exception(f'could not find ref for {(remote, branch, revision)}')
+
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
         # XXX Add a "commit" field and use "tag or branch" for ref.
-        ref=commit,
-        remote=remote,
-        branch=branch,
+        ref=ref.commit,
+        remote=ref.remote,
+        branch=ref.branch,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),

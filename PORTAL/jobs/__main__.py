@@ -584,9 +584,8 @@ def _add_request_cli(add_cmd, add_hidden=True):
     compile_bench.add_argument('--no-optimize', dest='optimize', action='store_false')
     compile_bench.add_argument('--debug', action='store_true')
     compile_bench.add_argument('--benchmarks')
-    compile_bench.add_argument('--branch', help='(default: None)')
-    compile_bench.add_argument('--remote', required=True)
-    #compile_bench.add_argument('--remote', help='(default: origin)')
+    compile_bench.add_argument('--remote', help='(default: origin)')
+    compile_bench.add_argument('--branch', help='(default: main or None)')
     compile_bench.add_argument('revision',
                                help='CPython tag/commit/branch to benchmark (default: latest)')
 
