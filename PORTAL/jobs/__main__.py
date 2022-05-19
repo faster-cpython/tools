@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import os.path
@@ -520,9 +521,121 @@ def configure_root_logger(verbosity=VERBOSITY, logfile=None, *,
         print = (lambda m='': logger.info(m))
 
 
-def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
-    import argparse
+def _add_request_cli(add_cmd, add_hidden=True):
+    sub = add_cmd('add', aliases=['request'], help='Create a new job request')
+    jobs = sub.add_subparsers(dest='job')
+    # Subcommands for different jobs are added below.
 
+    _common = argparse.ArgumentParser(add_help=False)
+    _common.add_argument('--run', dest='after',
+                         action='store_const', const=('run', 'attach'),
+                         help='(alias for --run-attached)')
+    _common.add_argument('--run-attached', dest='after',
+                         action='store_const', const=('run', 'attach'),
+                         help='queue and attach once created')
+    _common.add_argument('--run-detached', dest='after',
+                         action='store_const', const=('run',),
+                         help='queue (but no attach) once created')
+    _common.add_argument('--no-run', dest='after',
+                         action='store_const', const=(),
+                         help='(default) create-only')
+    add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
+
+    # This is the default (and the only one, for now).
+    sub = add_job('compile-bench',
+                  help='Request a compile-and-run-benchmarks job')
+    sub.add_argument('--optimize', dest='optimize',
+                     action='store_const', const=True, default=True,
+                     help='(the default)')
+    sub.add_argument('--no-optimize', dest='optimize', action='store_false')
+    sub.add_argument('--debug', action='store_true')
+    sub.add_argument('--benchmarks')
+    sub.add_argument('--branch')
+    sub.add_argument('--remote', required=True)
+    sub.add_argument('revision')
+    if add_hidden:
+        # Use these flags to skip actually running pyperformance.
+        sub.add_argument('--fake-success', dest='exitcode',
+                         action='store_const', const=0)
+        sub.add_argument('--fake-failure', dest='exitcode',
+                         action='store_const', const=1)
+        sub.add_argument('--fake-delay', dest='fakedelay')
+
+    def handle_args(args, parser):
+        assert args.cmd in ('add', 'request'), args.cmd
+        ns = vars(args)
+        job = ns.pop('job')
+        args.cmd = f'request-{job}'
+        if job == 'compile-bench':
+            # Process hidden args.
+            fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
+            if any(v is not None for v in fake):
+                args._fake = fake
+        else:
+            raise NotImplementedError(repr(job))
+    return handle_args
+
+
+def _add_queue_cli(add_cmd, add_hidden=True):
+    sub = add_cmd('queue', help='Manage the job queue')
+    queue = sub.add_subparsers(dest='action')
+
+    sub = add_cmd('info', queue, help='Print a summary of the state of the jobs queue')
+    sub.add_argument('--without-log', dest='withlog', action='store_false')
+    sub.add_argument('--with-log', dest='withlog',
+                     action='store_const', const=True)
+
+    sub = add_cmd('pause', queue, help='Do not let queued jobs run')
+
+    sub = add_cmd('unpause', queue, help='Let queued jobs run')
+
+    sub = add_cmd('list', queue, help='List the queued jobs')
+
+    sub = add_cmd('push', queue, help='Add a job to the queue')
+    sub.add_argument('reqid')
+
+    sub = add_cmd('pop', queue, help='Get the next job from the queue')
+
+    sub = add_cmd('move', queue, help='Move a job up or down in the queue')
+    sub.add_argument('reqid')
+    sub.add_argument('position')
+
+    sub = add_cmd('remove', queue, help='Remove a job from the queue')
+    sub.add_argument('reqid')
+
+    def handle_args(args, parser):
+        assert args.cmd == 'queue', args.cmd
+        ns = vars(args)
+        action = ns.pop('action')
+        args.cmd = f'queue-{action}'
+        if action == 'move':
+            pos = args.position
+            if pos == '+':
+                pos = '1'
+                relative = '+'
+            elif pos == '-':
+                pos = '1'
+                relative = '-'
+            elif pos.startswith('+'):
+                pos = pos[1:]
+                relative = '+'
+            elif pos.startswith('-'):
+                pos = pos[1:]
+                relative = '-'
+            else:
+                # an absolute move
+                relative = None
+            if not pos.isdigit():
+                parser.error('position must be positive int')
+            pos = int(pos)
+            if pos == 0:
+                parser.error('position must be positive int')
+            args.position = pos
+            args.relative = relative
+    return handle_args
+
+
+def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     add_hidden = ('-h' not in argv and '--help' not in argv)
 
     ##########
@@ -561,9 +674,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                      help='Show the last n lines of the job\'s output')
     sub.add_argument('reqid', nargs='?')
 
-    sub = add_cmd('add', aliases=['request'], help='Create a new job request')
-    jobs = sub.add_subparsers(dest='job')
-    # Subcommands for different jobs are added below.
+    handle_request_args = _add_request_cli(add_cmd, add_hidden)
 
 #    sub = add_cmd('copy', help='Create a new copy of an existing job request')
 #    sub.add_argument('reqid', nargs='?')
@@ -592,73 +703,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     # XXX Also add export and import?
 
-    sub = add_cmd('queue', help='Manage the job queue')
-    queue = sub.add_subparsers(dest='action')
-    # Subcommands for different actions are added below.
-
-    ##########
-    # Add the "add" subcommands for the different jobs.
-
-    _common = argparse.ArgumentParser(add_help=False)
-    _common.add_argument('--run', dest='after',
-                         action='store_const', const=('run', 'attach'),
-                         help='(default) queue and attach once created')
-    _common.add_argument('--run-attached', dest='after',
-                         action='store_const', const=('run', 'attach'),
-                         help='queue and attach once created')
-    _common.add_argument('--run-detached', dest='after',
-                         action='store_const', const=('run',),
-                         help='queue (but no attach) once created')
-    _common.add_argument('--no-run', dest='after',
-                         action='store_const', const=(),
-                         help='create-only')
-    add_job = (lambda job, **kw: add_cmd(job, jobs, parents=[_common], **kw))
-
-    # This is the default (and the only one, for now).
-    sub = add_job('compile-bench',
-                  help='Request a compile-and-run-benchmarks job')
-    sub.add_argument('--optimize', dest='optimize',
-                     action='store_const', const=True, default=True,
-                     help='(the default)')
-    sub.add_argument('--no-optimize', dest='optimize', action='store_false')
-    sub.add_argument('--debug', action='store_true')
-    sub.add_argument('--benchmarks')
-    sub.add_argument('--branch')
-    sub.add_argument('--remote', required=True)
-    sub.add_argument('revision')
-    if add_hidden:
-        # Use these flags to skip actually running pyperformance.
-        sub.add_argument('--fake-success', dest='exitcode',
-                         action='store_const', const=0)
-        sub.add_argument('--fake-failure', dest='exitcode',
-                         action='store_const', const=1)
-        sub.add_argument('--fake-delay', dest='fakedelay')
-
-    ##########
-    # Add the "queue" subcomamnds.
-
-    sub = add_cmd('info', queue, help='Print a summary of the state of the jobs queue')
-    sub.add_argument('--without-log', dest='withlog', action='store_false')
-    sub.add_argument('--with-log', dest='withlog',
-                     action='store_const', const=True)
-
-    sub = add_cmd('pause', queue, help='Do not let queued jobs run')
-
-    sub = add_cmd('unpause', queue, help='Let queued jobs run')
-
-    sub = add_cmd('list', queue, help='List the queued jobs')
-
-    sub = add_cmd('push', queue, help='Add a job to the queue')
-    sub.add_argument('reqid')
-
-    sub = add_cmd('pop', queue, help='Get the next job from the queue')
-
-    sub = add_cmd('move', queue, help='Move a job up or down in the queue')
-    sub.add_argument('reqid')
-    sub.add_argument('position')
-
-    sub = add_cmd('remove', queue, help='Remove a job from the queue')
-    sub.add_argument('reqid')
+    handle_queue_args = _add_queue_cli(add_cmd, add_hidden)
 
     ##########
     # Add other public commands.
@@ -692,49 +737,16 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     ns.pop('logfile')
 
     # Process commands and command-specific args.
+    if args.cmd in ('add', 'request'):
+        handle_request_args(args, parser)
+    elif args.cmd == 'config':
+        args.cmd = 'config-show'
+    elif args.cmd == 'queue':
+        handle_queue_args(args, parser)
+    elif args.cmd == 'bench-host':
+        action = ns.pop('action')
+        args.cmd = f'bench-host-{action}'
     cmd = ns.pop('cmd')
-    if cmd in ('add', 'request'):
-        job = ns.pop('job')
-        cmd = f'request-{job}'
-        if job == 'compile-bench':
-            # Process hidden args.
-            fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
-            if any(v is not None for v in fake):
-                args._fake = fake
-        if not args.after:
-            args.after = ('run', 'attach')
-    elif cmd == 'config':
-        cmd = 'config-show'
-    elif cmd == 'queue':
-        action = ns.pop('action')
-        cmd = f'queue-{action}'
-        if action == 'move':
-            pos = args.position
-            if pos == '+':
-                pos = '1'
-                relative = '+'
-            elif pos == '-':
-                pos = '1'
-                relative = '-'
-            elif pos.startswith('+'):
-                pos = pos[1:]
-                relative = '+'
-            elif pos.startswith('-'):
-                pos = pos[1:]
-                relative = '-'
-            else:
-                # an absolute move
-                relative = None
-            if not pos.isdigit():
-                parser.error('position must be positive int')
-            pos = int(pos)
-            if pos == 0:
-                parser.error('position must be positive int')
-            args.position = pos
-            args.relative = relative
-    elif cmd == 'bench-host':
-        action = ns.pop('action')
-        cmd = f'bench-host-{action}'
 
     return cmd, ns, cfgfile, verbosity, logfile
 
