@@ -402,7 +402,7 @@ class BenchCompileRequest(Request):
         if branch and not _utils.looks_like_git_branch(branch):
             raise ValueError(branch)
         if not _utils.looks_like_git_branch(ref):
-            if not _utils.looks_like_git_revision(ref):
+            if not _utils.looks_like_git_commit(ref):
                 raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
