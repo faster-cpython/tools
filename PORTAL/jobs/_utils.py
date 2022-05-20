@@ -532,12 +532,42 @@ class LogSection(types.SimpleNamespace):
 ##################################
 # git utils
 
-def looks_like_git_branch(value):
+def looks_like_git_commit(value):
+    return bool(re.match(r'^[a-fA-F0-9]{4,40}$', value))
+
+
+def looks_like_git_name(value):
+    # check_name() is too strict, even with loose=True.
     return bool(re.match(r'^[\w][\w.-]*$', value))
 
 
-def looks_like_git_commit(value):
-    return bool(re.match(r'^[a-fA-F0-9]{4,40}$', value))
+def looks_like_git_tag(value):
+    return looks_like_git_name(value)
+
+
+def looks_like_git_branch(value):
+    return looks_like_git_name(value)
+
+
+def looks_like_git_remote(value):
+    return looks_like_git_name(value)
+
+
+def looks_like_git_ref(value):
+    if not value:
+        return False
+    elif value == 'latest':
+        return True
+    elif value == 'HEAD':
+        return True
+    elif looks_like_git_commit(value):
+        return True
+    elif looks_like_git_tag(value):
+        return True
+    elif looks_like_git_branch(value):
+        return True
+    else:
+        return False
 
 
 def git(*args, cwd=HOME, GIT=shutil.which('git')):
@@ -556,20 +586,23 @@ class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
     def origin(cls, org, project):
-        return cls(org, project, remote_name='origin')
+        return cls(org, project, remote='origin')
 
-    def __init__(self, org, project, ref=None, remote_name=None, upstream=None):
+    def __init__(self, org, project, ref=None, remote=None, upstream=None):
         check_name(org, loose=True)
         check_name(project, loose=True)
         if not ref:
             ref = None
-        elif not looks_like_git_branch(ref):
-            if not looks_like_git_commit(ref):
-                raise ValueError(ref)
-        if not remote_name:
-            remote_name = None
-        else:
-            check_name(remote_name, loose=True)
+        elif not isinstance(ref, str):
+            raise NotImplementedError(ref)
+        elif not looks_like_git_ref(ref):
+            raise ValueError(ref)
+        if not remote:
+            remote = None
+        elif not isinstance(remote, str):
+            raise NotImplementedError(remote)
+        elif not looks_like_git_remote(remote):
+            raise ValueError(remote)
         if upstream is not None and not isinstance(upstream, GitHubTarget):
             raise TypeError(upstream)
 
@@ -580,8 +613,9 @@ class GitHubTarget(types.SimpleNamespace):
 
     @property
     def remote(self):
-        if self.remote_name:
-            return self.remote_name
+        remote = vars(self)['remote']
+        if remote:
+            return remote
         return self.org if self.upstream else 'upstream'
 
     @property
@@ -608,16 +642,16 @@ class GitHubTarget(types.SimpleNamespace):
             org=self.org,
             project=self.project,
             ref=ref or self.ref,
-            remote_name=self.remote_name,
+            remote=vars(self)['remote'],
             upstream=self.upstream,
         )
 
-    def fork(self, org, project=None, ref=None, remote_name=None):
+    def fork(self, org, project=None, ref=None, remote=None):
         return type(self)(
             org=org,
             project=project or self.project,
             ref=ref or self.ref,
-            remote_name=remote_name,
+            remote=remote,
             upstream=self,
         )
 
@@ -629,36 +663,45 @@ class GitRefCandidates:
 
     @classmethod
     def from_revision(cls, revision, branch, remote):
-        if revision and revision.upper() == 'HEAD':
+        if not revision:
+            revision = None
+        elif revision.upper() == 'HEAD':
             revision = 'HEAD'
+        elif not looks_like_git_ref(revision):
+            raise ValueError(f'unsupported revision {revision!r}')
+        if not branch:
+            branch = None
+        elif not looks_like_git_branch(branch):
+            raise ValueError(f'unsupported branch {branch!r}')
+        if not remote:
+            remote = None
+        elif not looks_like_git_remote(remote):
+            raise ValueError(f'unsupported remote {remote!r}')
+
         if branch == 'main':
             refs = cls._from_main(revision, remote)
         elif remote == 'origin':
             refs = cls._from_origin(revision, branch)
         elif remote:
-            if not branch and not revision:
-                raise ValueError('missing revision')
-                #refs = cls._from_main(revision, remote)
-            elif not branch and revision in ('latest', 'HEAD'):
-                raise ValueError('missing branch')
-            else:
-                refs = cls._from_version(revision, branch, remote, required=False)
-                if not refs:
-                    refs = [(remote, branch or None, revision or 'latest')]
-        elif branch:
+            refs = cls._from_non_origin(revision, branch, remote)
+        elif branch:  # no remote, maybe a revision
+            # We know all remotes have release (version) branches.
             refs = cls._from_version(revision, branch, 'origin', required=False)
             if not refs:
-                raise ValueError('missing remote')
-        elif revision:
+                # We don't bother trying to guess the remote at this point.
+                raise ValueError('missing remote for branch {branch!r}')
+        elif revision:  # no remote or branch
             refs = cls._from_origin(revision, branch, required=False)
             if not refs:
-                raise ValueError('missing remote')
+                raise ValueError(f'missing remote for revision {revision!r}')
         else:
             refs = cls._from_main(revision, remote)
         return cls(refs)
 
     @classmethod
     def _from_main(cls, revision, remote):
+        # The main branch defaults to origin.
+        # We do not support tags for the main branch.
         if not remote:
             remote = 'origin'
         if not revision:
@@ -684,9 +727,44 @@ class GitRefCandidates:
             if looks_like_git_commit(revision):
                 return [('origin', None, revision)]
             else:
+                # The only remaining possibility for origin
+                # is a release branch or tag.
                 return cls._from_version(revision, branch, 'origin', required)
         else:
             return cls._from_main(revision, 'origin')
+
+    @classmethod
+    def _from_non_origin(cls, revision, branch, remote):
+        if branch:
+            if not revision:
+                # For non-origin, we don't bother with "latest" for versions.
+                return [(remote, branch, 'HEAD')]
+            elif Version.parse(branch, match=revision):
+                return [(remote, branch, revision)]
+            else:
+                # For non-origin, revision can be any tag or commit.
+                return [(remote, branch, revision)]
+        else:
+            if not revision:
+                # Unlike for origin, here we don't assume "main".
+                raise ValueError('missing revision')
+            elif revision in ('latest', 'HEAD'):
+                raise ValueError('missing branch')
+            elif revision == 'main':
+                return cls._from_main(None, remote)
+            elif looks_like_git_commit(revision):
+                return [(remote, None, revision)]
+            else:
+                refs = cls._from_version(revision, None, remote, required=False)
+                if refs:
+                    return refs
+                if looks_like_git_branch(revision):
+                    return [
+                        (remote, None, revision),
+                        (remote, revision, 'latest'),
+                    ]
+                else:
+                    raise ValueError(f'unexpected revision {revision!r}')
 
     @classmethod
     def _from_version(cls, revision, branch, remote, required=True):
@@ -749,42 +827,56 @@ class GitRefCandidates:
             if remote not in by_remote:
                 by_remote[remote] = GitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
+
+            _branch = tag = commit = ref = kind = None
             if revision == 'HEAD':
                 assert branch, self
-                _branch, tag, commit = repo_refs.match_branch(branch)
-                if not commit:
+                matched = repo_refs.match_branch(branch)
+                if matched:
+                    _branch, tag, commit = matched
+                    kind = 'branch'
+                    ref = revision
+                else:
                     logger.warning(f'branch {branch} not found')
             elif revision == 'latest':
                 assert branch, self
-                _branch, tag, commit = repo_refs.match_latest_version(branch)
-                if not commit:
-                    _branch, tag, commit = repo_refs.match_branch(branch)
-                    if not commit:
-                        logger.warning(f'branch {branch} not found')
-            elif branch:
-                assert revision, self
-                _branch, tag, commit = repo_refs.match_branch(branch)
-                if not commit:
-                    logger.warning(f'branch {branch!r} not found on remote {remote})')
-                    continue
-                if not looks_like_git_commit(revision):
-                    tag = revision
-                commit = revision
+                assert Version.parse(branch), (branch, self)
+                matched = repo_refs.match_latest_version(branch)
+                if matched:
+                    _branch, tag, commit = matched
+                    kind = 'tag'
+                    ref = tag or branch
+                    branch = _branch
+                elif repo_refs.match_branch(branch):
+                    logger.warning(f'latest tag for branch {branch} not found')
+                else:
+                    logger.warning(f'branch {branch} not found')
+            elif looks_like_git_commit(revision):
+                matched = repo_refs.match_commit(revision)
+                if matched:
+                    _branch, tag, commit = matched
+                    assert not branch or _branch == branch, (branch, _branch, self)
+                else:
+                    if branch:
+                        if not repo_refs.match_branch(branch):
+                            logger.warning(f'branch {branch} not found')
+                    commit = revision
+                if commit:
+                    kind = 'commit'
+                    ref = commit
             else:
-                _branch, tag, commit = repo_refs.match_branch(branch)
-                if not commit:
-                    _branch, tag, commit = repo_refs.match_branch(branch)
+                assert looks_like_git_tag(revision), (revision, self)
+                matched = repo_refs.match_tag(revision)
+                if matched:
+                    _branch, tag, commit = matched
+                    kind = 'tag'
+                    ref = tag
 
             if commit:
                 if branch and _branch != branch:
                     logger.warning(f'branch mismatch (wanted {branch}, found {_branch})')
                 else:
-                    if tag:
-                        ref = tag
-                    elif revision == 'latest':
-                        ref = commit
-                    else:
-                        ref = revision
+                    assert ref, (commit, branch or _branch, remote)
                     return GitRef(ref, None, commit, branch or _branch, remote)
         else:
             return None
@@ -905,9 +997,89 @@ class GitRefs(types.SimpleNamespace):
             tags=tags,
         )
 
+    def _release_branches(self):
+        by_version = {}
+        for branch in self.branches:
+            version = Version.parse(branch)
+            if version and branch == f'{version.major}.{version.minor}':
+                by_version[version] = branch
+        return by_version
+
+    def _next_versions(self):
+        releases = self._release_branches()
+        if not releases:
+            return ()
+        latest, _ = sorted(releases.items())[-1]
+        return [
+            Version(latest.major, latest.minor + 1),
+            Version(latest.major + 1, 0),
+        ]
+
+    def match_ref(self, ref):
+        assert ref
+        if looks_like_git_commit(ref):
+            for tag, commit in self.tags.items():
+                assert commit
+                if ref == commit:
+                    return self.match_tag(tag)
+            for branch, commit in self.branches.items():
+                assert commit
+                if ref == commit:
+                    return branch, None, commit
+            return None
+        else:
+            matched = self.match_tag(ref)
+            if matched:
+                return matched
+            return self.match_branch(ref)
+
+    def match_branch(self, ref):
+        if not ref or not looks_like_git_branch(ref):
+            return None
+        if ref in self.branches:
+            branch = ref
+        else:
+            # Treat it like main if one higher than the latest.
+            branch = None
+            version = Version.parse(ref)
+            if version and ref == f'{version.major}.{version.minor}':
+                if version in self._next_versions():
+                    branch = 'main'
+        if branch:
+            commit = self.branches.get(branch)
+            if commit:
+                return branch, None, commit
+        return None
+
+    def match_tag(self, ref): 
+        if not ref or not looks_like_git_branch(ref):
+            return None
+        version = Version.parse(ref)
+        if version:
+            # Find a tag that matches the version.
+            for tag in self.tags:
+                tagver = Version.parse(tag)
+                if tagver:
+                    if tagver == version:
+                        commit = self.tags[tag]
+                        branch = f'{version.major}.{version.minor}'
+                        if branch not in self.branches:
+                            branch = None
+                        #tag = version.as_tag()
+                        assert commit
+                        return branch, tag, commit
+        else:
+            # Find a tag that matches exactly.
+            if ref in self.tags:
+                commit = self.tags[ref]
+                assert commit
+                return None, ref, commit
+        # No tags matched!
+        return None
+
     def match_latest_version(self, branch):
         if not branch or not looks_like_git_branch(branch):
-            return None, None, None
+            return None
         version = Version.parse(branch)
         if version:
             # Find the latest tag that matches the branch.
@@ -915,46 +1087,16 @@ class GitRefs(types.SimpleNamespace):
             for tag in self.tags:
                 tagver = Version.parse(tag)
                 if version.match(tagver):
-                    matched[(tagver.full, tag)] = self.tags[tag]
+                    matched[(tagver.full, tag)] = (self.tags[tag], tagver)
             if matched:
                 key = sorted(matched)[-1]
-                commit = matched[key]
+                commit, tagver = matched[key]
                 _, tag = key
-                #return branch, key.as_tag(), commit
+                #tag = tagver.as_tag()
+                assert commit
                 return branch, tag, commit
         # Fall back to the branch.
-        if branch in self.branches:
-            return branch, None, self.branches[branch]
-        return None, None, None
-
-    def match_branch(self, ref):
-        if not ref or not looks_like_git_branch(ref):
-            return None, None, None
-        if ref in self.branches:
-            return ref, None, self.branches[ref]
-        return None, None, None
-
-    def match_tag(self, ref): 
-        if not ref or not looks_like_git_branch(ref):
-            return None, None, None
-        version = Version.parse(ref)
-        if version:
-            # Find a tag that matches the version.
-            for tag in self.tags:
-                tagver = Version.parse(tag)
-                if tagver == version:
-                    commit = self.tags[tag]
-                    branch = f'{version.major}.{version.minor}'
-                    if branch not in self.branches:
-                        branch = None
-                    #return branch, version.as_tag(), commit
-                    return branch, tag, commit
-        else:
-            # Find a tag that matches exactly.
-            if ref in self.tags:
-                return None, ref, self.tags[ref]
-        # No tags matched!
-        return None, None, None
+        return self.match_branch(branch)
 
 
 def resolve_git_revision_and_branch(revision, branch, remote):
@@ -1247,8 +1389,10 @@ class Version(namedtuple('Version', 'major minor micro release')):
         \.
         (\d+)  # <minor>
         (?:
-            \.
-            (\d+)  # <micro>
+            (?:
+                \.
+                (\d+)  # <micro>
+             )?
             (?:
                 {VersionRelease.PAT}  # <level> <serial>
             )?
@@ -1270,19 +1414,22 @@ class Version(namedtuple('Version', 'major minor micro release')):
             return cls(**raw)
 
     @classmethod
-    def parse(cls, verstr):
+    def parse(cls, verstr, match=None):
         m = cls.REGEX.match(verstr)
         if not m:
             return None
         major, minor, micro, level, serial = m.groups()
+        release = VersionRelease.from_values(level, serial, usedefault=False)
         self = cls.__new__(
             cls,
             int(major),
             int(minor),
-            int(micro) if micro else None,
-            VersionRelease.from_values(level, serial, usedefault=False),
+            int(micro) if micro else 0 if release else None,
+            release,
         )
         self._raw = verstr
+        if match is not None and not self.match(match):
+            return None
         return self
 
     def __new__(cls, major, minor, micro=None, release=None):

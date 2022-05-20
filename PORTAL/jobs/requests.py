@@ -399,11 +399,12 @@ class BenchCompileRequest(Request):
                  debug=False,
                  **kwargs
                  ):
+        if remote and not _utils.looks_like_git_remote(remote):
+            raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
             raise ValueError(branch)
-        if not _utils.looks_like_git_branch(ref):
-            if not _utils.looks_like_git_commit(ref):
-                raise ValueError(ref)
+        if not _utils.looks_like_git_ref(ref):
+            raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
         self.ref = ref
@@ -474,8 +475,10 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
-        # XXX Add a "commit" field and use "tag or branch" for ref.
+        # XXX Add a "commit" field and use "ref" for the actual ref.
         ref=ref.commit,
+        #commit=ref.commit,
+        #ref=ref.ref or ref.commit,
         remote=ref.remote,
         branch=ref.branch,
         benchmarks=benchmarks or None,
