@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import textwrap
 import time
 import types
 
@@ -913,8 +914,8 @@ class GitRefs(types.SimpleNamespace):
             matched = {}
             for tag in self.tags:
                 tagver = Version.parse(tag)
-                if tagver and tagver[:2] == version[:2]:
-                    matched[(tagver, tag)] = self.tags[tag]
+                if version.match(tagver):
+                    matched[(tagver.full, tag)] = self.tags[tag]
             if matched:
                 key = sorted(matched)[-1]
                 commit = matched[key]
@@ -1097,6 +1098,56 @@ def ensure_int(raw, min=None):
     return value
 
 
+def coerce_int(value, *, fail=True):
+    if isinstance(value, int):
+        return value
+    elif not value:
+        if fail:
+            raise ValueError('missing')
+    elif isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            if fail:
+                raise  # re-raise
+    else:
+        if fail:
+            raise TypeError(f'unsupported value {value!r}')
+    return None
+
+
+def validate_int(value, name=None, *, range=None, required=True):
+    if isinstance(value, int):
+        if not range:
+            return value
+        elif range == 'non-negative':
+            if value >= 0:
+                return value
+        else:
+            raise NotImplementedError(f'unsupported range {range!r}')
+        Error = ValueError
+    elif not value:
+        if not required:
+            return None
+        raise ValueError(f'missing {name}' if name else 'missing')
+    else:
+        Error = TypeError
+    # Failed!
+    qualifier = f'a {range}' if range else 'an'
+    namepart = f' for {name}' if name else ''
+    raise Error(f'expected {qualifier} int{namepart}, got {value}')
+
+
+def normalize_int(value, name=None, *,
+                  range=None,
+                  coerce=False,
+                  required=True,
+                  ):
+    if coerce:
+        value = coerce_int(value)
+    return validate_int(value, name, range=range, required=required)
+
+
 def get_slice(raw):
     if isinstance(raw, int):
         start = stop = None
@@ -1128,37 +1179,201 @@ def resolve_user(cfg, user=None):
     return user
 
 
-class Version(namedtuple('Version', 'major minor micro level serial')):
+class VersionRelease(namedtuple('VersionRelease', 'level serial')):
 
-    prefix = None
+    LEVELS = {
+        'alpha': 'a',
+        'beta': 'b',
+        'candidate': 'rc',
+        'final': 'f',
+    }
+    LEVEL_SYMBOLS = {s: l for l, s in LEVELS.items()}
+    LEVEL_SYMBOLS['c'] = 'candidate'
+
+    PAT = textwrap.dedent(rf'''(?:
+        ( {'|'.join(LEVEL_SYMBOLS)} )  # <level>
+        ( \d+ )  # <serial>
+    )''')
+
+    @classmethod
+    def from_values(cls, level=None, serial=None, *, usedefault=True):
+        if isinstance(serial, int):
+            return cls(level, serial)
+        else:
+            if not serial:
+                if level == 'final':
+                    serial = 0
+                elif not level:
+                    if not usedefault:
+                        return None
+                    level = 'final'
+                    serial = 0
+            elif isinstance(serial, str):
+                serial = coerce_int(serial, fail=False)
+            try:
+                level = cls.LEVEL_SYMBOLS[level]
+            except (KeyError, TypeError):
+                pass
+            return cls(level, serial)
+
+    @classmethod
+    def validate(cls, release):
+        if not isinstance(release, cls):
+            raise TypeError(f'expected a {cls.__name__}, got {release!r}')
+        release._validate()
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def __str__(self):
+        level = self.LEVELS[self.level]
+        return f'{self.LEVELS[self.level]}{self.serial}'
+
+    def _validate(self):
+        if not self.level:
+            raise ValueError('missing level')
+        elif self.level not in self.LEVELS:
+            raise ValueError(f'unsupported level {self.level}')
+        elif self.level == 'final':
+            if self.serial != 0:
+                raise ValueError(f'final releases always have a serial of 0, got {self.serial}')
+        validate_int(self.serial, 'serial', range='non-negative', required=True)
+
+
+class Version(namedtuple('Version', 'major minor micro release')):
+
+    PAT = textwrap.dedent(rf'''(?:
+        (\d+)  # <major>
+        \.
+        (\d+)  # <minor>
+        (?:
+            \.
+            (\d+)  # <micro>
+            (?:
+                {VersionRelease.PAT}  # <level> <serial>
+            )?
+         )?
+    )''')
+    REGEX = re.compile(f'^v?{PAT}$', re.VERBOSE)
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        elif isinstance(raw, (tuple, list)):
+            return cls(*raw)
+        else:
+            return cls(**raw)
 
     @classmethod
     def parse(cls, verstr):
-        m = re.match(r'^(v)?(\d+)\.(\d+)(?:\.(\d+))?(?:(a|b|c|rc|f)(\d+))?$',
-                     verstr)
+        m = cls.REGEX.match(verstr)
         if not m:
             return None
-        prefix, major, minor, micro, level, serial = m.groups()
-        if level == 'a':
-            level = 'alpha'
-        elif level == 'b':
-            level = 'beta'
-        elif level in ('c', 'rc'):
-            level = 'candidate'
-        elif level == 'f':
-            level = 'final'
-        elif level:
-            raise NotImplementedError(repr(verstr))
-        self = cls(
+        major, minor, micro, level, serial = m.groups()
+        self = cls.__new__(
+            cls,
             int(major),
             int(minor),
-            int(micro) if micro else 0,
-            level or 'final',
-            int(serial) if serial else 0,
+            int(micro) if micro else None,
+            VersionRelease.from_values(level, serial, usedefault=False),
         )
-        if prefix:
-            self.prefix = prefix
+        self._raw = verstr
         return self
+
+    def __new__(cls, major, minor, micro=None, release=None):
+        return super().__new__(cls, major, minor, micro, release or None)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def __str__(self):
+        return self.render()
+
+    def _validate(self):
+        def _validate_int(name, *, required=False):
+            val = getattr(self, name)
+            validate_int(val, name, range='non-negative', required=required)
+        _validate_int('major', required=True)
+        _validate_int('minor', required=True)
+        _validate_int('micro')
+        if self.release is not None:
+            VersionRelease.validate(self.release)
+            if self.micro is None:
+                raise ValueError('missing micro')
+
+    @property
+    def branch(self):
+        return self[:2]
+
+    @property
+    def full(self):
+        if self.release:
+            return self
+        major, minor, micro = self[:3]
+        release = VersionRelease.from_values()
+        cls = type(self)
+        full = cls.__new__(cls, major, minor, micro or 0, release)
+        full._raw = self._raw
+        return full
+
+    @property
+    def plain(self):
+        major, minor, micro = self[:3]
+        if micro and not self.release:
+            return self
+        cls = type(self)
+        plain = cls.__new__(cls, major, minor, micro or 0)
+        plain._raw = self.raw
+        return plain
+
+    @property
+    def flat(self):
+        major, minor, micro, release = self
+        level, serial = release if release else (None, None)
+        return major, minor, micro, level, serial
+
+    @property
+    def raw(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = self.render()
+            return self._raw
+
+#    def compare(self, other):
+#        raise NotImplementedError
+
+    def match(self, other, *, subversiononly=False):
+        """Return True if other is a subversion."""
+        if not other:
+            return None
+        else:
+            other = Version.from_raw(other)
+            if not other:
+                return None
+        if not subversiononly and self == other:
+            return True
+        if not self.release:
+            if self.micro is not None:
+                if other.release:
+                    return self[:3] == other[:3]
+            else:
+                if other.micro is not None:
+                    return self[:2] == other[:2]
+        return False
+
+    def render(self):
+        if self.release:
+            return f'{self.major}.{self.minor}.{self.micro}{self.release}'
+        elif self.micro:
+            return f'{self.major}.{self.minor}.{self.micro}'
+        else:
+            return f'{self.major}.{self.minor}'
 
     def as_tag(self):
         micro = f'.{self.micro}' if self.micro else ''
