@@ -626,10 +626,10 @@ class GitHubTarget(types.SimpleNamespace):
 
 class GitRefCandidates:
 
-    # XXX Support HEAD as a revision for a branch.
-
     @classmethod
     def from_revision(cls, revision, branch, remote):
+        if revision and revision.upper() == 'HEAD':
+            revision = 'HEAD'
         if branch == 'main':
             refs = cls._from_main(revision, remote)
         elif remote == 'origin':
@@ -638,6 +638,8 @@ class GitRefCandidates:
             if not branch and not revision:
                 raise ValueError('missing revision')
                 #refs = cls._from_main(revision, remote)
+            elif not branch and revision in ('latest', 'HEAD'):
+                raise ValueError('missing branch')
             else:
                 refs = cls._from_version(revision, branch, remote, required=False)
                 if not refs:
@@ -659,9 +661,9 @@ class GitRefCandidates:
         if not remote:
             remote = 'origin'
         if not revision:
-            return [(remote, 'main', 'latest')]
-        elif revision == 'latest':
-            return [(remote, 'main', revision)]
+            return [(remote, 'main', 'HEAD')]
+        elif revision in ('latest', 'HEAD'):
+            return [(remote, 'main', 'HEAD')]
         elif looks_like_git_revision(revision):
             return [(remote, 'main', revision)]
         else:
@@ -675,6 +677,8 @@ class GitRefCandidates:
             return cls._from_version(revision, branch, 'origin')
         elif revision == 'main':
             return cls._from_main(None, 'origin')
+        elif revision in ('latest', 'HEAD'):
+            return cls._from_main(revision, 'origin')
         elif revision:
             if looks_like_git_revision(revision):
                 return [('origin', None, revision)]
@@ -698,9 +702,9 @@ class GitRefCandidates:
                 if required:
                     raise ValueError(f'unexpected branch {branch!r}')
                 return None
-            if not revision:
+            if not revision or revision == 'latest':
                 return [(remote, branch, 'latest')]
-            elif revision == 'latest':
+            elif revision == 'HEAD':
                 return [(remote, branch, revision)]
             elif looks_like_git_revision(revision):
                 return [(remote, branch, revision)]
@@ -744,6 +748,11 @@ class GitRefCandidates:
             if remote not in by_remote:
                 by_remote[remote] = GitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
+            if revision == 'HEAD':
+                assert branch, self
+                _branch, tag, commit = repo_refs.match_branch(branch)
+                if not commit:
+                    logger.warning(f'branch {branch} not found')
             if revision == 'latest':
                 assert branch, self
                 _branch, tag, commit = repo_refs.match_latest_version(branch)
@@ -752,8 +761,14 @@ class GitRefCandidates:
                     if not commit:
                         logger.warning(f'branch {branch} not found')
             elif branch:
-                # XXX
-                raise Exception((remote, branch, revision))
+                assert revision, self
+                _branch, tag, commit = repo_refs.match_branch(branch)
+                if not commit:
+                    logger.warning(f'branch {branch!r} not found on remote {remote})')
+                    continue
+                if not looks_like_git_revision(revision):
+                    tag = revision
+                commit = revision
             else:
                 _branch, tag, commit = repo_refs.match_branch(branch)
                 if not commit:
@@ -855,7 +870,7 @@ class GitRefs(types.SimpleNamespace):
         if not ref or not looks_like_git_branch(ref):
             return None, None, None
         if ref in self.branches:
-            return branch, None, self.branches[ref]
+            return ref, None, self.branches[ref]
         return None, None, None
 
     def match_tag(self, ref): 
