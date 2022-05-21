@@ -685,18 +685,76 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def render(self, fmt=None):
-        reqfile = self._fs.request.metadata
-        resfile = self._fs.result.metadata
         if not fmt:
             fmt = 'summary'
-        elif fmt in ('reqfile', 'resfile'):
+        reqfile = self._fs.request.metadata
+        resfile = self._fs.result.metadata
+        if fmt in ('reqfile', 'resfile'):
             filename = reqfile if fmt == 'reqfile' else resfile
             yield f'(from {filename})'
             yield ''
             text = _utils.read_file(filename)
             for line in text.splitlines():
                 yield f'  {line}'
-            return
+        elif fmt == 'summary':
+            yield from self._render_summary('verbose')
+        else:
+            raise ValueError(f'unsupported fmt {fmt!r}')
+
+    def render_for_row(self, attrs):
+        if isinstance(attrs, str):
+            raise NotImplementedError(attrs)
+        try:
+            res = self.load_result()
+        except FileNotFoundError:
+            status = started = finished = None
+        else:
+            status = res.status or 'created'
+            started, _ = res.started
+            finished, _ = res.finished
+
+        def render_attr(name):
+            if name == 'reqid':
+                return str(self.reqid)
+            elif name == 'status':
+                return str(status) if status else '???'
+            elif name == 'created':
+                return f'{self.reqid.date:%Y-%m-%d %H:%M:%S}'
+            elif name == 'started':
+                return f'{started:%Y-%m-%d %H:%M:%S}' if started else '---'
+            elif name == 'finished':
+                return f'{finished:%Y-%m-%d %H:%M:%S}' if finished else '---'
+            elif name == 'duration':
+                if not started:
+                    return '---'
+                elif not finished:
+                    return '...'
+                else:
+                    duration = finished - started
+                    # The following is mostly borrowed from Timedelta.__str__().
+                    mm, ss = divmod(duration.seconds, 60)
+                    hh, mm = divmod(mm, 60)
+                    hh += 24 * duration.days
+                    return "%d:%02d:%02d" % (hh, mm, ss)
+            else:
+                raise NotImplementedError(name)
+
+        for name in attrs:
+            if ',' in name:
+                primary, _, secondary = name.partition(',')
+                primary = render_attr(primary)
+                if primary in ('---', '...', '???'):
+                    secondary = render_attr(secondary)
+                    if secondary not in ('---', '...', '???'):
+                        yield f'({secondary})'
+                        continue
+                yield f' {primary} '
+            else:
+                yield render_attr(name)
+
+    def _render_summary(self, fmt=None):
+        if not fmt:
+            fmt = 'verbose'
 
         reqfs_fields = [
             'bench_script',
@@ -719,24 +777,28 @@ class Job:
                 'pyperformance_results',
             ])
         else:
-            raise NotImplementedError(kind)
-        req = req_cls.load(reqfile)
-        res = res_cls.load(resfile)
-        pid = _utils.PIDFile(self._fs.pidfile).read()
+            raise NotImplementedError(self.kind)
+
+        fs = self._fs
+        req = req_cls.load(fs.request.metadata)
+        res = res_cls.load(fs.result.metadata)
+        pid = _utils.PIDFile(fs.pidfile).read()
+
         try:
-            staged = _get_staged_request(self._fs.jobs)
+            staged = _get_staged_request(fs.jobs)
         except StagedRequestError:
             isstaged = False
         else:
             isstaged = (self.reqid == staged)
+
         if self.check_ssh(fail=False):
             ssh_okay = 'yes'
-        elif os.path.exists(self._fs.ssh_okay):
+        elif os.path.exists(fs.ssh_okay):
             ssh_okay = 'no'
         else:
             ssh_okay = '???'
 
-        if fmt == 'summary':
+        if fmt == 'verbose':
             yield f'Request {self.reqid}:'
             yield f'  {"kind:":22} {req.kind}'
             yield f'  {"user:":22} {req.user}'
@@ -761,20 +823,20 @@ class Job:
             yield ''
             yield 'Request files:'
             yield f'  {"data root:":22} {_utils.render_file(req.reqdir)}'
-            yield f'  {"metadata:":22} {_utils.render_file(self._fs.request.metadata)}'
+            yield f'  {"metadata:":22} {_utils.render_file(fs.request.metadata)}'
             for field in reqfs_fields:
-                value = getattr(self._fs.request, field, None)
+                value = getattr(fs.request, field, None)
                 if value is None:
-                    value = getattr(self._fs.work, field, None)
+                    value = getattr(fs.work, field, None)
                 yield f'  {field + ":":22} {_utils.render_file(value)}'
             yield ''
             yield 'Result files:'
-            yield f'  {"data root:":22} {_utils.render_file(self._fs.result)}'
-            yield f'  {"metadata:":22} {_utils.render_file(self._fs.result.metadata)}'
+            yield f'  {"data root:":22} {_utils.render_file(fs.result)}'
+            yield f'  {"metadata:":22} {_utils.render_file(fs.result.metadata)}'
             for field in resfs_fields:
-                value = getattr(self._fs.result, field, None)
+                value = getattr(fs.result, field, None)
                 if value is None:
-                    value = getattr(self._fs.work, field, None)
+                    value = getattr(fs.work, field, None)
                 yield f'  {field + ":":22} {_utils.render_file(value)}'
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
@@ -784,8 +846,9 @@ class Jobs:
 
     FS = JobsFS
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, *, devmode=False):
         self._cfg = cfg
+        self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
 
@@ -795,6 +858,10 @@ class Jobs:
     @property
     def cfg(self):
         return self._cfg
+
+    @property
+    def devmode(self):
+        return self._devmode
 
     @property
     def fs(self):
@@ -910,6 +977,33 @@ class Jobs:
         return job
 
 
+_SORT = {
+    'reqid': (lambda j: j.reqid),
+}
+
+
+def sort_jobs(jobs, sortby=None, *, ascending=False):
+    if isinstance(jobs, Jobs):
+        jobs = list(jobs.iter_all())
+    if not sortby:
+        sortby = ['reqid']
+    elif isinstance(sortby, str):
+        sortby = sortby.split(',')
+    done = set()
+    for kind in sortby:
+        if not kind:
+            raise NotImplementedError(repr(kind))
+        if kind in done:
+            raise NotImplementedError(kind)
+        done.add(kind)
+        try:
+            key = _SORT[kind]
+        except KeyError:
+            raise ValueError(f'unsupported sort kind {kind!r}')
+        jobs = sorted(jobs, key=key, reverse=ascending)
+    return jobs
+
+
 def select_job(jobs, criteria=None):
     raise NotImplementedError
 
@@ -931,8 +1025,9 @@ def select_jobs(jobs, criteria=None):
             criteria = [criteria]
     if len(criteria) > 1:
         raise NotImplementedError(criteria)
-    jobs = sorted(jobs, key=(lambda j: j.reqid))
     selection = _utils.get_slice(criteria[0])
+    if not isinstance(jobs, (list, tuple)):
+        jobs = list(jobs)
     yield from jobs[selection]
 
 

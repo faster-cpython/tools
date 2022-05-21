@@ -306,6 +306,31 @@ class Result(_utils.Metadata):
             self._request = Request(self.reqid, self.reqdir)
             return self._request
 
+    @property
+    def started(self):
+        history = list(self.history)
+        if not history:
+            return None
+        last_st, last_date = history[-1]
+        if last_st == Result.STATUS.ACTIVE:
+            return last_date, last_st
+        for st, date in reversed(history):
+            if st == Result.STATUS.RUNNING:
+                return date, st
+        else:
+            return None, None
+
+    @property
+    def finished(self):
+        history = list(self.history)
+        if not history:
+            return None
+        for st, date in reversed(history):
+            if st in Result.FINISHED:
+                return date, st
+        else:
+            return None, None
+
     def set_status(self, status):
         if not status:
             raise ValueError('missing status')
@@ -374,11 +399,12 @@ class BenchCompileRequest(Request):
                  debug=False,
                  **kwargs
                  ):
+        if remote and not _utils.looks_like_git_remote(remote):
+            raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
             raise ValueError(branch)
-        if not _utils.looks_like_git_branch(ref):
-            if not _utils.looks_like_git_revision(ref):
-                raise ValueError(ref)
+        if not _utils.looks_like_git_ref(ref):
+            raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
         self.ref = ref
@@ -436,22 +462,25 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
                                   optimize,
                                   debug,
                                   ):
-    commit, branch, tag = _utils.resolve_git_revision_and_branch(revision, branch, remote)
-    remote = _utils.resolve_git_remote(remote, reqid.user, branch, commit)
-
     if isinstance(benchmarks, str):
         benchmarks = benchmarks.replace(',', ' ').split()
     if benchmarks:
         benchmarks = (b.strip() for b in benchmarks)
         benchmarks = [b for b in benchmarks if b]
 
+    ref = _utils.resolve_git_revision_and_branch(revision, branch, remote)
+    if not ref:
+        raise Exception(f'could not find ref for {(remote, branch, revision)}')
+
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
-        # XXX Add a "commit" field and use "tag or branch" for ref.
-        ref=commit,
-        remote=remote,
-        branch=branch,
+        # XXX Add a "commit" field and use "ref" for the actual ref.
+        ref=ref.commit,
+        #commit=ref.commit,
+        #ref=ref.ref or ref.commit,
+        remote=ref.remote,
+        branch=ref.branch,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),
