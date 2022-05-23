@@ -219,7 +219,8 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
 
 
 def cmd_upload(jobs, reqid):
-    ...
+    job = jobs.get(reqid)
+    job.upload_result()
 
 
 # internal

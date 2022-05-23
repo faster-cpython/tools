@@ -689,6 +689,9 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
+    def upload_result(self):
+        ...
+
     def as_row(self):  # XXX Move to JobSummary.
         try:
             res = self.load_result()
