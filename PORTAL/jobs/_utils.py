@@ -1448,21 +1448,21 @@ class SSHCommands:
                 for n in 'host port user'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
-    def run(self, cmd, *args):
+    def run(self, cmd, *args, agent=None):
         conn = f'{self.user}@{self.host}'
         if not os.path.isabs(cmd):
             raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
         return [self._ssh, *self._ssh_opts, conn, cmd, *args]
 
-    def run_shell(self, cmd):
+    def run_shell(self, cmd, *, agent=None):
         conn = f'{self.user}@{self.host}'
         return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
 
-    def push(self, source, target):
+    def push(self, source, target, *, agent=None):
         conn = f'{self.user}@{self.host}'
         return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
 
-    def pull(self, source, target):
+    def pull(self, source, target, *, agent=None):
         conn = f'{self.user}@{self.host}'
         return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
 
@@ -1475,16 +1475,16 @@ class SSHShellCommands(SSHCommands):
     SSH = 'ssh'
     SCP = 'scp'
 
-    def run(self, cmd, *args):
+    def run(self, cmd, *args, agent=None):
         return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
 
-    def run_shell(self, cmd):
+    def run_shell(self, cmd, *, agent=None):
         return ' '.join(super().run_shell(cmd))
 
-    def push(self, source, target):
+    def push(self, source, target, *, agent=None):
         return ' '.join(super().push(source, target))
 
-    def pull(self, source, target):
+    def pull(self, source, target, *, agent=None):
         return ' '.join(super().pull(source, target))
 
     def ensure_user_with_agent(self, user):
@@ -1506,29 +1506,33 @@ class SSHClient(SSHCommands):
     def shell_commands(self):
         return SSHShellCommands(self.user, self.host, self.port)
 
-    def check(self):
+    def check(self, *, agent=None):
         return (self.run_shell('true').returncode == 0)
 
-    def run(self, cmd, *args):
+    def run(self, cmd, *args, agent=None):
         argv = super().run(cmd, *args)
-        return run_fg(*argv)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
 
-    def run_shell(self, cmd, *args):
+    def run_shell(self, cmd, *args, agent=None):
         argv = super().run_shell(cmd, *args)
-        return run_fg(*argv)
+        env = agent.apply_env() if agent else None
+        return run_fg(*arg, env=envv)
 
-    def push(self, source, target):
+    def push(self, source, target, *, agent=None):
         argv = super().push(*args)
-        return run_fg(*argv)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
 
-    def pull(self, source, target):
+    def pull(self, source, target, *, agent=None):
         argv = super().push(*args)
-        return run_fg(*argv)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
 
-    def read(self, filename):
+    def read(self, filename, *, agent=None):
         if not filename:
             raise ValueError(f'missing filename')
-        proc = self.run_shell(f'cat {filename}')
+        proc = self.run_shell(f'cat {filename}', agent=agent)
         if proc.returncode != 0:
             return None
         return proc.stdout
