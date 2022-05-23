@@ -1409,8 +1409,6 @@ class SSHConnectionConfig(Config):
             #    agent = SSHAgentInfo.from_env_vars()
         else:
             agent = SSHAgentInfo.from_jsonable(agent)
-        if agent and not agent.check():
-            agent = None
         super().__init__(
             user=user,
             host=host,

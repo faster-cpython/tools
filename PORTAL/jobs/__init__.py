@@ -474,7 +474,7 @@ class Job:
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
-        ensure_user = ssh.ensure_user(user, agent=True)
+        ensure_user = ssh.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
         resfiles = []
@@ -562,7 +562,19 @@ class Job:
             exit $exitcode
         '''[1:-1])
 
-    def check_ssh(self, *, onunknown=None, fail=True):
+    def _get_ssh_agent(self):
+        agent = self._cfg.bench_ssh.agent
+        if not agent or not agent.check():
+            agent = _utils.SSHAgentInfo.find_latest()
+            if not agent:
+                agent = SSHAgentInfo.from_env_vars()
+        if agent:
+            logger.debug(f'(using SSH agent at {agent.auth_sock})')
+        else:
+            logger.debug('(no SSH agent running)')
+        return agent
+
+    def check_ssh(self, *, onunknown=None, agent=None, fail=True):
         filename = self._fs.ssh_okay
         if onunknown is None:
             save = False
@@ -584,7 +596,9 @@ class Job:
             raise TypeError(f'expected str, got {onunknown!r}')
         text = _utils.read_file(filename, fail=False)
         if text is None:
-            okay = self._worker.ssh.check()
+            if not agent:
+                agent = self._get_ssh_agent()
+            okay = self._worker.ssh.check(agent=agent)
             if save:
                 with open(filename, 'w') as outfile:
                     outfile.write('0' if okay else '1')
@@ -604,14 +618,16 @@ class Job:
         return okay
 
     def run(self, *, background=False):
-        self.check_ssh(onunknown='save')
+        agent = self._get_ssh_agent()
+        env = agent.apply_env() if agent else None
+        self.check_ssh(onunknown='save', agent=agent)
         if background:
             script = _utils.quote_shell_str(self._fs.portal_script)
             logfile = _utils.quote_shell_str(self._fs.logfile)
-            _utils.run_bg(f'{script} > {logfile}')
+            _utils.run_bg(f'{script} > {logfile}', env=env)
             return 0
         else:
-            proc = subprocess.run([self.fs.portal_script])
+            proc = subprocess.run([self.fs.portal_script], env=env)
             return proc.returncode
 
     def get_pid(self):
@@ -626,9 +642,10 @@ class Job:
             except ProcessLookupError:
                 logger.warn(f'job {self._reqid} no longer (PID: {pid})')
         # Kill the worker process, if running.
-        text = self._worker.ssh.read(self._worker.fs.pidfile)
+        agent = self._get_ssh_agent()
+        text = self._worker.ssh.read(self._worker.fs.pidfile, agent=agent)
         if text and text.isdigit():
-            self._worker.ssh.run_shell(f'kill {text}')
+            self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
     def wait_until_started(self, *, checkssh=False):
         # XXX Add a timeout?
