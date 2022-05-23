@@ -1,5 +1,6 @@
 from collections import namedtuple
 import datetime
+import glob
 import json
 import logging
 import os
@@ -1324,6 +1325,23 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
             pid = None
 
         return cls.__new__(cls, sock, pid)
+
+    @classmethod
+    def find_latest(cls):
+        latest = None
+        created = None
+        # This will only match for the current user.
+        for filename in glob.iglob('/tmp/ssh-*/agent.*'):
+            if not latest:
+                latest = filename
+            else:
+                _created = os.stat(filename).st_ctime
+                if _created > created:
+                    latest = filename
+                    created = _created
+        if not latest:
+            return None
+        return cls.__new__(latest, None)
 
     @classmethod
     def from_jsonable(cls, data):
