@@ -1466,7 +1466,7 @@ class SSHCommands:
         conn = f'{self.user}@{self.host}'
         return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
 
-    def ensure_user_with_agent(self, user):
+    def ensure_user(self, user, *, agent=False):
         raise NotImplementedError
 
 
@@ -1487,13 +1487,18 @@ class SSHShellCommands(SSHCommands):
     def pull(self, source, target, *, agent=None):
         return ' '.join(super().pull(source, target))
 
-    def ensure_user_with_agent(self, user):
-        return [
-            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
-            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+    def ensure_user(self, user, *, agent=False):
+        commands = []
+        if agent:
+            commands.extend([
+                f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
+                f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+            ])
+        commands.extend([
             f'# Stop running and re-run this script as the {user} user.',
             f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
-        ]
+        ])
+        return commands
 
 
 class SSHClient(SSHCommands):

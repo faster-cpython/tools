@@ -474,7 +474,7 @@ class Job:
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
-        ensure_user = ssh.ensure_user_with_agent(user)
+        ensure_user = ssh.ensure_user(user, agent=True)
         ensure_user = '\n                '.join(ensure_user)
 
         resfiles = []
