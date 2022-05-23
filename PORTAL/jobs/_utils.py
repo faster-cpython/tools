@@ -42,7 +42,9 @@ def check_name(name, *, loose=False):
 
 
 def validate_string(value, argname=None, *, required=True):
-    if not value and required:
+    if not value:
+        if not required:
+            return
         raise ValueError(f'missing {argname or "required value"}')
     if not isinstance(value, str):
         label = f' for {argname}' if argname else ''
@@ -112,14 +114,18 @@ def get_utc_datetime(timestamp=None, *, fail=True):
 
 def check_shell_str(value, *, required=True, allowspaces=False):
     validate_string(value, required=required)
+    if not value:
+        return None
     if not allowspaces and ' ' in value:
         raise ValueError(f'unexpected space in {value!r}')
     return value
 
 
 def quote_shell_str(value, *, required=True):
-    check_shell_str(value, required=required, allowspaces=True)
-    return shlex.quote(value)
+    value = check_shell_str(value, required=required, allowspaces=True)
+    if value is not None:
+        value = shlex.quote(value)
+    return value
 
 
 def write_json(data, outfile):
@@ -1026,15 +1032,7 @@ class GitRefs(types.SimpleNamespace):
     def match_ref(self, ref):
         assert ref
         if looks_like_git_commit(ref):
-            for tag, commit in self.tags.items():
-                assert commit
-                if ref == commit:
-                    return self.match_tag(tag)
-            for branch, commit in self.branches.items():
-                assert commit
-                if ref == commit:
-                    return branch, None, commit
-            return None
+            return self.match_commit(ref)
         else:
             matched = self.match_tag(ref)
             if matched:
@@ -1083,6 +1081,17 @@ class GitRefs(types.SimpleNamespace):
                 assert commit
                 return None, ref, commit
         # No tags matched!
+        return None
+
+    def match_commit(self, commit):
+        for tag, actual in self.tags.items():
+            assert actual
+            if actual == commit:
+                return self.match_tag(tag)
+        for branch, actual in self.branches.items():
+            assert actual
+            if actual == commit:
+                return branch, None, actual
         return None
 
     def match_latest_version(self, branch):
