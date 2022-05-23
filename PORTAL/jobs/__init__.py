@@ -690,7 +690,34 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def upload_result(self):
-        ...
+        source = self._fs.result.pyperformance_results
+        if not os.path.exists(source):
+            logger.error(f'results for {self._reqid} not found ({source})')
+            return None
+        name = self._get_upload_name()
+        target = f'benchmark-results/{name}'
+        url = f'https://github.com/faster-cpython/ideas/tree/main/{target}'
+        logger.info(f'uploading {self._reqid} to {url}...')
+
+        # Make sure the local repo is ready.
+        reporoot = os.path.join(HOME, 'faster-cpython-ideas')
+        if os.path.exists(reporoot):
+            _utils.git('checkout', 'main', cwd=reporoot)
+            _utils.git('pull', cwd=reporoot)
+        else:
+            remote = 'https://github.com/faster-cpython/ideas'
+            _utils.git('clone', remote, reporoot)
+
+        # Copy the results file, commit it, and upload it.
+        shutil.copyfile(source, f'{reporoot}/{target}')
+        _utils.git('add', target, cwd=reporoot)
+        _utils.git('commit', '-m', 'add benchmark results', cwd=reporoot)
+        _utils.git('push', cwd=reporoot)
+
+        logger.info('...done uploading')
+
+    def _get_upload_name(self):
+        raise NotImplementedError
 
     def as_row(self):  # XXX Move to JobSummary.
         try:
