@@ -1456,11 +1456,11 @@ class SSHClient(SSHCommands):
 
     @property
     def commands(self):
-        return SSHCommands(self.host, self.port, self.user)
+        return SSHCommands(self.user, self.host, self.port)
 
     @property
     def shell_commands(self):
-        return SSHShellCommands(self.host, self.port, self.user)
+        return SSHShellCommands(self.user, self.host, self.port)
 
     def check(self):
         return (self.run_shell('true').returncode == 0)

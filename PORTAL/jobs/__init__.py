@@ -455,7 +455,7 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            ssh = _utils.SSHShellCommands('$host', '$port', '$benchuser')
+            ssh = _utils.SSHShellCommands('$benchuser', '$host', '$port')
             user = '$user'
         else:
             user = _utils.check_shell_str(self._cfg.worker_user)
