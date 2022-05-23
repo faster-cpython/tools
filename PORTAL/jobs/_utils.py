@@ -1260,6 +1260,92 @@ class TopConfig(Config):
 ##################################
 # network utils
 
+class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
+
+    SCRIPT = os.path.join(HOME, '.ssh', 'agent.sh')
+
+    @classmethod
+    def from_env_vars(cls, *, requirepid=False):
+        sock = os.environ.get('SSH_AUTH_SOCK')
+        if sock:
+            if not os.path.exists(sock):
+                logger.warn(f'auth sock {sock} missing')
+        else:
+            return None
+
+        pid = os.environ.get('SSH_AGENT_PID')
+        if pid:
+            pid = int(pid)
+        elif requirepid:
+            raise ValueError('SSH_AGENT_PID not found')
+        else:
+            pid = None
+
+        return cls.__new__(sock, pid)
+
+    @classmethod
+    def parse_script(cls, script=None, *, requirepid=False):
+        """Return the info parsed from the given lines.
+
+        The expected text is the output of running the ssh-agent command.
+        For example:
+
+        SSH_AUTH_SOCK=/tmp/ssh-7yRJ1mCaatzW/agent.8926; export SSH_AUTH_SOCK;
+        SSH_AGENT_PID=8927; export SSH_AGENT_PID;
+        echo Agent pid 8927;
+        """
+        if not script:
+            if not os.path.exists(cls.SCRIPT):
+                return None
+            with open(cls.SCRIPT) as infile:
+                text = infile.read()
+        elif isinstance(script, str):
+            text = script
+        elif hasattr(script, 'read'):
+            text = script.read()
+        else:
+            text = '\n'.join(script)
+
+        m = re.match(r'^SSH_AUTH_SOCK=(/tmp/ssh-.+/agent\.\d+)(?:;|$)', text)
+        if m:
+            sock, = m.groups()
+            if not os.path.exists(sock):
+                logger.warn(f'auth sock {sock} missing')
+        else:
+            raise ValueError('SSH_AUTH_SOCK not found')
+
+        m = re.match(r'^SSH_AGENT_PID=(\d+)(?:;|$)', text)
+        if m:
+            pid, = m.groups()
+            pid = int(pid)
+        elif requirepid:
+            raise ValueError('SSH_AGENT_PID not found')
+        else:
+            pid = None
+
+        return cls.__new__(cls, sock, pid)
+
+    @classmethod
+    def from_jsonable(cls, data):
+        return cls(**data)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        if not self.auth_sock:
+            raise ValueError('missing auth_sock')
+        elif not os.path.exists(self.auth_sock):
+            logger.warn(f'auth sock {self.auth_sock} missing')
+        if not self.pid:
+            logger.warn(f'missing pid')
+        else:
+            validate_int(self.pid, name='pid')
+
+    def as_jsonable(self):
+        return self._asdict()
+
+
 class SSHConnectionConfig(Config):
 
     FIELDS = ['user', 'host', 'port']
