@@ -1,5 +1,6 @@
 from collections import namedtuple
 import datetime
+import glob
 import json
 import logging
 import os
@@ -577,14 +578,7 @@ def looks_like_git_ref(value):
 
 
 def git(*args, cwd=HOME, GIT=shutil.which('git')):
-    logger.debug('# running: %s', ' '.join(args))
-    proc = subprocess.run(
-        [GIT, *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding='utf-8',
-        cwd=cwd,
-    )
+    proc = run_fg(GIT, *args, cwd=cwd)
     return proc.returncode, proc.stdout
 
 
@@ -984,6 +978,11 @@ class GitRefs(types.SimpleNamespace):
     def from_url(cls, url):
         ec, text = git('ls-remote', '--refs', '--tags', '--heads', url)
         if ec != 0:
+            if text.strip():
+                for line in text.splitlines():
+                    logger.debug(line)
+            else:
+                logger.debug('(no output)')
             return None, None, None
         return cls._parse_ls_remote(text.splitlines())
 
@@ -1127,35 +1126,18 @@ def resolve_git_revision_and_branch(revision, branch, remote):
 class Config(types.SimpleNamespace):
     """The base config for the benchmarking machinery."""
 
-    CONFIG_DIRS = [
-        f'{HOME}/.config',
-        HOME,
-        f'{HOME}/BENCH',
-    ]
-    CONFIG = 'benchmarking.json'
-    ALT_CONFIG = None
-
     # XXX Get FIELDS from the __init__() signature?
     FIELDS = ()
     OPTIONAL = ()
 
-    @classmethod
-    def find_config(cls):
-        for dirname in cls.CONFIG_DIRS:
-            filename = f'{dirname}/{cls.CONFIG}'
-            if os.path.exists(filename):
-                return filename
-        else:
-            if cls.ALT_CONFIG:
-                filename = f'{HOME}/BENCH/{cls.ALT_CONFIG}'
-                if os.path.exists(filename):
-                    return filename
-            raise FileNotFoundError('could not find config file')
+    FILE = 'benchmarking.json'
 
     @classmethod
-    def load(cls, filename=None, *, preserveorig=True):
-        if not filename:
-            filename = cls.find_config()
+    def load(cls, filename, *, preserveorig=True):
+        if os.path.isdir(filename):
+            if not cls.FILE:
+                raise AttributeError(f'missing {cls.__name__}.FILE')
+            filename = os.path.join(filename, cls.FILE)
 
         with open(filename) as infile:
             data = json.load(infile)
@@ -1227,7 +1209,7 @@ class Config(types.SimpleNamespace):
 
     def as_jsonable(self, *, withmissingoptional=True):
         # XXX Hide sensitive data?
-        data = {k: v
+        data = {k: as_jsonable(v)
                 for k, v in vars(self).items()
                 if not k.startswith('_')}
         if withmissingoptional:
@@ -1240,6 +1222,323 @@ class Config(types.SimpleNamespace):
         data = self.as_jsonable()
         text = json.dumps(data, indent=4)
         yield from text.splitlines()
+
+
+class TopConfig(Config):
+
+    CONFIG_DIRS = [
+        f'{HOME}/.config',
+        HOME,
+    ]
+
+    @classmethod
+    def find_config(cls, cfgdirs=None):
+        if not cfgdirs:
+            cfgdirs = cls.CONFIG_DIRS
+            if not cfgdirs:
+                raise ValueError('missing cfgdirs')
+        elif isinstance(cfgdirs, str):
+            cfgdirs = [cfgdirs]
+        if not cls.FILE:
+            raise AttributeError(f'missing {cls.__name__}.FILE')
+        for dirname in cfgdirs:
+            filename = f'{dirname}/{cls.FILE}'
+            if os.path.exists(filename):
+                if os.path.isdir(filename):
+                    logger.warn(f'expected file, found {filename}')
+                else:
+                    return filename
+        else:
+            raise FileNotFoundError('could not find config file')
+
+    @classmethod
+    def load(cls, filename=None, **kwargs):
+        if not filename:
+            filename = cls.find_config()
+        return super().load(filename, **kwargs)
+
+
+##################################
+# network utils
+
+class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
+
+    SCRIPT = os.path.join(HOME, '.ssh', 'agent.sh')
+
+    @classmethod
+    def from_env_vars(cls, *, requirepid=False):
+        sock = os.environ.get('SSH_AUTH_SOCK')
+        if sock:
+            if not os.path.exists(sock):
+                logger.warn(f'auth sock {sock} missing')
+        else:
+            return None
+
+        pid = os.environ.get('SSH_AGENT_PID')
+        if pid:
+            pid = int(pid)
+        elif requirepid:
+            raise ValueError('SSH_AGENT_PID not found')
+        else:
+            pid = None
+
+        return cls.__new__(sock, pid)
+
+    @classmethod
+    def parse_script(cls, script=None, *, requirepid=False):
+        """Return the info parsed from the given lines.
+
+        The expected text is the output of running the ssh-agent command.
+        For example:
+
+        SSH_AUTH_SOCK=/tmp/ssh-7yRJ1mCaatzW/agent.8926; export SSH_AUTH_SOCK;
+        SSH_AGENT_PID=8927; export SSH_AGENT_PID;
+        echo Agent pid 8927;
+        """
+        if not script:
+            if not os.path.exists(cls.SCRIPT):
+                return None
+            with open(cls.SCRIPT) as infile:
+                text = infile.read()
+        elif isinstance(script, str):
+            text = script
+        elif hasattr(script, 'read'):
+            text = script.read()
+        else:
+            text = '\n'.join(script)
+
+        m = re.match(r'^SSH_AUTH_SOCK=(/tmp/ssh-.+/agent\.\d+)(?:;|$)', text)
+        if m:
+            sock, = m.groups()
+            if not os.path.exists(sock):
+                logger.warn(f'auth sock {sock} missing')
+        else:
+            raise ValueError('SSH_AUTH_SOCK not found')
+
+        m = re.match(r'^SSH_AGENT_PID=(\d+)(?:;|$)', text)
+        if m:
+            pid, = m.groups()
+            pid = int(pid)
+        elif requirepid:
+            raise ValueError('SSH_AGENT_PID not found')
+        else:
+            pid = None
+
+        return cls.__new__(cls, sock, pid)
+
+    @classmethod
+    def find_latest(cls):
+        latest = None
+        created = None
+        # This will only match for the current user.
+        for filename in glob.iglob('/tmp/ssh-*/agent.*'):
+            if not latest:
+                latest = filename
+            else:
+                _created = os.stat(filename).st_ctime
+                if _created > created:
+                    latest = filename
+                    created = _created
+        if not latest:
+            return None
+        return cls.__new__(latest, None)
+
+    @classmethod
+    def from_jsonable(cls, data):
+        return cls(**data)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        if not self.auth_sock:
+            raise ValueError('missing auth_sock')
+        elif not os.path.exists(self.auth_sock):
+            logger.warn(f'auth sock {self.auth_sock} missing')
+        if not self.pid:
+            logger.warn(f'missing pid')
+        else:
+            validate_int(self.pid, name='pid')
+
+    @property
+    def env(self):
+        return {
+            'SSH_AUTH_SOCK': self.auth_sock,
+            **({'SSH_AGENT_PID': str(self.pid)} if self.pid else {}),
+        }
+
+    def apply_env(self, env=None):
+        if env is None:
+            env = os.environ
+        return dict(env, **self.env)
+
+    def check(self):
+        """Return True if the info is valid."""
+        return os.path.exists(self.auth_sock)
+
+    def as_jsonable(self):
+        return self._asdict()
+
+
+class SSHConnectionConfig(Config):
+
+    FIELDS = ['user', 'host', 'port', 'agent']
+    OPTIONAL = ['agent']
+
+    CONFIG = 'ssh-conn.json'
+
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif not raw:
+            raise ValueError('missing data')
+        else:
+            return cls(**raw)
+
+    def __init__(self, user, host, port, agent=None):
+        if not user:
+            raise ValueError('missing user')
+        if not host:
+            raise ValueError('missing host')
+        if not port:
+            raise ValueError('missing port')
+        if not agent:
+            agent = SSHAgentInfo.parse_script()
+            #if not agent:
+            #    agent = SSHAgentInfo.from_env_vars()
+        else:
+            agent = SSHAgentInfo.from_jsonable(agent)
+        super().__init__(
+            user=user,
+            host=host,
+            port=port,
+            agent=agent,
+        )
+
+
+class SSHCommands:
+
+    SSH = shutil.which('ssh')
+    SCP = shutil.which('scp')
+
+    @classmethod
+    def from_config(cls, cfg, **kwargs):
+        return cls(cfg.user, cfg.host, cfg.port, **kwargs)
+
+    def __init__(self, user, host, port, *, ssh=None, scp=None):
+        self.user = check_shell_str(user)
+        self.host = check_shell_str(host)
+        self.port = int(port)
+        if self.port < 1:
+            raise ValueError(f'invalid port {self.port}')
+
+        opts = []
+        if self.host == 'localhost':
+            opts.extend(['-o', 'StrictHostKeyChecking=no'])
+        self._ssh = ssh or self.SSH
+        self._ssh_opts = [*opts, '-p', str(self.port)]
+        self._scp = scp or self.SCP
+        self._scp_opts = [*opts, '-P', str(self.port)]
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, n)!r}'
+                for n in 'host port user'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def run(self, cmd, *args, agent=None):
+        conn = f'{self.user}@{self.host}'
+        if not os.path.isabs(cmd):
+            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
+        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
+
+    def run_shell(self, cmd, *, agent=None):
+        conn = f'{self.user}@{self.host}'
+        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+
+    def push(self, source, target, *, agent=None):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
+
+    def pull(self, source, target, *, agent=None):
+        conn = f'{self.user}@{self.host}'
+        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
+
+    def ensure_user(self, user, *, agent=False):
+        raise NotImplementedError
+
+
+class SSHShellCommands(SSHCommands):
+
+    SSH = 'ssh'
+    SCP = 'scp'
+
+    def run(self, cmd, *args, agent=None):
+        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
+
+    def run_shell(self, cmd, *, agent=None):
+        return ' '.join(super().run_shell(cmd))
+
+    def push(self, source, target, *, agent=None):
+        return ' '.join(super().push(source, target))
+
+    def pull(self, source, target, *, agent=None):
+        return ' '.join(super().pull(source, target))
+
+    def ensure_user(self, user, *, agent=False):
+        commands = []
+        if agent:
+            commands.extend([
+                f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
+                f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
+            ])
+        commands.extend([
+            f'# Stop running and re-run this script as the {user} user.',
+            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
+        ])
+        return commands
+
+
+class SSHClient(SSHCommands):
+
+    @property
+    def commands(self):
+        return SSHCommands(self.user, self.host, self.port)
+
+    @property
+    def shell_commands(self):
+        return SSHShellCommands(self.user, self.host, self.port)
+
+    def check(self, *, agent=None):
+        return (self.run_shell('true', agent=agent).returncode == 0)
+
+    def run(self, cmd, *args, agent=None):
+        argv = super().run(cmd, *args)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
+
+    def run_shell(self, cmd, *args, agent=None):
+        argv = super().run_shell(cmd, *args)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
+
+    def push(self, source, target, *, agent=None):
+        argv = super().push(*args)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
+
+    def pull(self, source, target, *, agent=None):
+        argv = super().push(*args)
+        env = agent.apply_env() if agent else None
+        return run_fg(*argv, env=env)
+
+    def read(self, filename, *, agent=None):
+        if not filename:
+            raise ValueError(f'missing filename')
+        proc = self.run_shell(f'cat {filename}', agent=agent)
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
 
 
 ##################################
@@ -1324,6 +1623,23 @@ def get_slice(raw):
             raise NotImplementedError(repr(raw))
     else:
         raise TypeError(f'expected str, got {criteria!r}')
+
+
+def as_jsonable(data):
+    if hasattr(data, 'as_jsonable'):
+        return data.as_jsonable()
+    elif data in (True, False, None):
+        return data
+    elif type(data) in (int, float, str):
+        return data
+    else:
+        # Recurse into containers.
+        if hasattr(data, 'items'):
+            return {k: as_jsonable(v) for k, v in data.items()}
+        elif hasattr(data, '__getitem__'):
+            return [as_jsonable(v) for v in data]
+        else:
+            raise TypeError(f'unsupported data {data!r}')
 
 
 def resolve_user(cfg, user=None):
@@ -1589,7 +1905,7 @@ def _is_proc_running(pid):
         return True
 
 
-def run_fg(cmd, *args):
+def run_fg(cmd, *args, cwd=None, env=None):
     argv = [cmd, *args]
     logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
     return subprocess.run(
@@ -1597,10 +1913,12 @@ def run_fg(cmd, *args):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         encoding='utf-8',
+        cwd=cwd,
+        env=env,
     )
 
 
-def run_bg(argv, logfile=None, cwd=None):
+def run_bg(argv, logfile=None, *, cwd=None, env=None):
     if not argv:
         raise ValueError('missing argv')
     elif isinstance(argv, str):
@@ -1629,6 +1947,7 @@ def run_bg(argv, logfile=None, cwd=None):
         close_fds=True,
         shell=True,
         cwd=cwd,
+        env=env,
     )
 
 
@@ -1728,114 +2047,3 @@ class Metadata(types.SimpleNamespace):
                 return self.save(resfile, withextra=withextra)
         data = self.as_jsonable(withextra=withextra)
         write_json(data, resfile)
-
-
-class SSHCommands:
-
-    SSH = shutil.which('ssh')
-    SCP = shutil.which('scp')
-
-    def __init__(self, host, port, user, *, ssh=None, scp=None):
-        self.host = check_shell_str(host)
-        self.port = int(port)
-        if self.port < 1:
-            raise ValueError(f'invalid port {self.port}')
-        self.user = check_shell_str(user)
-
-        opts = []
-        if self.host == 'localhost':
-            opts.extend(['-o', 'StrictHostKeyChecking=no'])
-        self._ssh = ssh or self.SSH
-        self._ssh_opts = [*opts, '-p', str(self.port)]
-        self._scp = scp or self.SCP
-        self._scp_opts = [*opts, '-P', str(self.port)]
-
-    def __repr__(self):
-        args = (f'{n}={getattr(self, n)!r}'
-                for n in 'host port user'.split())
-        return f'{type(self).__name__}({"".join(args)})'
-
-    def run(self, cmd, *args):
-        conn = f'{self.user}@{self.host}'
-        if not os.path.isabs(cmd):
-            raise ValueError(f'expected absolute path for cmd, got {cmd!r}')
-        return [self._ssh, *self._ssh_opts, conn, cmd, *args]
-
-    def run_shell(self, cmd):
-        conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
-
-    def push(self, source, target):
-        conn = f'{self.user}@{self.host}'
-        return [self._scp, *self._scp_opts, '-rp', source, f'{conn}:{target}']
-
-    def pull(self, source, target):
-        conn = f'{self.user}@{self.host}'
-        return [self._scp, *self._scp_opts, '-rp', f'{conn}:{source}', target]
-
-    def ensure_user_with_agent(self, user):
-        raise NotImplementedError
-
-
-class SSHShellCommands(SSHCommands):
-
-    SSH = 'ssh'
-    SCP = 'scp'
-
-    def run(self, cmd, *args):
-        return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
-
-    def run_shell(self, cmd):
-        return ' '.join(super().run_shell(cmd))
-
-    def push(self, source, target):
-        return ' '.join(super().push(source, target))
-
-    def pull(self, source, target):
-        return ' '.join(super().pull(source, target))
-
-    def ensure_user_with_agent(self, user):
-        return [
-            f'setfacl -m {user}:x $(dirname "$SSH_AUTH_SOCK")',
-            f'setfacl -m {user}:rwx "$SSH_AUTH_SOCK"',
-            f'# Stop running and re-run this script as the {user} user.',
-            f'''exec sudo --login --user {user} --preserve-env='SSH_AUTH_SOCK' "$0" "$@"''',
-        ]
-
-
-class SSHClient(SSHCommands):
-
-    @property
-    def commands(self):
-        return SSHCommands(self.host, self.port, self.user)
-
-    @property
-    def shell_commands(self):
-        return SSHShellCommands(self.host, self.port, self.user)
-
-    def check(self):
-        return (self.run_shell('true').returncode == 0)
-
-    def run(self, cmd, *args):
-        argv = super().run(cmd, *args)
-        return run_fg(*argv)
-
-    def run_shell(self, cmd, *args):
-        argv = super().run_shell(cmd, *args)
-        return run_fg(*argv)
-
-    def push(self, source, target):
-        argv = super().push(*args)
-        return run_fg(*argv)
-
-    def pull(self, source, target):
-        argv = super().push(*args)
-        return run_fg(*argv)
-
-    def read(self, filename):
-        if not filename:
-            raise ValueError(f'missing filename')
-        proc = self.run_shell(f'cat {filename}')
-        if proc.returncode != 0:
-            return None
-        return proc.stdout

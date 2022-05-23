@@ -21,55 +21,37 @@ logger = logging.getLogger(__name__)
 ##################################
 # jobs config
 
-class PortalConfig(_utils.Config):
+class JobsConfig(_utils.TopConfig):
 
-    CONFIG = 'benchmarking-portal.json'
-    ALT_CONFIG = 'portal.json'
-
-    FIELDS = ['bench_user', 'send_user', 'send_host', 'send_port', 'data_dir']
+    FIELDS = ['worker_user', 'bench_ssh', 'data_dir']
     OPTIONAL = ['data_dir']
 
+    FILE = 'jobs.json'
+    CONFIG_DIRS = [
+        f'{_utils.HOME}/BENCH',
+    ]
+
     def __init__(self,
-                 bench_user,
-                 send_user,
-                 send_host,
-                 send_port,
+                 worker_user,
+                 bench_ssh,
                  data_dir=None,
                  ):
-        if not bench_user:
-            raise ValueError('missing bench_user')
-        if not send_user:
-            send_user = bench_user
-        if not send_host:
-            raise ValueError('missing send_host')
-        if not send_port:
-            raise ValueError('missing send_port')
+        if not worker_user:
+            raise ValueError('missing worker_user')
+        bench_ssh = _utils.SSHConnectionConfig.from_raw(bench_ssh)
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
-            data_dir = f'/home/{send_user}/BENCH'  # This matches DATA_ROOT.
+            data_dir = f'/home/{worker_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
-            bench_user=bench_user,
-            send_user=send_user,
-            send_host=send_host,
-            send_port=send_port,
+            worker_user=worker_user,
+            bench_ssh=bench_ssh,
             data_dir=data_dir or None,
         )
 
-
-#class BenchConfig(_utils.Config):
-#
-#    CONFIG = f'benchmarking-bench.json'
-#    ALT_CONFIG = f'bench.json'
-#
-#    FIELDS = ['portal']
-#
-#    def __init__(self,
-#                 portal,
-#                 ):
-#        super().__init__(
-#            portal=portal,
-#        )
+    @property
+    def ssh(self):
+        return self.bench_ssh
 
 
 ##################################
@@ -255,8 +237,8 @@ class Worker:
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.bench_user, 'bench')
-        ssh = _utils.SSHClient(cfg.send_host, cfg.send_port, cfg.bench_user)
+        fs = JobsFS.from_user(cfg.worker_user, 'bench')
+        ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
     def __init__(self, fs, ssh):
@@ -473,12 +455,12 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            ssh = _utils.SSHShellCommands('$host', '$port', '$benchuser')
+            ssh = _utils.SSHShellCommands('$benchuser', '$host', '$port')
             user = '$user'
         else:
-            user = _utils.check_shell_str(self._cfg.send_user)
-            _utils.check_shell_str(self._cfg.send_host)
-            _utils.check_shell_str(self._cfg.bench_user)
+            user = _utils.check_shell_str(self._cfg.worker_user)
+            _utils.check_shell_str(self._cfg.ssh.user)
+            _utils.check_shell_str(self._cfg.ssh.host)
             ssh = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
@@ -492,7 +474,7 @@ class Job:
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
-        ensure_user = ssh.ensure_user_with_agent(user)
+        ensure_user = ssh.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
         resfiles = []
@@ -530,14 +512,15 @@ class Job:
             echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
             echo
 
-            user=$(jq -r '.send_user' {cfgfile})
+            user=$(jq -r '.worker_user' {cfgfile})
             if [ "$USER" != '{user}' ]; then
                 echo "(switching users from $USER to {user})"
                 echo
                 {ensure_user}
             fi
-            host=$(jq -r '.send_host' {cfgfile})
-            port=$(jq -r '.send_port' {cfgfile})
+            ssh_user=$(jq -r '.bench_ssh.user' {cfgfile})
+            ssh_host=$(jq -r '.bench_ssh.host' {cfgfile})
+            ssh_port=$(jq -r '.bench_ssh.port' {cfgfile})
 
             exitcode=0
             if {ssh(f'test -e {bfiles.request}')}; then
@@ -579,7 +562,19 @@ class Job:
             exit $exitcode
         '''[1:-1])
 
-    def check_ssh(self, *, onunknown=None, fail=True):
+    def _get_ssh_agent(self):
+        agent = self._cfg.bench_ssh.agent
+        if not agent or not agent.check():
+            agent = _utils.SSHAgentInfo.find_latest()
+            if not agent:
+                agent = SSHAgentInfo.from_env_vars()
+        if agent:
+            logger.debug(f'(using SSH agent at {agent.auth_sock})')
+        else:
+            logger.debug('(no SSH agent running)')
+        return agent
+
+    def check_ssh(self, *, onunknown=None, agent=None, fail=True):
         filename = self._fs.ssh_okay
         if onunknown is None:
             save = False
@@ -601,7 +596,9 @@ class Job:
             raise TypeError(f'expected str, got {onunknown!r}')
         text = _utils.read_file(filename, fail=False)
         if text is None:
-            okay = self._worker.ssh.check()
+            if not agent:
+                agent = self._get_ssh_agent()
+            okay = self._worker.ssh.check(agent=agent)
             if save:
                 with open(filename, 'w') as outfile:
                     outfile.write('0' if okay else '1')
@@ -621,14 +618,16 @@ class Job:
         return okay
 
     def run(self, *, background=False):
-        self.check_ssh(onunknown='save')
+        agent = self._get_ssh_agent()
+        env = agent.apply_env() if agent else None
+        self.check_ssh(onunknown='save', agent=agent)
         if background:
             script = _utils.quote_shell_str(self._fs.portal_script)
             logfile = _utils.quote_shell_str(self._fs.logfile)
-            _utils.run_bg(f'{script} > {logfile}')
+            _utils.run_bg(f'{script} > {logfile}', env=env)
             return 0
         else:
-            proc = subprocess.run([self.fs.portal_script])
+            proc = subprocess.run([self.fs.portal_script], env=env)
             return proc.returncode
 
     def get_pid(self):
@@ -643,9 +642,10 @@ class Job:
             except ProcessLookupError:
                 logger.warn(f'job {self._reqid} no longer (PID: {pid})')
         # Kill the worker process, if running.
-        text = self._worker.ssh.read(self._worker.fs.pidfile)
+        agent = self._get_ssh_agent()
+        text = self._worker.ssh.read(self._worker.fs.pidfile, agent=agent)
         if text and text.isdigit():
-            self._worker.ssh.run_shell(f'kill {text}')
+            self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
     def wait_until_started(self, *, checkssh=False):
         # XXX Add a timeout?
