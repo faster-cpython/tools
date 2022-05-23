@@ -1360,6 +1360,18 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         else:
             validate_int(self.pid, name='pid')
 
+    @property
+    def env(self):
+        return {
+            'SSH_AUTH_SOCK': self.auth_sock,
+            **{'SSH_AGENT_PID': str(self.pid)} if self.pid else {},
+        }
+
+    def apply_env(self, env=None):
+        if env is None:
+            env = os.environ
+        return dict(env, **self.env)
+
     def check(self):
         """Return True if the info is valid."""
         return os.path.exists(self.auth_sock)
