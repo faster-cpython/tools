@@ -1364,7 +1364,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
     def env(self):
         return {
             'SSH_AUTH_SOCK': self.auth_sock,
-            **{'SSH_AGENT_PID': str(self.pid)} if self.pid else {},
+            **({'SSH_AGENT_PID': str(self.pid)} if self.pid else {}),
         }
 
     def apply_env(self, env=None):
@@ -1510,7 +1510,7 @@ class SSHClient(SSHCommands):
         return SSHShellCommands(self.user, self.host, self.port)
 
     def check(self, *, agent=None):
-        return (self.run_shell('true').returncode == 0)
+        return (self.run_shell('true', agent=agent).returncode == 0)
 
     def run(self, cmd, *args, agent=None):
         argv = super().run(cmd, *args)
@@ -1520,7 +1520,7 @@ class SSHClient(SSHCommands):
     def run_shell(self, cmd, *args, agent=None):
         argv = super().run_shell(cmd, *args)
         env = agent.apply_env() if agent else None
-        return run_fg(*arg, env=envv)
+        return run_fg(*argv, env=env)
 
     def push(self, source, target, *, agent=None):
         argv = super().push(*args)
