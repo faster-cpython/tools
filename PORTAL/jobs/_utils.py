@@ -828,51 +828,9 @@ class GitRefCandidates:
                 by_remote[remote] = GitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
 
-            _branch = tag = commit = ref = kind = None
-            if revision == 'HEAD':
-                assert branch, self
-                matched = repo_refs.match_branch(branch)
-                if matched:
-                    _branch, tag, commit = matched
-                    kind = 'branch'
-                    ref = revision
-                else:
-                    logger.warning(f'branch {branch} not found')
-            elif revision == 'latest':
-                assert branch, self
-                assert Version.parse(branch), (branch, self)
-                matched = repo_refs.match_latest_version(branch)
-                if matched:
-                    _branch, tag, commit = matched
-                    kind = 'tag'
-                    ref = tag or branch
-                    branch = _branch
-                elif repo_refs.match_branch(branch):
-                    logger.warning(f'latest tag for branch {branch} not found')
-                else:
-                    logger.warning(f'branch {branch} not found')
-            elif looks_like_git_commit(revision):
-                matched = repo_refs.match_commit(revision)
-                if matched:
-                    _branch, tag, commit = matched
-                    assert not branch or _branch == branch, (branch, _branch, self)
-                else:
-                    if branch:
-                        if not repo_refs.match_branch(branch):
-                            logger.warning(f'branch {branch} not found')
-                    commit = revision
-                if commit:
-                    kind = 'commit'
-                    ref = commit
-            else:
-                assert looks_like_git_tag(revision), (revision, self)
-                matched = repo_refs.match_tag(revision)
-                if matched:
-                    _branch, tag, commit = matched
-                    kind = 'tag'
-                    ref = tag
-
-            if commit:
+            match = self._find_ref(branch, revision, repo_refs)
+            if match:
+                _branch, tag, commit, ref, kind = match
                 if branch and _branch != branch:
                     logger.warning(f'branch mismatch (wanted {branch}, found {_branch})')
                 else:
@@ -880,6 +838,54 @@ class GitRefCandidates:
                     return GitRef(ref, None, commit, branch or _branch, remote)
         else:
             return None
+
+    def _find_ref(self, branch, revision, repo_refs):
+        _branch = tag = commit = ref = kind = None
+        if revision == 'HEAD':
+            assert branch, self
+            matched = repo_refs.match_branch(branch)
+            if matched:
+                _branch, tag, commit = matched
+                kind = 'branch'
+                ref = revision
+            else:
+                logger.warning(f'branch {branch} not found')
+        elif revision == 'latest':
+            assert branch, self
+            assert Version.parse(branch), (branch, self)
+            matched = repo_refs.match_latest_version(branch)
+            if matched:
+                _branch, tag, commit = matched
+                kind = 'tag'
+                ref = tag or branch
+                branch = _branch
+            elif repo_refs.match_branch(branch):
+                logger.warning(f'latest tag for branch {branch} not found')
+            else:
+                logger.warning(f'branch {branch} not found')
+        elif looks_like_git_commit(revision):
+            matched = repo_refs.match_commit(revision)
+            if matched:
+                _branch, tag, commit = matched
+                assert not branch or _branch == branch, (branch, _branch, self)
+            else:
+                if branch:
+                    if not repo_refs.match_branch(branch):
+                        logger.warning(f'branch {branch} not found')
+                commit = revision
+            if commit:
+                kind = 'commit'
+                ref = commit
+        else:
+            assert looks_like_git_tag(revision), (revision, self)
+            matched = repo_refs.match_tag(revision)
+            if matched:
+                _branch, tag, commit = matched
+                kind = 'tag'
+                ref = tag
+        if not commit:
+            return None
+        return _branch, tag, commit, ref, kind
 
 
 class GitRef(namedtuple('GitRef', 'ref kind commit branch remote')):
