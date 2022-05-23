@@ -1393,10 +1393,12 @@ class SSHConnectionConfig(Config):
             raise ValueError('missing port')
         if not agent:
             agent = SSHAgentInfo.parse_script()
-            if not agent:
-                agent = SSHAgentInfo.from_env_vars()
+            #if not agent:
+            #    agent = SSHAgentInfo.from_env_vars()
         else:
             agent = SSHAgentInfo.from_jsonable(agent)
+        if agent and not agent.check():
+            agent = None
         super().__init__(
             user=user,
             host=host,
