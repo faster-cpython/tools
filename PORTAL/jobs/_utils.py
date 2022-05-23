@@ -1348,7 +1348,8 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
 
 class SSHConnectionConfig(Config):
 
-    FIELDS = ['user', 'host', 'port']
+    FIELDS = ['user', 'host', 'port', 'agent']
+    OPTIONAL = ['agent']
 
     CONFIG = 'ssh-conn.json'
 
@@ -1361,17 +1362,24 @@ class SSHConnectionConfig(Config):
         else:
             return cls(**raw)
 
-    def __init__(self, user, host, port):
+    def __init__(self, user, host, port, agent=None):
         if not user:
             raise ValueError('missing user')
         if not host:
             raise ValueError('missing host')
         if not port:
             raise ValueError('missing port')
+        if not agent:
+            agent = SSHAgentInfo.parse_script()
+            if not agent:
+                agent = SSHAgentInfo.from_env_vars()
+        else:
+            agent = SSHAgentInfo.from_jsonable(agent)
         super().__init__(
             user=user,
             host=host,
             port=port,
+            agent=agent,
         )
 
 
