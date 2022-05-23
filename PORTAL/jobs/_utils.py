@@ -1360,6 +1360,10 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         else:
             validate_int(self.pid, name='pid')
 
+    def check(self):
+        """Return True if the info is valid."""
+        return os.path.exists(self.auth_sock)
+
     def as_jsonable(self):
         return self._asdict()
 
