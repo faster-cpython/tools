@@ -1032,15 +1032,7 @@ class GitRefs(types.SimpleNamespace):
     def match_ref(self, ref):
         assert ref
         if looks_like_git_commit(ref):
-            for tag, commit in self.tags.items():
-                assert commit
-                if ref == commit:
-                    return self.match_tag(tag)
-            for branch, commit in self.branches.items():
-                assert commit
-                if ref == commit:
-                    return branch, None, commit
-            return None
+            return self.match_commit(ref)
         else:
             matched = self.match_tag(ref)
             if matched:
@@ -1089,6 +1081,17 @@ class GitRefs(types.SimpleNamespace):
                 assert commit
                 return None, ref, commit
         # No tags matched!
+        return None
+
+    def match_commit(self, commit):
+        for tag, actual in self.tags.items():
+            assert actual
+            if actual == commit:
+                return self.match_tag(tag)
+        for branch, actual in self.branches.items():
+            assert actual
+            if actual == commit:
+                return branch, None, actual
         return None
 
     def match_latest_version(self, branch):
