@@ -763,7 +763,7 @@ class GitRefCandidates:
                 if looks_like_git_branch(revision):
                     return [
                         (remote, None, revision),
-                        (remote, revision, 'latest'),
+                        (remote, revision, 'HEAD'),
                     ]
                 else:
                     raise ValueError(f'unexpected revision {revision!r}')
