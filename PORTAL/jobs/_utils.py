@@ -742,6 +742,8 @@ class GitRefCandidates:
             elif Version.parse(branch, match=revision):
                 return [(remote, branch, revision)]
             else:
+                if revision == 'latest':
+                    revision = 'HEAD'
                 # For non-origin, revision can be any tag or commit.
                 return [(remote, branch, revision)]
         else:
