@@ -36,7 +36,7 @@ def cmd_list(jobs, selections=None):
     columns = [
         ('reqid', 'request ID', 48, None),
         ('status', None, 10, None),
-        ('duration', None, 8, '>'),
+        ('elapsed', None, 8, '>'),
     ]
     minwidth = sum(w for _, _, w, _ in columns)
     if os.isatty(sys.stdout.fileno()):

@@ -724,17 +724,17 @@ class Job:
                 return f'{started:%Y-%m-%d %H:%M:%S}' if started else '---'
             elif name == 'finished':
                 return f'{finished:%Y-%m-%d %H:%M:%S}' if finished else '---'
-            elif name == 'duration':
+            elif name == 'elapsed':
                 if not started:
                     return '---'
                 elif not finished:
                     return '...'
                 else:
-                    duration = finished - started
+                    elapsed = finished - started
                     # The following is mostly borrowed from Timedelta.__str__().
-                    mm, ss = divmod(duration.seconds, 60)
+                    mm, ss = divmod(elapsed.seconds, 60)
                     hh, mm = divmod(mm, 60)
-                    hh += 24 * duration.days
+                    hh += 24 * elapsed.days
                     return "%d:%02d:%02d" % (hh, mm, ss)
             else:
                 raise NotImplementedError(name)
