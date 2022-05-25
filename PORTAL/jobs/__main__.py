@@ -14,7 +14,9 @@ from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
 )
-from ._utils import LogSection, tail_file, render_file, get_bool_env_var
+from ._utils import (
+    LogSection, tail_file, render_file, get_bool_env_var, get_termwidth,
+)
 
 
 PID = os.getpid()
@@ -39,15 +41,7 @@ def cmd_list(jobs, selections=None):
         ('elapsed', None, 10, '>'),
     ]
     minwidth = sum(w for _, _, w, _ in columns)
-    if os.isatty(sys.stdout.fileno()):
-        try:
-            termsize = os.get_terminal_size()
-        except OSError:
-            termwidth = 80
-        else:
-            termwidth = termsize.columns
-    else:
-        termwidth = 1000
+    termwidth = get_termwidth()
     if termwidth > minwidth + (19 + 3) * 3:
         columns.extend([
             ('created', None, 19, None),

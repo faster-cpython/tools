@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 import time
 import types
@@ -108,6 +109,114 @@ def get_utc_datetime(timestamp=None, *, fail=True):
         #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
         hastime = False
     return timestamp, hastime
+
+
+##################################
+# OS utils
+
+def resolve_user(cfg, user=None):
+    if not user:
+        user = USER
+        if not user or user == 'benchmarking':
+            user = SUDO_USER
+            if not user:
+                raise Exception('could not determine user')
+    if not user.isidentifier():
+        raise ValueError(f'invalid user {user!r}')
+    return user
+
+
+def parse_bool_env_var(valstr, *, failunknown=False):
+    m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
+                 valstr.lower())
+    if not m:
+        if failunknown:
+            raise ValueError(f'unsupported env var bool value {valstr!r}')
+        return None
+    yes, no = m.groups()
+    return True if yes else False
+
+
+def get_bool_env_var(name, default=None, *, failunknown=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return parse_bool_env_var(value, failunknown=failunknown)
+
+
+def get_termwidth(*, nontty=1000, unknown=80):
+    if os.isatty(sys.stdout.fileno()):
+        try:
+            termsize = os.get_terminal_size()
+        except OSError:
+            return notty or 1000
+        else:
+            return termsize.columns
+    else:
+        return unknown or 80
+
+
+def _is_proc_running(pid):
+    if pid == PID:
+        return True
+    try:
+        if os.name == 'nt':
+            os.waitpid(pid, os.WNOHANG)
+        else:
+            os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # XXX Does this *always* mean there's a proc?
+        return True
+    else:
+        return True
+
+
+def run_fg(cmd, *args, cwd=None, env=None):
+    argv = [cmd, *args]
+    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
+    return subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8',
+        cwd=cwd,
+        env=env,
+    )
+
+
+def run_bg(argv, logfile=None, *, cwd=None, env=None):
+    if not argv:
+        raise ValueError('missing argv')
+    elif isinstance(argv, str):
+        if not argv.strip():
+            raise ValueError('missing argv')
+        cmd = argv
+    else:
+        cmd = ' '.join(shlex.quote(a) for a in argv)
+
+    if logfile:
+        logfile = quote_shell_str(logfile)
+        cmd = f'{cmd} >> {logfile}'
+    cmd = f'{cmd} 2>&1'
+
+    logger.debug('# running (background): %s', cmd)
+    #subprocess.run(cmd, shell=True)
+    subprocess.Popen(
+        cmd,
+        #creationflags=subprocess.DETACHED_PROCESS,
+        #creationflags=subprocess.CREATE_NEW_CONSOLE,
+        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        shell=True,
+        cwd=cwd,
+        env=env,
+    )
 
 
 ##################################
@@ -1642,18 +1751,6 @@ def as_jsonable(data):
             raise TypeError(f'unsupported data {data!r}')
 
 
-def resolve_user(cfg, user=None):
-    if not user:
-        user = USER
-        if not user or user == 'benchmarking':
-            user = SUDO_USER
-            if not user:
-                raise Exception('could not determine user')
-    if not user.isidentifier():
-        raise ValueError(f'invalid user {user!r}')
-    return user
-
-
 class VersionRelease(namedtuple('VersionRelease', 'level serial')):
 
     LEVELS = {
@@ -1868,87 +1965,6 @@ class Version(namedtuple('Version', 'major minor micro release')):
         else:
             raise NotImplementedError(self.level)
         return f'v{self.major}.{self.minor}{micro}{release}'
-
-
-def parse_bool_env_var(valstr, *, failunknown=False):
-    m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
-                 valstr.lower())
-    if not m:
-        if failunknown:
-            raise ValueError(f'unsupported env var bool value {valstr!r}')
-        return None
-    yes, no = m.groups()
-    return True if yes else False
-
-
-def get_bool_env_var(name, default=None, *, failunknown=False):
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return parse_bool_env_var(value, failunknown=failunknown)
-
-
-def _is_proc_running(pid):
-    if pid == PID:
-        return True
-    try:
-        if os.name == 'nt':
-            os.waitpid(pid, os.WNOHANG)
-        else:
-            os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # XXX Does this *always* mean there's a proc?
-        return True
-    else:
-        return True
-
-
-def run_fg(cmd, *args, cwd=None, env=None):
-    argv = [cmd, *args]
-    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
-    return subprocess.run(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding='utf-8',
-        cwd=cwd,
-        env=env,
-    )
-
-
-def run_bg(argv, logfile=None, *, cwd=None, env=None):
-    if not argv:
-        raise ValueError('missing argv')
-    elif isinstance(argv, str):
-        if not argv.strip():
-            raise ValueError('missing argv')
-        cmd = argv
-    else:
-        cmd = ' '.join(shlex.quote(a) for a in argv)
-
-    if logfile:
-        logfile = quote_shell_str(logfile)
-        cmd = f'{cmd} >> {logfile}'
-    cmd = f'{cmd} 2>&1'
-
-    logger.debug('# running (background): %s', cmd)
-    #subprocess.run(cmd, shell=True)
-    subprocess.Popen(
-        cmd,
-        #creationflags=subprocess.DETACHED_PROCESS,
-        #creationflags=subprocess.CREATE_NEW_CONSOLE,
-        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-        shell=True,
-        cwd=cwd,
-        env=env,
-    )
 
 
 class MetadataError(ValueError):
