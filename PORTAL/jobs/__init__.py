@@ -727,15 +727,19 @@ class Job:
             elif name == 'elapsed':
                 if not started:
                     return '---'
-                elif not finished:
-                    return '...'
+                fmt = "%d:%02d:%02d"
+                if not finished:
+                    now, _ = _utils.get_utc_datetime()
+                    elapsed = now - started
+                    fmt = f'({fmt})'
                 else:
                     elapsed = finished - started
-                    # The following is mostly borrowed from Timedelta.__str__().
-                    mm, ss = divmod(elapsed.seconds, 60)
-                    hh, mm = divmod(mm, 60)
-                    hh += 24 * elapsed.days
-                    return "%d:%02d:%02d" % (hh, mm, ss)
+                    fmt = f' {fmt} '
+                # The following is mostly borrowed from Timedelta.__str__().
+                mm, ss = divmod(elapsed.seconds, 60)
+                hh, mm = divmod(mm, 60)
+                hh += 24 * elapsed.days
+                return fmt % (hh, mm, ss)
             else:
                 raise NotImplementedError(name)
 
