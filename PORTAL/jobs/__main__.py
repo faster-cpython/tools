@@ -69,6 +69,8 @@ def cmd_list(jobs, selections=None):
     rowfmt = ' '.join(f' {{:{s or ""}{w}}} ' for _, _, w, s in columns)
     attrs = [n for n, _, _, _ in columns]
 
+    logger.info('(all times in UTC)')
+    logger.info('')
     logger.info(div)
     print(header)
     print(div)
