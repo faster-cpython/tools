@@ -371,7 +371,7 @@ class Job:
 
     @property
     def request(self):
-        return Request(self._reqid, str(self.fs))
+        return Request(self._reqid, str(self._fs))
 
     def load_result(self):
         return Result.load(self._fs.result.metadata)
@@ -627,7 +627,7 @@ class Job:
             _utils.run_bg(f'{script} > {logfile}', env=env)
             return 0
         else:
-            proc = subprocess.run([self.fs.portal_script], env=env)
+            proc = subprocess.run([self._fs.portal_script], env=env)
             return proc.returncode
 
     def get_pid(self):
@@ -654,7 +654,7 @@ class Job:
             status = self.get_status()
             if status in Result.FINISHED:
                 raise JobNeverStartedError(reqid)
-            if checkssh and os.path.exists(self.fs.ssh_okay):
+            if checkssh and os.path.exists(self._fs.ssh_okay):
                 break
             time.sleep(0.01)
             pid = self.get_pid()
@@ -664,9 +664,9 @@ class Job:
         pid = self.wait_until_started()
         try:
             if pid:
-                _utils.tail_file(self.fs.logfile, lines, follow=pid)
+                _utils.tail_file(self._fs.logfile, lines, follow=pid)
             elif lines:
-                _utils.tail_file(self.fs.logfile, lines, follow=False)
+                _utils.tail_file(self._fs.logfile, lines, follow=False)
         except KeyboardInterrupt:
             # XXX Prompt to cancel the job?
             return
@@ -857,7 +857,7 @@ class Jobs:
         self._worker = Worker.from_config(cfg, self.FS)
 
     def __str__(self):
-        return self.fs.root
+        return self._fs.root
 
     @property
     def cfg(self):
@@ -877,7 +877,7 @@ class Jobs:
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self.fs)
+            self._queue = _queue.JobQueue.from_fstree(self._fs)
             return self._queue
 
     def iter_all(self):
@@ -914,7 +914,7 @@ class Jobs:
 
     def activate(self, reqid):
         logger.debug('# staging request')
-        _stage_request(reqid, self.fs)
+        _stage_request(reqid, self._fs)
         logger.debug('# done staging request')
         job = self._get(reqid)
         job.set_status('active')
