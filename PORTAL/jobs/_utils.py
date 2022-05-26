@@ -980,44 +980,82 @@ class GitHubTarget(types.SimpleNamespace):
         return dict(vars(self))
 
 
-class GitRefCandidates:
+class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
+
+    __slots__ = ['_orig']
 
     @classmethod
-    def from_revision(cls, revision, branch, remote):
+    def from_raw(cls, raw):
+        if not raw:
+            raise NotImplementedError(raw)
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            return cls(*raw)
+
+    def __new__(cls, remote, branch, revision):
         if not revision:
             revision = None
+        elif revision == 'latest':
+            if not branch:
+                raise ValueError('missing branch')
         elif revision.upper() == 'HEAD':
+            if not branch:
+                raise ValueError('missing branch')
             revision = 'HEAD'
         elif not looks_like_git_ref(revision):
             raise ValueError(f'unsupported revision {revision!r}')
+
         if not branch:
             branch = None
         elif not looks_like_git_branch(branch):
             raise ValueError(f'unsupported branch {branch!r}')
+
         if not remote:
             remote = None
         elif not looks_like_git_remote(remote):
             raise ValueError(f'unsupported remote {remote!r}')
 
+        return super().__new__(cls, remote, branch, revision)
+
+    @property
+    def orig(self):
+        return getattr(self, '_orig', None)
+
+
+class GitRefCandidates:
+
+    @classmethod
+    def from_revision(cls, revision, branch, remote):
+        orig = GitRefRequest(remote, branch, revision)
+        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote)
+        self = cls()
+        for req in reqs:
+            self._add_req(req, orig)
+        self._add_raw(raw, reqs)
+        return self
+
+    @classmethod
+    def _from_revision(cls, revision, branch, remote):
         if branch == 'main':
-            refs = cls._from_main(revision, remote)
+            reqs = cls._from_main(revision, remote)
         elif remote == 'origin':
-            refs = cls._from_origin(revision, branch)
+            reqs = cls._from_origin(revision, branch)
         elif remote:
-            refs = cls._from_non_origin(revision, branch, remote)
+            reqs = cls._from_non_origin(revision, branch, remote)
         elif branch:  # no remote, maybe a revision
             # We know all remotes have release (version) branches.
-            refs = cls._from_version(revision, branch, 'origin', required=False)
-            if not refs:
+            reqs = cls._from_version(revision, branch, 'origin', required=False)
+            if not reqs:
                 # We don't bother trying to guess the remote at this point.
                 raise ValueError('missing remote for branch {branch!r}')
         elif revision:  # no remote or branch
-            refs = cls._from_origin(revision, branch, required=False)
-            if not refs:
+            reqs = cls._from_origin(revision, branch, required=False)
+            if not reqs:
                 raise ValueError(f'missing remote for revision {revision!r}')
         else:
-            refs = cls._from_main(revision, remote)
-        return cls(refs)
+            reqs = cls._from_main(revision, remote)
+        return reqs
 
     @classmethod
     def _from_main(cls, revision, remote):
@@ -1078,9 +1116,9 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, None, revision)]
             else:
-                refs = cls._from_version(revision, None, remote, required=False)
-                if refs:
-                    return refs
+                reqs = cls._from_version(revision, None, remote, required=False)
+                if reqs:
+                    return reqs
                 if looks_like_git_branch(revision):
                     return [
                         (remote, None, revision),
@@ -1129,24 +1167,35 @@ class GitRefCandidates:
                 (remote, verstr, 'latest' if revision == verstr else revision),
             ]
 
-    def __init__(self, refs):
-        self._refs = refs
+    def __init__(self, reqs):
+        self._reqs = []
+        for req in reqs:
+            self._add_req(req)
 
     def __repr__(self):
-        return f'{type(self).__name__}({self._refs})'
+        return f'{type(self).__name__}({self._reqs})'
 
     def __len__(self):
-        return len(self._refs)
+        return len(self._reqs)
 
     def __iter__(self):
-        yield from self._refs
+        yield from self._reqs
 
     def __getitem__(self, index):
-        return self._refs[index]
+        return self._reqs[index]
+
+    def _add_req(self, req, orig=None):
+        req = GitRefRequest.from_raw(req)
+        if orig:
+            if req.orig:
+                raise NotImplementedError((orig, req.orig))
+            req._orig = GitRefRequest.from_raw(orig)
+        self._reqs.append(req)
 
     def find_ref(self):
         by_remote = {}
-        for remote, branch, revision in self._refs:
+        for req in self._reqs:
+            remote, branch, revision = req
             if remote not in by_remote:
                 by_remote[remote] = GitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
@@ -1157,6 +1206,7 @@ class GitRefCandidates:
                 if branch and _branch != branch:
                     logger.warning(f'branch mismatch (wanted {branch}, found {_branch})')
                 else:
+                    # XXX Preserve req.
                     assert ref, (commit, branch or _branch, remote)
                     return GitRef(ref, None, commit, branch or _branch, remote)
         else:
