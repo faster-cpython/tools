@@ -1424,7 +1424,13 @@ class GitRefs(types.SimpleNamespace):
         if branch:
             commit = self.branches.get(branch)
             if commit:
-                return branch, None, commit
+                # It might match a tag too.
+                for tag, actual in self.tags.items():
+                    assert actual
+                    if actual == commit:
+                        return branch, tag, commit
+                else:
+                    return branch, None, commit
         return None
 
     def match_tag(self, ref): 
@@ -1449,7 +1455,13 @@ class GitRefs(types.SimpleNamespace):
             if ref in self.tags:
                 commit = self.tags[ref]
                 assert commit
-                return None, ref, commit
+                # It might also match a branch.
+                for branch, actual in self.branches.items():
+                    assert actual
+                    if actual == commit:
+                        return branch, ref, actual
+                else:
+                    return None, ref, commit
         # No tags matched!
         return None
 
