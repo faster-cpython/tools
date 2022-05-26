@@ -370,13 +370,27 @@ class BenchCompileRequest(Request):
 
     FIELDS = Request.FIELDS + [
         'ref',
-        'remote',
+        'pyperformance_ref',  # XXX Should be required instead of ref.
+        'requested_revision',
+        'commit',
+        'tag',
         'branch',
+        'remote',
         'benchmarks',
         'optimize',
         'debug',
     ]
-    OPTIONAL = ['remote', 'branch', 'benchmarks', 'optimize', 'debug']
+    OPTIONAL = [
+        'pyperformance_ref',
+        'requested_revision',
+        'commit',
+        'tag',
+        'branch',
+        'remote',
+        'benchmarks',
+        'optimize',
+        'debug',
+    ]
 
     CPYTHON = _utils.GitHubTarget.origin('python', 'cpython')
     PYPERFORMANCE = _utils.GitHubTarget.origin('python', 'pyperformance')
@@ -392,8 +406,12 @@ class BenchCompileRequest(Request):
                  id,
                  datadir,
                  ref,
-                 remote=None,
+                 pyperformance_ref=None,
+                 requested_revision=None,
+                 commit=None,
+                 tag=None,
                  branch=None,
+                 remote=None,
                  benchmarks=None,
                  optimize=True,
                  debug=False,
@@ -407,9 +425,18 @@ class BenchCompileRequest(Request):
             raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
+
+        if not pyperformance_ref:
+            pyperformance_ref = ref
+            requested_revision = ref
+
         self.ref = ref
-        self.remote = remote
+        self.pyperformance_ref = pyperformance_ref
+        self.requested_revision = requested_revision
+        self.commit = commit
+        self.tag = tag
         self.branch = branch
+        self.remote = remote
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
@@ -472,15 +499,20 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
     if not ref:
         raise Exception(f'could not find ref for {(remote, branch, revision)}')
 
+    if not branch and ref.branch == revision:
+        revision = 'latest'
+
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
-        # XXX Add a "commit" field and use "ref" for the actual ref.
-        ref=ref.commit,
-        #commit=ref.commit,
-        #ref=ref.ref or ref.commit,
-        remote=ref.remote,
+        # XXX Preserve "latest" and "HEAD".
+        ref=ref.ref or ref.commit,
+        pyperformance_ref=ref.commit,
+        requested_revision=revision,
+        commit=ref.commit,
+        tag=ref.ref if ref.kind == 'tag' else None,
         branch=ref.branch,
+        remote=ref.remote,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),
@@ -561,7 +593,7 @@ def build_compile_script(req, bfiles, fake=None):
     _utils.check_shell_str(req.pyston_benchmarks.remote)
     _utils.check_shell_str(req.branch, required=False)
     maybe_branch = req.branch or ''
-    _utils.check_shell_str(req.ref)
+    ref = _utils.check_shell_str(req.pyperformance_ref)
 
     cpython_repo = _utils.quote_shell_str(bfiles.repos.cpython)
     pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
@@ -695,7 +727,7 @@ def build_compile_script(req, bfiles, fake=None):
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
                 {bfiles.request.pyperformance_config} \\
-                {req.ref} {maybe_branch} \\
+                {ref} {maybe_branch} \\
                 2>&1 | tee {bfiles.work.logfile}
             )
             exitcode=$?

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import os.path
@@ -700,6 +701,22 @@ class Job:
             if not end:
                 end, _ = _utils.get_utc_datetime()
             elapsed = end - started
+        ref = remote = branch = tag = commit = requested = None
+        if self.kind is RequestID.KIND.BENCHMARKS:
+            req_cls = _requests.BenchCompileRequest
+            try:
+                req = req_cls.load(self._fs.request.metadata)
+            except (FileNotFoundError, json.decoder.JSONDecodeError):
+                pass
+            else:
+                ref = req.ref
+                remote = req.remote
+                branch = req.branch
+                tag = req.tag
+                commit = req.commit
+                requested = req.requested_revision
+        else:
+            raise NotImplementedError(self.kind)
         data = {
             'reqid': self.reqid,
             'status': status,
@@ -707,6 +724,12 @@ class Job:
             'started': started,
             'finished': finished,
             'elapsed': elapsed,
+            'ref': ref,
+            'remote': remote,
+            'branch': branch,
+            'tag': tag,
+            'commit': commit,
+            'requested': requested,
         }
 
         def render_value(colname):
@@ -730,6 +753,18 @@ class Job:
                 hh, mm = divmod(mm, 60)
                 hh += 24 * raw.days
                 rendered = fmt % (hh, mm, ss)
+            elif colname in 'ref':
+                rendered = ref
+            elif colname in 'remote':
+                rendered = remote
+            elif colname in 'branch':
+                rendered = branch
+            elif colname in 'tag':
+                rendered = tag
+            elif colname in 'commit':
+                rendered = commit
+            elif colname in 'requested':
+                rendered = ref
             else:
                 raise NotImplementedError(colname)
             return rendered

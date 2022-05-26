@@ -35,14 +35,22 @@ def cmd_list(jobs, selections=None, columns=None):
     selected = list(select_jobs(alljobs, selections))
 
     colspecs = [
-        ('reqid', 'request ID', 48, None),
+        ('reqid', 'request ID', 45, None),
         ('status', None, 10, None),
         ('elapsed', None, 10, '>'),
         ('created', None, 19, None),
         ('started', None, 19, None),
         ('finished', None, 19, None),
         #('started,created', 'started / (created)', 21, None),
+        ('ref', None, 40, None),
+        ('remote', None, 20, None),
+        ('branch', None, 25, None),
+        ('tag', None, 10, None),
+        ('commit', None, 40, None),
+        ('requested', None, 40, None),
     ]
+    if not columns:
+        columns = 'reqid,status,elapsed,created,started'
     table = TableSpec.from_columns(colspecs, columns)
 
     rows = (j.as_row() for j in selected)
