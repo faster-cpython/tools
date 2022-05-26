@@ -100,8 +100,9 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
         specs = (ColumnSpec.from_raw(s) for s in specs)
         if names:
             if isinstance(names, str):
-                raise NotImplementedError(names)
-            names = list(names)
+                names = names.split(',')
+            else:
+                names = list(names)
             specs = {s.name: s for s in specs}
             columns = [specs[n] for n in names]
         else:

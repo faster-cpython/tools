@@ -784,6 +784,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         return subs.add_parser(name, parents=[common, *parents], **kwargs)
 
     sub = add_cmd('list', help='Print a table of all known jobs')
+    sub.add_argument('--columns', help='a CSV of column names to show')
     sub.add_argument('selections', nargs='*', metavar='SELECTION',
                      help='a specifier for a subset (e.g. -10 for the last 10)')
 
