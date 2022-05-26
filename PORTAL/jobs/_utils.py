@@ -54,6 +54,217 @@ def validate_string(value, argname=None, *, required=True):
 
 
 ##################################
+# tables
+
+class ColumnSpec(namedtuple('ColumnSpec', 'name title width align')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        else:
+            return cls(*raw)
+
+
+class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
+
+    DIV = '-'
+    SEP = ' '
+    MARGIN = 1
+
+    @classmethod
+    def from_columns(cls, specs, names=None, *, maxwidth=None):
+        columns, names = cls._normalize_columns(specs, names, maxwidth)
+        margin = ' ' * cls.MARGIN
+
+        header = div = rowfmt = ''
+        for col in columns:
+            if header:
+                header += cls.SEP
+                div += cls.SEP
+                rowfmt += cls.SEP
+            header += f'{margin}{col.title or col.name:^{col.width}}{margin}'
+            div += cls.DIV * (cls.MARGIN + col.width + cls.MARGIN)
+            if col.align:
+                rowfmt += f'{margin}{{:{col.align}{col.width}}}{margin}'
+            else:
+                rowfmt += f'{margin}{{:{col.width}}}{margin}'
+
+        self = cls(columns, header, div, rowfmt)
+        if names:
+            self._colnames = names
+        return self
+
+    @classmethod
+    def _normalize_columns(cls, specs, names, maxwidth):
+        specs = (ColumnSpec.from_raw(s) for s in specs)
+        if names:
+            if isinstance(names, str):
+                raise NotImplementedError(names)
+            names = list(names)
+            specs = {s.name: s for s in specs}
+            columns = [specs[n] for n in names]
+        else:
+            columns = list(specs)
+
+        if not maxwidth or maxwidth < 0:
+            # XXX Use a minimum set of columns to determine minwidth.
+            minwidth = 80
+            maxwidth = max(minwidth, get_termwidth())
+            #print(' '*maxwidth + '|')
+
+        sep = cls.SEP
+        if not sep:
+            raise ValueError('sep missing')
+        elif not isinstance(sep, str):
+            raise TypeError(sep)
+
+        margin = cls.MARGIN
+        if margin is None:
+            raise ValueError('margin missing')
+        elif not isinstance(margin, int):
+            raise TypeError(cls.MARGIN)
+        elif margin < 0:
+            raise ValueError(f'invalid margin {margin}')
+
+        # Drop columns until below maxwidth.
+        size = 0
+        for i in range(len(columns)):
+            if i > 0:
+                size += len(sep)
+            size += margin + columns[i].width + margin
+            if size > maxwidth:
+                # XXX Maybe drop other columns than just the tail?
+                # XXX Maybe combine some columns?
+                columns[i:] = []
+                if names:
+                    names[i:] = []
+                break
+
+        #if termwidth > minwidth + (19 + 3) * 3:
+        #    columns.extend([
+        #        ('created', None, 19, None),
+        #        ('started', None, 19, None),
+        #        ('finished', None, 19, None),
+        #    ])
+        #elif termwidth > minwidth + (21 + 3) + (19 + 3):
+        #    columns.extend([
+        #        ('started,created', 'started / (created)', 21, None),
+        #        ('finished', None, 19, None),
+        #    ])
+        #elif termwidth > minwidth + (21 + 3):
+        #    columns.append(
+        #        ('started,created', 'start / (created)', 21, None),
+        #    )
+
+        return columns, names
+
+    @property
+    def colnames(self):
+        try:
+            return self._colnames
+        except AttributeError:
+            self._colnames = [c.name for c in self.columns]
+            return self._colnames
+
+    def render(self, rows, *, numrows=None, total=None):
+        # We use a default format here.
+        header = [self.div, self.header, self.div]
+        rows = self._render_rows(rows)
+        rows = RenderingRows(rows, header, numrows)
+        yield from header
+        yield from rows
+        yield div
+        yield from rows.render_count(total)
+
+    def render_rows(self, rows, periodic=None, numrows=None):
+        rows = self._render_rows(rows)
+        return RenderingRows(rows, periodic, numrows)
+
+    def _render_rows(self, rows):
+        fmt = self.rowfmt
+        for row in rows:
+            values = row.render_values(self.colnames)
+            yield fmt.format(*values)
+
+    def _render_row(self, row):
+        values = row.render_values(self.colnames)
+        return self.rowfmt.format(*values)
+
+
+class RenderingRows:
+
+    def __init__(self, rows, periodic=None, numrows=None):
+        if not periodic:
+            periodic = None
+        elif isinstance(periodic, str):
+            periodic = [periodic]
+        if not numrows:
+            try:
+                numrows = len(rows)
+            except TypeError:
+                numrows = None
+        self.rows = iter(rows)
+        self.periodic = periodic
+        self.numrows = numrows
+
+        self.count = 0
+        self.pending = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.pending:
+            return self.pending.pop(0)
+        row = next(self.rows)
+        self.count += 1
+        if self.periodic:
+            if self.count % 25 == 0:
+                if not self.numrows or self.numrows - self.count >= 15:
+                    self.pending.extend(self.periodic)
+                    self.pending.append(row)
+                    return self.pending.pop(0)
+        return row
+
+    def render_count(self, total=None, label='matched'):
+        if total is None:
+            yield f'(total: {total})'
+        elif self.count == total:
+            yield f'(total: {total})'
+        else:
+            yield f'({label}: {self.count})'
+            yield f'(total:   {total})'
+
+
+class TableRow:
+
+    def __init__(self, data, render_value):
+        self.data = data
+        self.render_value = render_value
+        self._colnames = list(data)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self.data!r})'
+
+    def render_values(self, colnames=None):
+        if not colnames:
+            colnames = self._colnames
+        for colname in colnames:
+            if ',' in colname:
+                primary, _, secondary = colname.partition(',')
+                if self.data[primary] is None:
+                    if self.data[secondary] is not None:
+                        value = self.render_value(secondary)
+                        yield f'({secondary})'
+                        continue
+                value = self.render_value(primary)
+                yield f' {value} '
+            else:
+                yield self.render_value(colname)
+
+
+##################################
 # date/time utils
 
 SECOND = datetime.timedelta(seconds=1)

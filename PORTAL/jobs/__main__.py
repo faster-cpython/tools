@@ -15,7 +15,7 @@ from .queue import (
     JobNotQueuedError, JobAlreadyQueuedError,
 )
 from ._utils import (
-    LogSection, tail_file, render_file, get_bool_env_var, get_termwidth,
+    LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
 )
 
 
@@ -27,60 +27,38 @@ logger = logging.getLogger(__name__)
 ##################################
 # commands
 
-def cmd_list(jobs, selections=None):
+def cmd_list(jobs, selections=None, columns=None):
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
     alljobs = list(jobs.iter_all())
     total = len(alljobs)
     alljobs = sort_jobs(alljobs)
     selected = list(select_jobs(alljobs, selections))
-    count = len(selected)
 
-    columns = [
+    colspecs = [
         ('reqid', 'request ID', 48, None),
         ('status', None, 10, None),
         ('elapsed', None, 10, '>'),
+        ('created', None, 19, None),
+        ('started', None, 19, None),
+        ('finished', None, 19, None),
+        #('started,created', 'started / (created)', 21, None),
     ]
-    minwidth = sum(w for _, _, w, _ in columns)
-    termwidth = get_termwidth()
-    if termwidth > minwidth + (19 + 3) * 3:
-        columns.extend([
-            ('created', None, 19, None),
-            ('started', None, 19, None),
-            ('finished', None, 19, None),
-        ])
-    elif termwidth > minwidth + (21 + 3) + (19 + 3):
-        columns.extend([
-            ('started,created', 'started / (created)', 21, None),
-            ('finished', None, 19, None),
-        ])
-    elif termwidth > minwidth + (21 + 3):
-        columns.append(
-            ('started,created', 'start / (created)', 21, None),
-        )
+    table = TableSpec.from_columns(colspecs, columns)
 
-    header = ' '.join((c or n).center(w+2) for n, c, w, _ in columns)
-    div = ' '.join('-' * (w+2) for _, _, w, _ in columns)
-    rowfmt = ' '.join(f' {{:{s or ""}{w}}} ' for _, _, w, s in columns)
-    attrs = [n for n, _, _, _ in columns]
+    rows = (j.as_row() for j in selected)
+    periodic = [table.div, table.header, table.div]
+    rows = table.render_rows(rows, periodic, len(selected))
 
     logger.info('(all times in UTC)')
     logger.info('')
-    logger.info(div)
-    print(header)
-    print(div)
-    for i, job in enumerate(selected, 1):
-        if count - i >= 15 and i % 25 == 0:
-            logger.info(div)
-            logger.info(header)
-            logger.info(div)
-        row = job.render_for_row(attrs)
-        print(rowfmt.format(*row))
-    logger.info(div)
-    if count == total:
-        logger.info('(total: %s)', total)
-    else:
-        logger.info('(matched: %s)', count)
-        logger.info('(total:   %s)', total)
+    logger.info(table.div)
+    print(table.header)
+    print(table.div)
+    for line in rows:
+        print(line)
+    logger.info(table.div)
+    for line in rows.render_count(total):
+        logger.info(line)
     logger.info('')
 
     current = jobs.get_current()

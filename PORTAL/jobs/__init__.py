@@ -684,6 +684,60 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
+    def as_row(self):  # XXX Move to JobSummary.
+        try:
+            res = self.load_result()
+        except FileNotFoundError:
+            status = started = finished = None
+        else:
+            status = res.status or 'created'
+            started, _ = res.started
+            finished, _ = res.finished
+        if not started:
+            elapsed = None
+        else:
+            end = finished
+            if not end:
+                end, _ = _utils.get_utc_datetime()
+            elapsed = end - started
+        data = {
+            'reqid': self.reqid,
+            'status': status,
+            'created': self.reqid.date,
+            'started': started,
+            'finished': finished,
+            'elapsed': elapsed,
+        }
+
+        def render_value(colname):
+            raw = data[colname]
+            if raw is None:
+                if colname == 'status':
+                    rendered = '???'
+                else:
+                    rendered = '---'
+            elif colname == 'reqid':
+                rendered = str(raw)
+            elif colname == 'status':
+                rendered = str(raw)
+            elif colname in ('created', 'started', 'finished'):
+                rendered = f'{raw:%Y-%m-%d %H:%M:%S}'
+            elif colname == 'elapsed':
+                fmt = "%d:%02d:%02d"
+                fmt = f' {fmt} ' if finished else f'({fmt})'
+                # The following is mostly borrowed from Timedelta.__str__().
+                mm, ss = divmod(raw.seconds, 60)
+                hh, mm = divmod(mm, 60)
+                hh += 24 * raw.days
+                rendered = fmt % (hh, mm, ss)
+            else:
+                raise NotImplementedError(colname)
+            return rendered
+
+        return _utils.TableRow(data, render_value)
+
+    # XXX Add as_summary().
+
     def render(self, fmt=None):
         if not fmt:
             fmt = 'summary'
@@ -700,61 +754,6 @@ class Job:
             yield from self._render_summary('verbose')
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
-
-    def render_for_row(self, attrs):
-        if isinstance(attrs, str):
-            raise NotImplementedError(attrs)
-        try:
-            res = self.load_result()
-        except FileNotFoundError:
-            status = started = finished = None
-        else:
-            status = res.status or 'created'
-            started, _ = res.started
-            finished, _ = res.finished
-
-        def render_attr(name):
-            if name == 'reqid':
-                return str(self.reqid)
-            elif name == 'status':
-                return str(status) if status else '???'
-            elif name == 'created':
-                return f'{self.reqid.date:%Y-%m-%d %H:%M:%S}'
-            elif name == 'started':
-                return f'{started:%Y-%m-%d %H:%M:%S}' if started else '---'
-            elif name == 'finished':
-                return f'{finished:%Y-%m-%d %H:%M:%S}' if finished else '---'
-            elif name == 'elapsed':
-                if not started:
-                    return '---'
-                fmt = "%d:%02d:%02d"
-                if not finished:
-                    now, _ = _utils.get_utc_datetime()
-                    elapsed = now - started
-                    fmt = f'({fmt})'
-                else:
-                    elapsed = finished - started
-                    fmt = f' {fmt} '
-                # The following is mostly borrowed from Timedelta.__str__().
-                mm, ss = divmod(elapsed.seconds, 60)
-                hh, mm = divmod(mm, 60)
-                hh += 24 * elapsed.days
-                return fmt % (hh, mm, ss)
-            else:
-                raise NotImplementedError(name)
-
-        for name in attrs:
-            if ',' in name:
-                primary, _, secondary = name.partition(',')
-                primary = render_attr(primary)
-                if primary in ('---', '...', '???'):
-                    secondary = render_attr(secondary)
-                    if secondary not in ('---', '...', '???'):
-                        yield f'({secondary})'
-                        continue
-                yield f' {primary} '
-            else:
-                yield render_attr(name)
 
     def _render_summary(self, fmt=None):
         if not fmt:
