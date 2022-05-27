@@ -860,6 +860,27 @@ class LogSection(types.SimpleNamespace):
 ##################################
 # git utils
 
+GITHUB_REMOTE_URL = re.compile(r'''
+    ^(
+        (
+            https://github\.com/
+            ( [^/]+ )  # <https_org>
+            /
+            ( .* )  # <https_repo>
+            /?
+         )
+        |
+        (
+            git@github\.com:
+            ( [^/]+ )  # <ssh_org>
+            /
+            ( .* )  # <ssh_repo>
+            \.git
+         )
+    )$
+''', re.VERBOSE)
+
+
 def looks_like_git_commit(value):
     return bool(re.match(r'^[a-fA-F0-9]{4,40}$', value))
 
@@ -878,6 +899,8 @@ def looks_like_git_branch(value):
 
 
 def looks_like_git_remote(value):
+    if GITHUB_REMOTE_URL.match(value):
+        return True
     return looks_like_git_name(value)
 
 
@@ -1280,7 +1303,7 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
         if not remote:
             # XXX Infer "origin" if branch is main or looks like a version?
             raise ValueError('missing remote')
-        elif not looks_like_git_branch(remote):
+        elif not looks_like_git_remote(remote):
             raise ValueError(f'invalid remote {remote!r}')
         if not branch:
             branch = None
