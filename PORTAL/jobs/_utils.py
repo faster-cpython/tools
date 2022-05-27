@@ -2371,16 +2371,49 @@ class Metadata(types.SimpleNamespace):
     _extra = None
 
     @classmethod
-    def load(cls, resfile):
-        if isinstance(resfile, str):
-            filename = resfile
-            with open(filename) as resfile:
-                return cls.load(resfile)
-        data = json.load(resfile)
-        return cls.from_jsonable(data)
+    def load(cls, metafile, *, optional=None, fail=True):
+        if optional is None:
+            optional = cls.OPTIONAL or ()
+        filename = getattr(metafile, 'name', metafile)
+        try:
+            data = cls._load_data(metafile)
+            kwargs, extra = cls._extract_kwargs(data, optional, filename)
+            self = cls(**kwargs)
+        except Exception:
+            logger.debug(f'failed to load metadata from {filename!r}')
+            if not fail:
+                return None
+            raise  # re-raise
+        if extra:
+            self._extra = extra
+        return self
 
     @classmethod
-    def from_jsonable(cls, data):
+    def from_jsonable(cls, data, *, optional=None):
+        if optional is None:
+            optional = cls.OPTIONAL or ()
+        kwargs, extra = cls._extract_kwargs(data, optional, None)
+        self = cls(**kwargs)
+        if extra:
+            self._extra = extra
+        return self
+
+    @classmethod
+    def _load_data(cls, metafile, fail=False):
+        if isinstance(metafile, str):
+            filename = metafile
+            with open(filename) as metafile:
+                return cls._load_data(metafile)
+        try:
+            return json.load(metafile)
+        except json.decoder.JSONDecodeError as exc:
+            if fail:
+                raise  # re-raise
+            logger.error(f'failed to decode metadata in {metafile.name}: {exc}')
+            return None
+
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
         kwargs = {}
         extra = {}
         unused = set(cls.FIELDS or ())
@@ -2390,17 +2423,11 @@ class Metadata(types.SimpleNamespace):
                 unused.remove(field)
             elif not field.startswith('_'):
                 extra[field] = data[field]
-        unused -= set(cls.OPTIONAL or ())
+        unused -= set(optional)
         if unused:
             missing = ', '.join(sorted(unused))
             raise ValueError(f'missing required data (fields: {missing})')
-        if kwargs:
-            self = cls(**kwargs)
-            if extra:
-                self._extra = extra
-        else:
-            self = cls(**extra)
-        return self
+        return (kwargs, extra) if kwargs else (extra, None)
 
     def refresh(self, resfile):
         """Reload from the given file."""

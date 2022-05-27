@@ -3,6 +3,7 @@ import configparser
 import datetime
 import json
 import logging
+import os.path
 import re
 import textwrap
 import types
@@ -398,6 +399,21 @@ class BenchCompileRequest(Request):
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
 
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
+        # This is a backward-compatibility shim.
+        try:
+            return super()._extract_kwargs(data, optional, filename)
+        except ValueError:
+            optional = [*optional, 'datadir', 'date', 'ref', 'user']
+            kwargs, extra = super()._extract_kwargs(data, optional, filename)
+            reqid = RequestID.from_raw(kwargs['id'])
+            kwargs.setdefault('datadir', os.path.dirname(filename))
+            kwargs.setdefault('date', reqid.date.isoformat())
+            kwargs.setdefault('user', reqid.user)
+            kwargs.setdefault('ref', 'deadbeef')
+            return kwargs, extra
+
     def __init__(self,
                  id,
                  datadir,
@@ -425,7 +441,12 @@ class BenchCompileRequest(Request):
             if fast:
                 tag = None
                 commit = ref if _utils.looks_like_git_commit(ref) else None
-                ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                try:
+                    ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                except ValueError:
+                    # backward compatibility
+                    GR = _utils.GitRef
+                    ref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
             else:
                 refstr = ref
                 ref = _utils.GitRef.resolve(revision, branch, remote)
@@ -465,6 +486,18 @@ class BenchCompileResult(Result):
         'pyperformance_results',
         'pyperformance_results_orig',
     ]
+
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
+        # This is a backward-compatibility shim.
+        try:
+            return super()._extract_kwargs(data, optional, filename)
+        except ValueError:
+            optional = [*optional, 'reqdir', 'history']
+            kwargs, extra = super()._extract_kwargs(data, optional, filename)
+            kwargs.setdefault('reqdir', os.path.dirname(filename))
+            kwargs.setdefault('history', None)
+            return kwargs, extra
 
     def __init__(self, reqid, reqdir, *,
                  status=None,

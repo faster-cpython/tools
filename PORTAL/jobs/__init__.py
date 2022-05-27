@@ -375,7 +375,11 @@ class Job:
         return Request(self._reqid, str(self._fs))
 
     def load_result(self):
-        return Result.load(self._fs.result.metadata)
+        if self.reqid.kind == 'compile-bench':
+            res_cls = _requests.BenchCompileResult
+        else:
+            raise NotImplementedError(self.reqid.kind)
+        return res_cls.load(self._fs.result.metadata)
 
     def get_status(self, *, fail=True):
         try:
@@ -704,11 +708,8 @@ class Job:
         fullref = ref = remote = branch = tag = commit = None
         if self.kind is RequestID.KIND.BENCHMARKS:
             req_cls = _requests.BenchCompileRequest
-            try:
-                req = req_cls.load(self._fs.request.metadata)
-            except (FileNotFoundError, json.decoder.JSONDecodeError):
-                pass
-            else:
+            req = req_cls.load(self._fs.request.metadata, fail=False)
+            if req:
                 ref = req.ref
                 assert not isinstance(ref, str), repr(ref)
                 fullref = ref.full
