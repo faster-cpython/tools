@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 import time
 import types
@@ -50,6 +51,218 @@ def validate_string(value, argname=None, *, required=True):
     if not isinstance(value, str):
         label = f' for {argname}' if argname else ''
         raise TypeError(f'expected str{label}, got {value!r}')
+
+
+##################################
+# tables
+
+class ColumnSpec(namedtuple('ColumnSpec', 'name title width align')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        else:
+            return cls(*raw)
+
+
+class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
+
+    DIV = '-'
+    SEP = ' '
+    MARGIN = 1
+
+    @classmethod
+    def from_columns(cls, specs, names=None, *, maxwidth=None):
+        columns, names = cls._normalize_columns(specs, names, maxwidth)
+        margin = ' ' * cls.MARGIN
+
+        header = div = rowfmt = ''
+        for col in columns:
+            if header:
+                header += cls.SEP
+                div += cls.SEP
+                rowfmt += cls.SEP
+            header += f'{margin}{col.title or col.name:^{col.width}}{margin}'
+            div += cls.DIV * (cls.MARGIN + col.width + cls.MARGIN)
+            if col.align:
+                rowfmt += f'{margin}{{:{col.align}{col.width}}}{margin}'
+            else:
+                rowfmt += f'{margin}{{:{col.width}}}{margin}'
+
+        self = cls(columns, header, div, rowfmt)
+        if names:
+            self._colnames = names
+        return self
+
+    @classmethod
+    def _normalize_columns(cls, specs, names, maxwidth):
+        specs = (ColumnSpec.from_raw(s) for s in specs)
+        if names:
+            if isinstance(names, str):
+                names = names.replace(',', ' ').split()
+            else:
+                names = list(names)
+            specs = {s.name: s for s in specs}
+            columns = [specs[n] for n in names]
+        else:
+            columns = list(specs)
+
+        if not maxwidth or maxwidth < 0:
+            # XXX Use a minimum set of columns to determine minwidth.
+            minwidth = 80
+            maxwidth = max(minwidth, get_termwidth())
+            #print(' '*maxwidth + '|')
+
+        sep = cls.SEP
+        if not sep:
+            raise ValueError('sep missing')
+        elif not isinstance(sep, str):
+            raise TypeError(sep)
+
+        margin = cls.MARGIN
+        if margin is None:
+            raise ValueError('margin missing')
+        elif not isinstance(margin, int):
+            raise TypeError(cls.MARGIN)
+        elif margin < 0:
+            raise ValueError(f'invalid margin {margin}')
+
+        # Drop columns until below maxwidth.
+        size = 0
+        for i in range(len(columns)):
+            if i > 0:
+                size += len(sep)
+            size += margin + columns[i].width + margin
+            if size > maxwidth:
+                # XXX Maybe drop other columns than just the tail?
+                # XXX Maybe combine some columns?
+                columns[i:] = []
+                if names:
+                    names[i:] = []
+                break
+
+        #if termwidth > minwidth + (19 + 3) * 3:
+        #    columns.extend([
+        #        ('created', None, 19, None),
+        #        ('started', None, 19, None),
+        #        ('finished', None, 19, None),
+        #    ])
+        #elif termwidth > minwidth + (21 + 3) + (19 + 3):
+        #    columns.extend([
+        #        ('started,created', 'started / (created)', 21, None),
+        #        ('finished', None, 19, None),
+        #    ])
+        #elif termwidth > minwidth + (21 + 3):
+        #    columns.append(
+        #        ('started,created', 'start / (created)', 21, None),
+        #    )
+
+        return columns, names
+
+    @property
+    def colnames(self):
+        try:
+            return self._colnames
+        except AttributeError:
+            self._colnames = [c.name for c in self.columns]
+            return self._colnames
+
+    def render(self, rows, *, numrows=None, total=None):
+        # We use a default format here.
+        header = [self.div, self.header, self.div]
+        rows = self._render_rows(rows)
+        rows = RenderingRows(rows, header, numrows)
+        yield from header
+        yield from rows
+        yield div
+        yield from rows.render_count(total)
+
+    def render_rows(self, rows, periodic=None, numrows=None):
+        rows = self._render_rows(rows)
+        return RenderingRows(rows, periodic, numrows)
+
+    def _render_rows(self, rows):
+        fmt = self.rowfmt
+        for row in rows:
+            values = row.render_values(self.colnames)
+            yield fmt.format(*values)
+
+    def _render_row(self, row):
+        values = row.render_values(self.colnames)
+        return self.rowfmt.format(*values)
+
+
+class RenderingRows:
+
+    def __init__(self, rows, periodic=None, numrows=None):
+        if not periodic:
+            periodic = None
+        elif isinstance(periodic, str):
+            periodic = [periodic]
+        if not numrows:
+            try:
+                numrows = len(rows)
+            except TypeError:
+                numrows = None
+        self.rows = iter(rows)
+        self.periodic = periodic
+        self.numrows = numrows
+
+        self.count = 0
+        self.pending = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.pending:
+            return self.pending.pop(0)
+        row = next(self.rows)
+        self.count += 1
+        if self.periodic:
+            if self.count % 25 == 0:
+                if not self.numrows or self.numrows - self.count >= 15:
+                    self.pending.extend(self.periodic)
+                    self.pending.append(row)
+                    return self.pending.pop(0)
+        return row
+
+    def render_count(self, total=None, label='matched'):
+        if total is None:
+            yield f'(total: {total})'
+        elif self.count == total:
+            yield f'(total: {total})'
+        else:
+            yield f'({label}: {self.count})'
+            yield f'(total:   {total})'
+
+
+class TableRow:
+
+    def __init__(self, data, render_value):
+        self.data = data
+        self.render_value = render_value
+        self._colnames = list(data)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self.data!r})'
+
+    def render_values(self, colnames=None):
+        if not colnames:
+            colnames = self._colnames
+        for colname in colnames:
+            if ',' in colname:
+                primary, _, secondary = colname.partition(',')
+                if self.data[primary] is None:
+                    if self.data[secondary] is not None:
+                        value = self.render_value(secondary)
+                        yield f'({secondary})'
+                        continue
+                value = self.render_value(primary)
+                yield f' {value} '
+            else:
+                yield self.render_value(colname)
 
 
 ##################################
@@ -108,6 +321,114 @@ def get_utc_datetime(timestamp=None, *, fail=True):
         #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
         hastime = False
     return timestamp, hastime
+
+
+##################################
+# OS utils
+
+def resolve_user(cfg, user=None):
+    if not user:
+        user = USER
+        if not user or user == 'benchmarking':
+            user = SUDO_USER
+            if not user:
+                raise Exception('could not determine user')
+    if not user.isidentifier():
+        raise ValueError(f'invalid user {user!r}')
+    return user
+
+
+def parse_bool_env_var(valstr, *, failunknown=False):
+    m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
+                 valstr.lower())
+    if not m:
+        if failunknown:
+            raise ValueError(f'unsupported env var bool value {valstr!r}')
+        return None
+    yes, no = m.groups()
+    return True if yes else False
+
+
+def get_bool_env_var(name, default=None, *, failunknown=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return parse_bool_env_var(value, failunknown=failunknown)
+
+
+def get_termwidth(*, nontty=1000, unknown=80):
+    if os.isatty(sys.stdout.fileno()):
+        try:
+            termsize = os.get_terminal_size()
+        except OSError:
+            return notty or 1000
+        else:
+            return termsize.columns
+    else:
+        return unknown or 80
+
+
+def _is_proc_running(pid):
+    if pid == PID:
+        return True
+    try:
+        if os.name == 'nt':
+            os.waitpid(pid, os.WNOHANG)
+        else:
+            os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # XXX Does this *always* mean there's a proc?
+        return True
+    else:
+        return True
+
+
+def run_fg(cmd, *args, cwd=None, env=None):
+    argv = [cmd, *args]
+    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
+    return subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8',
+        cwd=cwd,
+        env=env,
+    )
+
+
+def run_bg(argv, logfile=None, *, cwd=None, env=None):
+    if not argv:
+        raise ValueError('missing argv')
+    elif isinstance(argv, str):
+        if not argv.strip():
+            raise ValueError('missing argv')
+        cmd = argv
+    else:
+        cmd = ' '.join(shlex.quote(a) for a in argv)
+
+    if logfile:
+        logfile = quote_shell_str(logfile)
+        cmd = f'{cmd} >> {logfile}'
+    cmd = f'{cmd} 2>&1'
+
+    logger.debug('# running (background): %s', cmd)
+    #subprocess.run(cmd, shell=True)
+    subprocess.Popen(
+        cmd,
+        #creationflags=subprocess.DETACHED_PROCESS,
+        #creationflags=subprocess.CREATE_NEW_CONSOLE,
+        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        shell=True,
+        cwd=cwd,
+        env=env,
+    )
 
 
 ##################################
@@ -539,6 +860,27 @@ class LogSection(types.SimpleNamespace):
 ##################################
 # git utils
 
+GITHUB_REMOTE_URL = re.compile(r'''
+    ^(
+        (
+            https://github\.com/
+            ( [^/]+ )  # <https_org>
+            /
+            ( .* )  # <https_repo>
+            /?
+         )
+        |
+        (
+            git@github\.com:
+            ( [^/]+ )  # <ssh_org>
+            /
+            ( .* )  # <ssh_repo>
+            \.git
+         )
+    )$
+''', re.VERBOSE)
+
+
 def looks_like_git_commit(value):
     return bool(re.match(r'^[a-fA-F0-9]{4,40}$', value))
 
@@ -557,6 +899,8 @@ def looks_like_git_branch(value):
 
 
 def looks_like_git_remote(value):
+    if GITHUB_REMOTE_URL.match(value):
+        return True
     return looks_like_git_name(value)
 
 
@@ -659,44 +1003,95 @@ class GitHubTarget(types.SimpleNamespace):
         return dict(vars(self))
 
 
-class GitRefCandidates:
+class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
+
+    #__slots__ = ['_orig']
 
     @classmethod
-    def from_revision(cls, revision, branch, remote):
+    def from_raw(cls, raw):
+        if not raw:
+            raise NotImplementedError(raw)
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            raise NotImplementedError(raw)
+        elif hasattr(raw, 'items'):
+            orig = raw.pop('orig', None)
+            self = cls(**raw)
+            if orig:
+                self._orig = GitRefRequest.from_raw(orig)
+            return self
+        else:
+            return cls(*raw)
+
+    def __new__(cls, remote, branch, revision):
         if not revision:
             revision = None
+        elif revision == 'latest':
+            if not branch:
+                raise ValueError('missing branch')
         elif revision.upper() == 'HEAD':
+            if not branch:
+                raise ValueError('missing branch')
             revision = 'HEAD'
         elif not looks_like_git_ref(revision):
             raise ValueError(f'unsupported revision {revision!r}')
+
         if not branch:
             branch = None
         elif not looks_like_git_branch(branch):
             raise ValueError(f'unsupported branch {branch!r}')
+
         if not remote:
             remote = None
         elif not looks_like_git_remote(remote):
             raise ValueError(f'unsupported remote {remote!r}')
 
+        return super().__new__(cls, remote, branch, revision)
+
+    @property
+    def orig(self):
+        return getattr(self, '_orig', None)
+
+    def as_jsonable(self):
+        data = self._asdict()
+        if self.orig:
+            data['orig'] = self.orig.as_jsonable()
+        return data
+
+
+class GitRefCandidates:
+
+    @classmethod
+    def from_revision(cls, revision, branch, remote):
+        orig = GitRefRequest(remote, branch, revision)
+        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote)
+        self = cls()
+        for req in reqs:
+            self._add_req(req, orig)
+        return self
+
+    @classmethod
+    def _from_revision(cls, revision, branch, remote):
         if branch == 'main':
-            refs = cls._from_main(revision, remote)
+            reqs = cls._from_main(revision, remote)
         elif remote == 'origin':
-            refs = cls._from_origin(revision, branch)
+            reqs = cls._from_origin(revision, branch)
         elif remote:
-            refs = cls._from_non_origin(revision, branch, remote)
+            reqs = cls._from_non_origin(revision, branch, remote)
         elif branch:  # no remote, maybe a revision
             # We know all remotes have release (version) branches.
-            refs = cls._from_version(revision, branch, 'origin', required=False)
-            if not refs:
+            reqs = cls._from_version(revision, branch, 'origin', required=False)
+            if not reqs:
                 # We don't bother trying to guess the remote at this point.
                 raise ValueError('missing remote for branch {branch!r}')
         elif revision:  # no remote or branch
-            refs = cls._from_origin(revision, branch, required=False)
-            if not refs:
+            reqs = cls._from_origin(revision, branch, required=False)
+            if not reqs:
                 raise ValueError(f'missing remote for revision {revision!r}')
         else:
-            refs = cls._from_main(revision, remote)
-        return cls(refs)
+            reqs = cls._from_main(revision, remote)
+        return reqs
 
     @classmethod
     def _from_main(cls, revision, remote):
@@ -757,9 +1152,9 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, None, revision)]
             else:
-                refs = cls._from_version(revision, None, remote, required=False)
-                if refs:
-                    return refs
+                reqs = cls._from_version(revision, None, remote, required=False)
+                if reqs:
+                    return reqs
                 if looks_like_git_branch(revision):
                     return [
                         (remote, None, revision),
@@ -808,48 +1203,61 @@ class GitRefCandidates:
                 (remote, verstr, 'latest' if revision == verstr else revision),
             ]
 
-    def __init__(self, refs):
-        self._refs = refs
+    def __init__(self, reqs=None):
+        self._reqs = []
+        for req in reqs or ():
+            self._add_req(req)
 
     def __repr__(self):
-        return f'{type(self).__name__}({self._refs})'
+        return f'{type(self).__name__}({self._reqs})'
 
     def __len__(self):
-        return len(self._refs)
+        return len(self._reqs)
 
     def __iter__(self):
-        yield from self._refs
+        yield from self._reqs
 
     def __getitem__(self, index):
-        return self._refs[index]
+        return self._reqs[index]
 
-    def find_ref(self):
+    def _add_req(self, req, orig=None):
+        req = GitRefRequest.from_raw(req)
+        if orig:
+            if req.orig:
+                raise NotImplementedError((orig, req.orig))
+            req._orig = GitRefRequest.from_raw(orig)
+        self._reqs.append(req)
+
+    def find_ref(self, new_ref=None):
+        if new_ref is None:
+            new_ref = GitRef
         by_remote = {}
-        for remote, branch, revision in self._refs:
+        for req in self._reqs:
+            remote, branch, revision = req
             if remote not in by_remote:
                 by_remote[remote] = GitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
 
             match = self._find_ref(branch, revision, repo_refs)
             if match:
-                _branch, tag, commit, ref, kind = match
+                _branch, tag, commit, name = match
                 if branch and _branch != branch:
                     logger.warning(f'branch mismatch (wanted {branch}, found {_branch})')
                 else:
-                    assert ref, (commit, branch or _branch, remote)
-                    return GitRef(ref, None, commit, branch or _branch, remote)
+                    assert commit, (name, commit, branch or _branch, remote)
+                    return new_ref(remote, _branch, tag, commit, name, req)
         else:
             return None
 
     def _find_ref(self, branch, revision, repo_refs):
-        _branch = tag = commit = ref = kind = None
+        _branch = tag = commit = name = None
         if revision == 'HEAD':
             assert branch, self
             matched = repo_refs.match_branch(branch)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'branch'
-                ref = revision
+                assert _branch == branch, (branch, _branch)
+                name = _branch
             else:
                 logger.warning(f'branch {branch} not found')
         elif revision == 'latest':
@@ -858,9 +1266,8 @@ class GitRefCandidates:
             matched = repo_refs.match_latest_version(branch)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'tag'
-                ref = tag or branch
-                branch = _branch
+                name = tag or _branch
+                assert name, (matched, self)
             elif repo_refs.match_branch(branch):
                 logger.warning(f'latest tag for branch {branch} not found')
             else:
@@ -875,91 +1282,193 @@ class GitRefCandidates:
                     if not repo_refs.match_branch(branch):
                         logger.warning(f'branch {branch} not found')
                 commit = revision
-            if commit:
-                kind = 'commit'
-                ref = commit
+            name = None
         else:
+            # The other cases cover branches, so we only consider tags here.
             assert looks_like_git_tag(revision), (revision, self)
             matched = repo_refs.match_tag(revision)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'tag'
-                ref = tag
+                assert tag, (matched, self)
+                name = tag
         if not commit:
             return None
-        return _branch, tag, commit, ref, kind
+        return _branch, tag, commit, name
 
 
-class GitRef(namedtuple('GitRef', 'ref kind commit branch remote')):
+class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
+
+    # XXX Use requested.orig.revision instead of requested.revision?
 
     KINDS = {
         'commit',
         'tag',
         'branch',
-        'other',
     }
 
-    def __new__(cls, ref, kind, commit, branch, remote):
-        if not ref:
-            raise ValueError('missing ref')
-
-        if not kind:
-            if ref == commit:
-                kind = 'commit'
-            elif ref == branch:
-                kind = 'branch'
-            elif ref == 'HEAD':
-                kind = 'other'
-            elif looks_like_git_commit(ref):
-                kind = 'commit'
-                if not commit:
-                    commit = ref
-                elif ref != commit:
-                    raise ValueError(f'commit ref {ref!r} does not match commit {commit!r}')
-            elif looks_like_git_branch(ref):
-                kind = 'tag'
-            else:
-                raise ValueError('missing kind')
-        elif kind == 'commit':
-            if not commit:
-                commit = ref
-            elif ref != commit:
-                raise ValueError(f'commit ref {ref!r} does not match commit {commit!r}')
-        elif kind == 'tag':
-            if not looks_like_git_branch(ref):
-                raise ValueError(f'invalid tag {ref!r}')
-        elif kind == 'branch':
-            if not branch:
-                branch = ref
-            elif ref != branch:
-                raise ValueError(f'branch ref {ref!r} does not match branch {branch!r}')
-        elif kind == 'other':
-            if ref != 'HEAD':
-                raise NotImplementedError(ref)
+    @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            raise TypeError(raw)
+        elif hasattr(raw, 'items'):
+            if raw.get('requested'):
+                raw['requested'] = GitRefRequest.from_raw(raw['requested'])
+            return cls(**raw)
         else:
-            raise ValueError(f'unsupported kind {kind!r}')
+            remote, branch, tag, commit, name, requested = raw
+            requested = GitRefRequest.from_raw(requested) if requested else None
+            return cls(remote, branch, tag, commit, name, requested)
 
+    @classmethod
+    def resolve(cls, revision, branch, remote):
+        candidates = GitRefCandidates.from_revision(revision, branch, remote)
+        return candidates.find_ref(cls)
+
+    @classmethod
+    def from_values(cls, remote, branch, tag, commit,
+                    name=None, requested=None, kind=None):
+        if not remote:
+            # XXX Infer "origin" if branch is main or looks like a version?
+            raise ValueError('missing remote')
+        elif not looks_like_git_remote(remote):
+            raise ValueError(f'invalid remote {remote!r}')
+        if not branch:
+            branch = None
+        elif not looks_like_git_branch(branch):
+            raise ValueError(f'invalid branch {branch!r}')
+        if not tag:
+            tag = None
+        elif not looks_like_git_tag(tag):
+            raise ValueError(f'invalid tag {tag!r}')
         if not commit:
-            raise ValueError('missing commit')
+            if looks_like_git_commit(name):
+                commit = name
+                name = None
+            else:
+                raise ValueError('missing commit')
         elif not looks_like_git_commit(commit):
             raise ValueError(f'invalid commit {commit!r}')
-        if branch and not looks_like_git_branch(branch):
-            raise ValueError(f'invalid branch {branch!r}')
-        if remote and not looks_like_git_branch(remote):
-            raise ValueError(f'invalid remote {remote!r}')
+        if not name:
+            name = None
+        # We don't both validating name.
+        requested = GitRefRequest.from_raw(requested) if requested else None
 
-        self = super().__new__(
-            cls,
-            ref=ref,
-            kind=kind,
-            commit=commit,
-            branch=branch or None,
-            remote=remote or None,
-        )
-        return self
+        if kind == 'branch':
+            if not branch:
+                if not name or not looks_like_git_branch(name):
+                    raise ValueError('missing branch')
+                branch = name
+            elif not name:
+                name = branch
+            elif name != branch:
+                raise ValueError(f'branch mismatch ({name!r} != {branch!r})')
+        elif kind == 'tag':
+            if not tag:
+                if not name or not looks_like_git_tag(name):
+                    raise ValueError('missing tag')
+                tag = name
+            elif not name:
+                name = tag
+            elif name != tag:
+                raise ValueError(f'tag mismatch ({name!r} != {tag!r})')
+        elif kind == 'commit':
+            assert commit
+            if name:
+                if name != commit:
+                    raise ValueError(f'commit mismatch ({name} != {commit})')
+                name = None
+        elif kind:
+            raise NotImplementedError(kind)
+        else:
+            if not name:
+                if tag:
+                    name = tag
+                elif branch:
+                    name = branch
+                elif not commit:
+                    raise ValueError('missing commit')
+            elif name == 'HEAD':
+                # Tags and HEAD don't mix.
+                if branch:
+                    name = branch
+                else:
+                    raise ValueError('missing branch')
+            elif looks_like_git_commit(name):
+                if not commit:
+                    commit = name
+                elif name != commit:
+                    raise ValueError(f'commit mismatch ({name} != {commit})')
+                name = None
+            elif name == branch:
+                pass
+            elif name == tag:
+                pass
+            elif branch and not tag and looks_like_git_tag(name):
+                tag = name
+            else:
+                if not branch and not tag:
+                    raise ValueError('missing branch')
+                raise ValueError(f'unsupported name {name!r}')
+
+        return cls.__new__(cls, remote, branch, tag, commit, name, requested)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
 
     def __str__(self):
-        return self.commit
+        return self.name or self.commit
+
+    def _validate(self):
+        if not self.remote:
+            raise ValueError('missing remote')
+        elif not looks_like_git_branch(self.remote):
+            raise ValueError(f'invalid remote {self.remote!r}')
+        if self.branch and not looks_like_git_branch(self.branch):
+            raise ValueError(f'invalid branch {self.branch!r}')
+        if self.tag and not looks_like_git_tag(self.tag):
+            raise ValueError(f'invalid tag {self.tag!r}')
+        if not self.commit:
+            raise ValueError('missing commit')
+        elif not looks_like_git_commit(self.commit):
+            raise ValueError(f'invalid commit {self.commit!r}')
+
+        if self.name:
+            if self.name not in (self.branch, self.tag):
+                raise ValueError(f'unsupported name {self.name!r}')
+        elif not self.commit:
+            raise ValueError('missing name')
+
+        if self.requested:
+            if not isinstance(self.requested, GitRefRequest):
+                raise TypeError(self.requested)
+            # XXX Compare self.requested to the other fields?
+
+    @property
+    def kind(self):
+        if not self.name:
+            return 'commit'
+        elif self.name == self.branch:
+            return 'branch'
+        elif self.name == self.tag:
+            return 'tag'
+        else:
+            raise NotImplementedError(self.name)
+
+    @property
+    def full(self):
+        ref = self.name
+        if not ref and self.commit:
+            # XXX Is this an okay shortening?
+            ref = self.commit[:12]
+        return f'{self.remote}:{ref}' if self.remote else ref
+
+    def as_jsonable(self):
+        data = self._asdict()
+        if self.requested:
+            data['requested'] = self.requested.as_jsonable()
+        return data
 
 
 class GitRefs(types.SimpleNamespace):
@@ -1053,7 +1562,13 @@ class GitRefs(types.SimpleNamespace):
         if branch:
             commit = self.branches.get(branch)
             if commit:
-                return branch, None, commit
+                # It might match a tag too.
+                for tag, actual in self.tags.items():
+                    assert actual
+                    if actual == commit:
+                        return branch, tag, commit
+                else:
+                    return branch, None, commit
         return None
 
     def match_tag(self, ref): 
@@ -1078,7 +1593,13 @@ class GitRefs(types.SimpleNamespace):
             if ref in self.tags:
                 commit = self.tags[ref]
                 assert commit
-                return None, ref, commit
+                # It might also match a branch.
+                for branch, actual in self.branches.items():
+                    assert actual
+                    if actual == commit:
+                        return branch, ref, actual
+                else:
+                    return None, ref, commit
         # No tags matched!
         return None
 
@@ -1113,11 +1634,6 @@ class GitRefs(types.SimpleNamespace):
                 return branch, tag, commit
         # Fall back to the branch.
         return self.match_branch(branch)
-
-
-def resolve_git_revision_and_branch(revision, branch, remote):
-    candidates = GitRefCandidates.from_revision(revision, branch, remote)
-    return candidates.find_ref()
 
 
 ##################################
@@ -1642,18 +2158,6 @@ def as_jsonable(data):
             raise TypeError(f'unsupported data {data!r}')
 
 
-def resolve_user(cfg, user=None):
-    if not user:
-        user = USER
-        if not user or user == 'benchmarking':
-            user = SUDO_USER
-            if not user:
-                raise Exception('could not determine user')
-    if not user.isidentifier():
-        raise ValueError(f'invalid user {user!r}')
-    return user
-
-
 class VersionRelease(namedtuple('VersionRelease', 'level serial')):
 
     LEVELS = {
@@ -1870,87 +2374,6 @@ class Version(namedtuple('Version', 'major minor micro release')):
         return f'v{self.major}.{self.minor}{micro}{release}'
 
 
-def parse_bool_env_var(valstr, *, failunknown=False):
-    m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
-                 valstr.lower())
-    if not m:
-        if failunknown:
-            raise ValueError(f'unsupported env var bool value {valstr!r}')
-        return None
-    yes, no = m.groups()
-    return True if yes else False
-
-
-def get_bool_env_var(name, default=None, *, failunknown=False):
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return parse_bool_env_var(value, failunknown=failunknown)
-
-
-def _is_proc_running(pid):
-    if pid == PID:
-        return True
-    try:
-        if os.name == 'nt':
-            os.waitpid(pid, os.WNOHANG)
-        else:
-            os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        # XXX Does this *always* mean there's a proc?
-        return True
-    else:
-        return True
-
-
-def run_fg(cmd, *args, cwd=None, env=None):
-    argv = [cmd, *args]
-    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
-    return subprocess.run(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding='utf-8',
-        cwd=cwd,
-        env=env,
-    )
-
-
-def run_bg(argv, logfile=None, *, cwd=None, env=None):
-    if not argv:
-        raise ValueError('missing argv')
-    elif isinstance(argv, str):
-        if not argv.strip():
-            raise ValueError('missing argv')
-        cmd = argv
-    else:
-        cmd = ' '.join(shlex.quote(a) for a in argv)
-
-    if logfile:
-        logfile = quote_shell_str(logfile)
-        cmd = f'{cmd} >> {logfile}'
-    cmd = f'{cmd} 2>&1'
-
-    logger.debug('# running (background): %s', cmd)
-    #subprocess.run(cmd, shell=True)
-    subprocess.Popen(
-        cmd,
-        #creationflags=subprocess.DETACHED_PROCESS,
-        #creationflags=subprocess.CREATE_NEW_CONSOLE,
-        #creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-        shell=True,
-        cwd=cwd,
-        env=env,
-    )
-
-
 class MetadataError(ValueError):
     def __init__(self, msg=None):
         super().__init__(msg or 'metadata-related error')
@@ -1982,16 +2405,49 @@ class Metadata(types.SimpleNamespace):
     _extra = None
 
     @classmethod
-    def load(cls, resfile):
-        if isinstance(resfile, str):
-            filename = resfile
-            with open(filename) as resfile:
-                return cls.load(resfile)
-        data = json.load(resfile)
-        return cls.from_jsonable(data)
+    def load(cls, metafile, *, optional=None, fail=True):
+        if optional is None:
+            optional = cls.OPTIONAL or ()
+        filename = getattr(metafile, 'name', metafile)
+        try:
+            data = cls._load_data(metafile)
+            kwargs, extra = cls._extract_kwargs(data, optional, filename)
+            self = cls(**kwargs)
+        except Exception:
+            logger.debug(f'failed to load metadata from {filename!r}')
+            if not fail:
+                return None
+            raise  # re-raise
+        if extra:
+            self._extra = extra
+        return self
 
     @classmethod
-    def from_jsonable(cls, data):
+    def from_jsonable(cls, data, *, optional=None):
+        if optional is None:
+            optional = cls.OPTIONAL or ()
+        kwargs, extra = cls._extract_kwargs(data, optional, None)
+        self = cls(**kwargs)
+        if extra:
+            self._extra = extra
+        return self
+
+    @classmethod
+    def _load_data(cls, metafile, fail=False):
+        if isinstance(metafile, str):
+            filename = metafile
+            with open(filename) as metafile:
+                return cls._load_data(metafile)
+        try:
+            return json.load(metafile)
+        except json.decoder.JSONDecodeError as exc:
+            if fail:
+                raise  # re-raise
+            logger.error(f'failed to decode metadata in {metafile.name}: {exc}')
+            return None
+
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
         kwargs = {}
         extra = {}
         unused = set(cls.FIELDS or ())
@@ -2001,17 +2457,11 @@ class Metadata(types.SimpleNamespace):
                 unused.remove(field)
             elif not field.startswith('_'):
                 extra[field] = data[field]
-        unused -= set(cls.OPTIONAL or ())
+        unused -= set(optional)
         if unused:
             missing = ', '.join(sorted(unused))
             raise ValueError(f'missing required data (fields: {missing})')
-        if kwargs:
-            self = cls(**kwargs)
-            if extra:
-                self._extra = extra
-        else:
-            self = cls(**extra)
-        return self
+        return (kwargs, extra) if kwargs else (extra, None)
 
     def refresh(self, resfile):
         """Reload from the given file."""

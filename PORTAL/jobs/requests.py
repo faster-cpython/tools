@@ -3,6 +3,7 @@ import configparser
 import datetime
 import json
 import logging
+import os.path
 import re
 import textwrap
 import types
@@ -370,13 +371,23 @@ class BenchCompileRequest(Request):
 
     FIELDS = Request.FIELDS + [
         'ref',
+        'pyperformance_ref',  # XXX Should be required instead of ref.
         'remote',
+        'revision',
         'branch',
         'benchmarks',
         'optimize',
         'debug',
     ]
-    OPTIONAL = ['remote', 'branch', 'benchmarks', 'optimize', 'debug']
+    OPTIONAL = [
+        'pyperformance_ref',
+        'remote',
+        'revision',
+        'branch',
+        'benchmarks',
+        'optimize',
+        'debug',
+    ]
 
     CPYTHON = _utils.GitHubTarget.origin('python', 'cpython')
     PYPERFORMANCE = _utils.GitHubTarget.origin('python', 'pyperformance')
@@ -388,11 +399,28 @@ class BenchCompileRequest(Request):
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
 
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
+        # This is a backward-compatibility shim.
+        try:
+            return super()._extract_kwargs(data, optional, filename)
+        except ValueError:
+            optional = [*optional, 'datadir', 'date', 'ref', 'user']
+            kwargs, extra = super()._extract_kwargs(data, optional, filename)
+            reqid = RequestID.from_raw(kwargs['id'])
+            kwargs.setdefault('datadir', os.path.dirname(filename))
+            kwargs.setdefault('date', reqid.date.isoformat())
+            kwargs.setdefault('user', reqid.user)
+            kwargs.setdefault('ref', 'deadbeef')
+            return kwargs, extra
+
     def __init__(self,
                  id,
                  datadir,
                  ref,
+                 pyperformance_ref=None,
                  remote=None,
+                 revision=None,
                  branch=None,
                  benchmarks=None,
                  optimize=True,
@@ -403,23 +431,46 @@ class BenchCompileRequest(Request):
             raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
             raise ValueError(branch)
-        if not _utils.looks_like_git_ref(ref):
-            raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
+
+        if isinstance(ref, str):
+            fast = True
+            if fast:
+                tag = commit = None
+                if ref and _utils.looks_like_git_commit(ref):
+                    commit = ref
+                try:
+                    ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                except ValueError:
+                    # backward compatibility
+                    GR = _utils.GitRef
+                    ref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
+            else:
+                refstr = ref
+                ref = _utils.GitRef.resolve(revision, branch, remote)
+                if refstr not in (ref.commit, ref.branch, ref.tag, None):
+                    raise ValueError(f'unexpected ref {refstr!r}')
+        else:
+            ref = _utils.GitRef.from_raw(ref)
+
         self.ref = ref
-        self.remote = remote
-        self.branch = branch
+        self.pyperformance_ref = pyperformance_ref or str(ref)
+        self.remote = ref.remote
+        self.revision = revision
+        self.branch = ref.branch
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
 
     @property
     def cpython(self):
-        if self.remote:
-            return self.CPYTHON.fork(self.remote, ref=self.ref)
+        # XXX Pass self.ref directly?
+        ref = str(self.ref)
+        if self.remote and self.remote != 'origin':
+            return self.CPYTHON.fork(self.remote, ref=ref)
         else:
-            return self.CPYTHON.copy(ref=self.ref)
+            return self.CPYTHON.copy(ref=ref)
 
     @property
     def result(self):
@@ -436,6 +487,18 @@ class BenchCompileResult(Result):
         'pyperformance_results',
         'pyperformance_results_orig',
     ]
+
+    @classmethod
+    def _extract_kwargs(cls, data, optional, filename):
+        # This is a backward-compatibility shim.
+        try:
+            return super()._extract_kwargs(data, optional, filename)
+        except ValueError:
+            optional = [*optional, 'reqdir', 'history']
+            kwargs, extra = super()._extract_kwargs(data, optional, filename)
+            kwargs.setdefault('reqdir', os.path.dirname(filename))
+            kwargs.setdefault('history', None)
+            return kwargs, extra
 
     def __init__(self, reqid, reqdir, *,
                  status=None,
@@ -468,19 +531,23 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
         benchmarks = (b.strip() for b in benchmarks)
         benchmarks = [b for b in benchmarks if b]
 
-    ref = _utils.resolve_git_revision_and_branch(revision, branch, remote)
+    ref = _utils.GitRef.resolve(revision, branch, remote)
     if not ref:
         raise Exception(f'could not find ref for {(remote, branch, revision)}')
+    assert ref.commit, repr(ref)
+
+#    if not branch and ref.branch == revision:
+#        revision = 'latest'
+    assert branch or ref.branch == revision, (branch, ref)
 
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
-        # XXX Add a "commit" field and use "ref" for the actual ref.
-        ref=ref.commit,
-        #commit=ref.commit,
-        #ref=ref.ref or ref.commit,
-        remote=ref.remote,
-        branch=ref.branch,
+        ref=ref,
+        pyperformance_ref=ref.commit,
+        remote=remote or None,
+        revision=revision or None,
+        branch=branch or None,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),
@@ -559,9 +626,10 @@ def build_compile_script(req, bfiles, fake=None):
     _utils.check_shell_str(req.pyperformance.remote)
     _utils.check_shell_str(req.pyston_benchmarks.url)
     _utils.check_shell_str(req.pyston_benchmarks.remote)
-    _utils.check_shell_str(req.branch, required=False)
-    maybe_branch = req.branch or ''
-    _utils.check_shell_str(req.ref)
+    branch = req.branch
+    _utils.check_shell_str(branch, required=False)
+    maybe_branch = branch or ''
+    ref = _utils.check_shell_str(req.pyperformance_ref)
 
     cpython_repo = _utils.quote_shell_str(bfiles.repos.cpython)
     pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
@@ -642,12 +710,12 @@ def build_compile_script(req, bfiles, fake=None):
         branch='{maybe_branch}'
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git -C {cpython_repo} checkout -b {req.branch or '$branch'} --track {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout -b {branch or '$branch'} --track {req.cpython.remote}/{branch or '$branch'}
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git -C {cpython_repo} checkout {req.branch or '$branch'}
-                git -C {cpython_repo} reset --hard {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout {branch or '$branch'}
+                git -C {cpython_repo} reset --hard {req.cpython.remote}/{branch or '$branch'}
                 )
             fi
         fi
@@ -695,7 +763,7 @@ def build_compile_script(req, bfiles, fake=None):
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
                 {bfiles.request.pyperformance_config} \\
-                {req.ref} {maybe_branch} \\
+                {ref} {maybe_branch} \\
                 2>&1 | tee {bfiles.work.logfile}
             )
             exitcode=$?

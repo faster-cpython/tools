@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import os.path
@@ -371,10 +372,14 @@ class Job:
 
     @property
     def request(self):
-        return Request(self._reqid, str(self.fs))
+        return Request(self._reqid, str(self._fs))
 
     def load_result(self):
-        return Result.load(self._fs.result.metadata)
+        if self.reqid.kind == 'compile-bench':
+            res_cls = _requests.BenchCompileResult
+        else:
+            raise NotImplementedError(self.reqid.kind)
+        return res_cls.load(self._fs.result.metadata)
 
     def get_status(self, *, fail=True):
         try:
@@ -627,7 +632,7 @@ class Job:
             _utils.run_bg(f'{script} > {logfile}', env=env)
             return 0
         else:
-            proc = subprocess.run([self.fs.portal_script], env=env)
+            proc = subprocess.run([self._fs.portal_script], env=env)
             return proc.returncode
 
     def get_pid(self):
@@ -654,7 +659,7 @@ class Job:
             status = self.get_status()
             if status in Result.FINISHED:
                 raise JobNeverStartedError(reqid)
-            if checkssh and os.path.exists(self.fs.ssh_okay):
+            if checkssh and os.path.exists(self._fs.ssh_okay):
                 break
             time.sleep(0.01)
             pid = self.get_pid()
@@ -664,9 +669,9 @@ class Job:
         pid = self.wait_until_started()
         try:
             if pid:
-                _utils.tail_file(self.fs.logfile, lines, follow=pid)
+                _utils.tail_file(self._fs.logfile, lines, follow=pid)
             elif lines:
-                _utils.tail_file(self.fs.logfile, lines, follow=False)
+                _utils.tail_file(self._fs.logfile, lines, follow=False)
         except KeyboardInterrupt:
             # XXX Prompt to cancel the job?
             return
@@ -684,6 +689,94 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
+    def as_row(self):  # XXX Move to JobSummary.
+        try:
+            res = self.load_result()
+        except FileNotFoundError:
+            status = started = finished = None
+        else:
+            status = res.status or 'created'
+            started, _ = res.started
+            finished, _ = res.finished
+        if not started:
+            elapsed = None
+        else:
+            end = finished
+            if not end:
+                end, _ = _utils.get_utc_datetime()
+            elapsed = end - started
+        date = (started, self.reqid.date)
+        if not any(date):
+            date = None
+        fullref = ref = remote = branch = tag = commit = None
+        if self.kind is RequestID.KIND.BENCHMARKS:
+            req_cls = _requests.BenchCompileRequest
+            req = req_cls.load(self._fs.request.metadata, fail=False)
+            if req:
+                ref = req.ref
+                assert not isinstance(ref, str), repr(ref)
+                fullref = ref.full
+                remote = ref.remote
+                branch = ref.branch
+                tag = ref.tag
+                commit = ref.commit
+        else:
+            raise NotImplementedError(self.kind)
+        data = {
+            'reqid': self.reqid,
+            'status': status,
+            'date': date,
+            'created': self.reqid.date,
+            'started': started,
+            'finished': finished,
+            'elapsed': elapsed,
+            'ref': ref,
+            'fullref': fullref,
+            'remote': remote,
+            'branch': branch,
+            'tag': tag,
+            'commit': commit,
+        }
+
+        def render_value(colname):
+            raw = data[colname]
+            if raw is None:
+                if colname == 'status':
+                    rendered = '???'
+                else:
+                    rendered = '---'
+            elif colname == 'reqid':
+                rendered = str(raw)
+            elif colname == 'status':
+                rendered = str(raw)
+            elif colname in ('created', 'started', 'finished'):
+                rendered = f'{raw:%Y-%m-%d %H:%M:%S}'
+            elif colname == 'date':
+                started, created = raw
+                if started:
+                    rendered = f' {started:%Y-%m-%d %H:%M:%S} '
+                else:
+                    rendered = f'({created:%Y-%m-%d %H:%M:%S})'
+            elif colname == 'elapsed':
+                fmt = "%d:%02d:%02d"
+                fmt = f' {fmt} ' if finished else f'({fmt})'
+                # The following is mostly borrowed from Timedelta.__str__().
+                mm, ss = divmod(raw.seconds, 60)
+                hh, mm = divmod(mm, 60)
+                hh += 24 * raw.days
+                rendered = fmt % (hh, mm, ss)
+            elif colname in 'ref':
+                rendered = str(raw)
+            elif isinstance(raw, str):
+                rendered = raw
+            else:
+                raise NotImplementedError(colname)
+            return rendered
+
+        return _utils.TableRow(data, render_value)
+
+    # XXX Add as_summary().
+
     def render(self, fmt=None):
         if not fmt:
             fmt = 'summary'
@@ -700,57 +793,6 @@ class Job:
             yield from self._render_summary('verbose')
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
-
-    def render_for_row(self, attrs):
-        if isinstance(attrs, str):
-            raise NotImplementedError(attrs)
-        try:
-            res = self.load_result()
-        except FileNotFoundError:
-            status = started = finished = None
-        else:
-            status = res.status or 'created'
-            started, _ = res.started
-            finished, _ = res.finished
-
-        def render_attr(name):
-            if name == 'reqid':
-                return str(self.reqid)
-            elif name == 'status':
-                return str(status) if status else '???'
-            elif name == 'created':
-                return f'{self.reqid.date:%Y-%m-%d %H:%M:%S}'
-            elif name == 'started':
-                return f'{started:%Y-%m-%d %H:%M:%S}' if started else '---'
-            elif name == 'finished':
-                return f'{finished:%Y-%m-%d %H:%M:%S}' if finished else '---'
-            elif name == 'duration':
-                if not started:
-                    return '---'
-                elif not finished:
-                    return '...'
-                else:
-                    duration = finished - started
-                    # The following is mostly borrowed from Timedelta.__str__().
-                    mm, ss = divmod(duration.seconds, 60)
-                    hh, mm = divmod(mm, 60)
-                    hh += 24 * duration.days
-                    return "%d:%02d:%02d" % (hh, mm, ss)
-            else:
-                raise NotImplementedError(name)
-
-        for name in attrs:
-            if ',' in name:
-                primary, _, secondary = name.partition(',')
-                primary = render_attr(primary)
-                if primary in ('---', '...', '???'):
-                    secondary = render_attr(secondary)
-                    if secondary not in ('---', '...', '???'):
-                        yield f'({secondary})'
-                        continue
-                yield f' {primary} '
-            else:
-                yield render_attr(name)
 
     def _render_summary(self, fmt=None):
         if not fmt:
@@ -853,7 +895,7 @@ class Jobs:
         self._worker = Worker.from_config(cfg, self.FS)
 
     def __str__(self):
-        return self.fs.root
+        return self._fs.root
 
     @property
     def cfg(self):
@@ -873,7 +915,7 @@ class Jobs:
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self.fs)
+            self._queue = _queue.JobQueue.from_fstree(self._fs)
             return self._queue
 
     def iter_all(self):
@@ -910,7 +952,7 @@ class Jobs:
 
     def activate(self, reqid):
         logger.debug('# staging request')
-        _stage_request(reqid, self.fs)
+        _stage_request(reqid, self._fs)
         logger.debug('# done staging request')
         job = self._get(reqid)
         job.set_status('active')
