@@ -701,7 +701,7 @@ class Job:
             if not end:
                 end, _ = _utils.get_utc_datetime()
             elapsed = end - started
-        ref = remote = branch = tag = commit = requested = None
+        fullref = ref = remote = branch = tag = commit = None
         if self.kind is RequestID.KIND.BENCHMARKS:
             req_cls = _requests.BenchCompileRequest
             try:
@@ -710,11 +710,12 @@ class Job:
                 pass
             else:
                 ref = req.ref
-                remote = req.remote
-                branch = req.branch
-                tag = req.tag
-                commit = req.commit
-                requested = req.requested_revision
+                assert not isinstance(ref, str), repr(ref)
+                fullref = ref.full
+                remote = ref.remote
+                branch = ref.branch
+                tag = ref.tag
+                commit = ref.commit
         else:
             raise NotImplementedError(self.kind)
         data = {
@@ -725,11 +726,11 @@ class Job:
             'finished': finished,
             'elapsed': elapsed,
             'ref': ref,
+            'fullref': fullref,
             'remote': remote,
             'branch': branch,
             'tag': tag,
             'commit': commit,
-            'requested': requested,
         }
 
         def render_value(colname):
@@ -754,17 +755,9 @@ class Job:
                 hh += 24 * raw.days
                 rendered = fmt % (hh, mm, ss)
             elif colname in 'ref':
-                rendered = ref
-            elif colname in 'remote':
-                rendered = remote
-            elif colname in 'branch':
-                rendered = branch
-            elif colname in 'tag':
-                rendered = tag
-            elif colname in 'commit':
-                rendered = commit
-            elif colname in 'requested':
-                rendered = ref
+                rendered = str(raw)
+            elif isinstance(raw, str):
+                rendered = raw
             else:
                 raise NotImplementedError(colname)
             return rendered

@@ -371,22 +371,18 @@ class BenchCompileRequest(Request):
     FIELDS = Request.FIELDS + [
         'ref',
         'pyperformance_ref',  # XXX Should be required instead of ref.
-        'requested_revision',
-        'commit',
-        'tag',
-        'branch',
         'remote',
+        'revision',
+        'branch',
         'benchmarks',
         'optimize',
         'debug',
     ]
     OPTIONAL = [
         'pyperformance_ref',
-        'requested_revision',
-        'commit',
-        'tag',
-        'branch',
         'remote',
+        'revision',
+        'branch',
         'benchmarks',
         'optimize',
         'debug',
@@ -407,11 +403,9 @@ class BenchCompileRequest(Request):
                  datadir,
                  ref,
                  pyperformance_ref=None,
-                 requested_revision=None,
-                 commit=None,
-                 tag=None,
-                 branch=None,
                  remote=None,
+                 revision=None,
+                 branch=None,
                  benchmarks=None,
                  optimize=True,
                  debug=False,
@@ -426,27 +420,35 @@ class BenchCompileRequest(Request):
 
         super().__init__(id, datadir, **kwargs)
 
-        if not pyperformance_ref:
-            pyperformance_ref = ref
-            requested_revision = ref
+        if not isinstance(ref, _utils.GitRef):
+            fast = True
+            if fast:
+                tag = None
+                commit = ref if _utils.looks_like_git_commit(ref) else None
+                ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+            else:
+                refstr = ref
+                ref = _utils.GitRef.resolve(revision, branch, remote)
+                if refstr not in (ref.commit, ref.branch, ref.tag, None):
+                    raise ValueError(f'unexpected ref {refstr!r}')
 
         self.ref = ref
-        self.pyperformance_ref = pyperformance_ref
-        self.requested_revision = requested_revision
-        self.commit = commit
-        self.tag = tag
-        self.branch = branch
+        self.pyperformance_ref = pyperformance_ref or str(ref)
         self.remote = remote
+        self.revision = revision
+        self.branch = branch
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
 
     @property
     def cpython(self):
+        # XXX Pass self.ref directly?
+        ref = str(self.ref)
         if self.remote:
-            return self.CPYTHON.fork(self.remote, ref=self.ref)
+            return self.CPYTHON.fork(self.remote, ref=ref)
         else:
-            return self.CPYTHON.copy(ref=self.ref)
+            return self.CPYTHON.copy(ref=ref)
 
     @property
     def result(self):
@@ -495,24 +497,23 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
         benchmarks = (b.strip() for b in benchmarks)
         benchmarks = [b for b in benchmarks if b]
 
-    ref = _utils.resolve_git_revision_and_branch(revision, branch, remote)
+    ref = _utils.GitRef.resolve(revision, branch, remote)
     if not ref:
         raise Exception(f'could not find ref for {(remote, branch, revision)}')
+    assert ref.commit, repr(ref)
 
-    if not branch and ref.branch == revision:
-        revision = 'latest'
+#    if not branch and ref.branch == revision:
+#        revision = 'latest'
+    assert branch or ref.branch == revision, (branch, ref)
 
     meta = BenchCompileRequest(
         id=reqid,
         datadir=workdir,
-        # XXX Preserve "latest" and "HEAD".
-        ref=ref.ref or ref.commit,
+        ref=ref,
         pyperformance_ref=ref.commit,
-        requested_revision=revision,
-        commit=ref.commit,
-        tag=ref.ref if ref.kind == 'tag' else None,
-        branch=ref.branch,
-        remote=ref.remote,
+        remote=remote or None,
+        revision=revision or None,
+        branch=branch or None,
         benchmarks=benchmarks or None,
         optimize=bool(optimize),
         debug=bool(debug),

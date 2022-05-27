@@ -982,7 +982,7 @@ class GitHubTarget(types.SimpleNamespace):
 
 class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
 
-    __slots__ = ['_orig']
+    #__slots__ = ['_orig']
 
     @classmethod
     def from_raw(cls, raw):
@@ -1032,7 +1032,6 @@ class GitRefCandidates:
         self = cls()
         for req in reqs:
             self._add_req(req, orig)
-        self._add_raw(raw, reqs)
         return self
 
     @classmethod
@@ -1167,9 +1166,9 @@ class GitRefCandidates:
                 (remote, verstr, 'latest' if revision == verstr else revision),
             ]
 
-    def __init__(self, reqs):
+    def __init__(self, reqs=None):
         self._reqs = []
-        for req in reqs:
+        for req in reqs or ():
             self._add_req(req)
 
     def __repr__(self):
@@ -1192,7 +1191,9 @@ class GitRefCandidates:
             req._orig = GitRefRequest.from_raw(orig)
         self._reqs.append(req)
 
-    def find_ref(self):
+    def find_ref(self, new_ref=None):
+        if new_ref is None:
+            new_ref = GitRef
         by_remote = {}
         for req in self._reqs:
             remote, branch, revision = req
@@ -1202,25 +1203,24 @@ class GitRefCandidates:
 
             match = self._find_ref(branch, revision, repo_refs)
             if match:
-                _branch, tag, commit, ref, kind = match
+                _branch, tag, commit, name = match
                 if branch and _branch != branch:
                     logger.warning(f'branch mismatch (wanted {branch}, found {_branch})')
                 else:
-                    # XXX Preserve req.
-                    assert ref, (commit, branch or _branch, remote)
-                    return GitRef(ref, None, commit, branch or _branch, remote)
+                    assert commit, (name, commit, branch or _branch, remote)
+                    return new_ref(remote, _branch, tag, commit, name, req)
         else:
             return None
 
     def _find_ref(self, branch, revision, repo_refs):
-        _branch = tag = commit = ref = kind = None
+        _branch = tag = commit = name = None
         if revision == 'HEAD':
             assert branch, self
             matched = repo_refs.match_branch(branch)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'branch'
-                ref = revision
+                assert _branch == branch, (branch, _branch)
+                name = _branch
             else:
                 logger.warning(f'branch {branch} not found')
         elif revision == 'latest':
@@ -1229,9 +1229,8 @@ class GitRefCandidates:
             matched = repo_refs.match_latest_version(branch)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'tag'
-                ref = tag or branch
-                branch = _branch
+                name = tag or _branch
+                assert name, (matched, self)
             elif repo_refs.match_branch(branch):
                 logger.warning(f'latest tag for branch {branch} not found')
             else:
@@ -1246,91 +1245,173 @@ class GitRefCandidates:
                     if not repo_refs.match_branch(branch):
                         logger.warning(f'branch {branch} not found')
                 commit = revision
-            if commit:
-                kind = 'commit'
-                ref = commit
+            name = None
         else:
+            # The other cases cover branches, so we only consider tags here.
             assert looks_like_git_tag(revision), (revision, self)
             matched = repo_refs.match_tag(revision)
             if matched:
                 _branch, tag, commit = matched
-                kind = 'tag'
-                ref = tag
+                assert tag, (matched, self)
+                name = tag
         if not commit:
             return None
-        return _branch, tag, commit, ref, kind
+        return _branch, tag, commit, name
 
 
-class GitRef(namedtuple('GitRef', 'ref kind commit branch remote')):
+class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
+
+    # XXX Use requested.orig.revision instead of requested.revision?
 
     KINDS = {
         'commit',
         'tag',
         'branch',
-        'other',
     }
 
-    def __new__(cls, ref, kind, commit, branch, remote):
-        if not ref:
-            raise ValueError('missing ref')
+    @classmethod
+    def resolve(cls, revision, branch, remote):
+        candidates = GitRefCandidates.from_revision(revision, branch, remote)
+        return candidates.find_ref(cls)
 
-        if not kind:
-            if ref == commit:
-                kind = 'commit'
-            elif ref == branch:
-                kind = 'branch'
-            elif ref == 'HEAD':
-                kind = 'other'
-            elif looks_like_git_commit(ref):
-                kind = 'commit'
-                if not commit:
-                    commit = ref
-                elif ref != commit:
-                    raise ValueError(f'commit ref {ref!r} does not match commit {commit!r}')
-            elif looks_like_git_branch(ref):
-                kind = 'tag'
-            else:
-                raise ValueError('missing kind')
-        elif kind == 'commit':
-            if not commit:
-                commit = ref
-            elif ref != commit:
-                raise ValueError(f'commit ref {ref!r} does not match commit {commit!r}')
-        elif kind == 'tag':
-            if not looks_like_git_branch(ref):
-                raise ValueError(f'invalid tag {ref!r}')
-        elif kind == 'branch':
-            if not branch:
-                branch = ref
-            elif ref != branch:
-                raise ValueError(f'branch ref {ref!r} does not match branch {branch!r}')
-        elif kind == 'other':
-            if ref != 'HEAD':
-                raise NotImplementedError(ref)
-        else:
-            raise ValueError(f'unsupported kind {kind!r}')
-
+    @classmethod
+    def from_values(cls, remote, branch, tag, commit,
+                    name=None, requested=None, kind=None):
+        if not remote:
+            # XXX Infer "origin" if branch is main or looks like a version?
+            raise ValueError('missing remote')
+        elif not looks_like_git_branch(remote):
+            raise ValueError(f'invalid remote {remote!r}')
+        if not branch:
+            branch = None
+        elif not looks_like_git_branch(branch):
+            raise ValueError(f'invalid branch {branch!r}')
+        if not tag:
+            tag = None
+        elif not looks_like_git_tag(tag):
+            raise ValueError(f'invalid tag {tag!r}')
         if not commit:
-            raise ValueError('missing commit')
+            if looks_like_git_commit(name):
+                commit = name
+                name = None
+            else:
+                raise ValueError('missing commit')
         elif not looks_like_git_commit(commit):
             raise ValueError(f'invalid commit {commit!r}')
-        if branch and not looks_like_git_branch(branch):
-            raise ValueError(f'invalid branch {branch!r}')
-        if remote and not looks_like_git_branch(remote):
-            raise ValueError(f'invalid remote {remote!r}')
+        if not name:
+            name = None
+        # We don't both validating name.
+        requested = GitRefRequest.from_raw(requested) if requested else None
 
-        self = super().__new__(
-            cls,
-            ref=ref,
-            kind=kind,
-            commit=commit,
-            branch=branch or None,
-            remote=remote or None,
-        )
-        return self
+        if kind == 'branch':
+            if not branch:
+                if not name or not looks_like_git_branch(name):
+                    raise ValueError('missing branch')
+                branch = name
+            elif not name:
+                name = branch
+            elif name != branch:
+                raise ValueError(f'branch mismatch ({name!r} != {branch!r})')
+        elif kind == 'tag':
+            if not tag:
+                if not name or not looks_like_git_tag(name):
+                    raise ValueError('missing tag')
+                tag = name
+            elif not name:
+                name = tag
+            elif name != tag:
+                raise ValueError(f'tag mismatch ({name!r} != {tag!r})')
+        elif kind == 'commit':
+            assert commit
+            if name:
+                if name != commit:
+                    raise ValueError(f'commit mismatch ({name} != {commit})')
+                name = None
+        elif kind:
+            raise NotImplementedError(kind)
+        else:
+            if not name:
+                if tag:
+                    name = tag
+                elif branch:
+                    name = branch
+                elif not commit:
+                    raise ValueError('missing commit')
+            elif name == 'HEAD':
+                # Tags and HEAD don't mix.
+                if branch:
+                    name = branch
+                else:
+                    raise ValueError('missing branch')
+            elif looks_like_git_commit(name):
+                if not commit:
+                    commit = name
+                elif name != commit:
+                    raise ValueError(f'commit mismatch ({name} != {commit})')
+                name = None
+            elif name == branch:
+                pass
+            elif name == tag:
+                pass
+            elif branch and not tag and looks_like_git_tag(name):
+                tag = name
+            else:
+                if not branch and not tag:
+                    raise ValueError('missing branch')
+                raise ValueError(f'unsupported name {name!r}')
+
+        return cls.__new__(cls, remote, branch, tag, commit, name, requested)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
 
     def __str__(self):
-        return self.commit
+        return self.name or self.commit
+
+    def _validate(self):
+        if not self.remote:
+            raise ValueError('missing remote')
+        elif not looks_like_git_branch(self.remote):
+            raise ValueError(f'invalid remote {self.remote!r}')
+        if self.branch and not looks_like_git_branch(self.branch):
+            raise ValueError(f'invalid branch {self.branch!r}')
+        if self.tag and not looks_like_git_tag(self.tag):
+            raise ValueError(f'invalid tag {self.tag!r}')
+        if not self.commit:
+            raise ValueError('missing commit')
+        elif not looks_like_git_commit(self.commit):
+            raise ValueError(f'invalid commit {self.commit!r}')
+
+        if self.name:
+            if self.name not in (self.branch, self.tag):
+                raise ValueError(f'unsupported name {self.name!r}')
+        elif not self.commit:
+            raise ValueError('missing name')
+
+        if self.requested:
+            if not isinstance(self.requested, GitRefRequest):
+                raise TypeError(self.requested)
+            # XXX Compare self.requested to the other fields?
+
+    @property
+    def kind(self):
+        if not self.name:
+            return 'commit'
+        elif self.name == self.branch:
+            return 'branch'
+        elif self.name == self.tag:
+            return 'tag'
+        else:
+            raise NotImplementedError(self.name)
+
+    @property
+    def full(self):
+        ref = str(self)
+        return f'{self.remote}:{ref}' if self.remote else ref
+
+    def as_jsonable(self, *, withextra=False):
+        data = super().as_jsonable(withextra=withextra)
+        ...
 
 
 class GitRefs(types.SimpleNamespace):
@@ -1496,11 +1577,6 @@ class GitRefs(types.SimpleNamespace):
                 return branch, tag, commit
         # Fall back to the branch.
         return self.match_branch(branch)
-
-
-def resolve_git_revision_and_branch(revision, branch, remote):
-    candidates = GitRefCandidates.from_revision(revision, branch, remote)
-    return candidates.find_ref()
 
 
 ##################################

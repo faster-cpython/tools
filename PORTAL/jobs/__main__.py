@@ -43,11 +43,11 @@ def cmd_list(jobs, selections=None, columns=None):
         ('finished', None, 19, None),
         #('started,created', 'started / (created)', 21, None),
         ('ref', None, 40, None),
+        ('fullref', 'full ref', 60, None),
         ('remote', None, 20, None),
         ('branch', None, 25, None),
         ('tag', None, 10, None),
         ('commit', None, 40, None),
-        ('requested', None, 40, None),
     ]
     if not columns:
         columns = 'reqid,status,elapsed,created,started'
