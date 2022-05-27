@@ -705,6 +705,9 @@ class Job:
             if not end:
                 end, _ = _utils.get_utc_datetime()
             elapsed = end - started
+        date = (started, self.reqid.date)
+        if not any(date):
+            date = None
         fullref = ref = remote = branch = tag = commit = None
         if self.kind is RequestID.KIND.BENCHMARKS:
             req_cls = _requests.BenchCompileRequest
@@ -722,6 +725,7 @@ class Job:
         data = {
             'reqid': self.reqid,
             'status': status,
+            'date': date,
             'created': self.reqid.date,
             'started': started,
             'finished': finished,
@@ -747,6 +751,12 @@ class Job:
                 rendered = str(raw)
             elif colname in ('created', 'started', 'finished'):
                 rendered = f'{raw:%Y-%m-%d %H:%M:%S}'
+            elif colname == 'date':
+                started, created = raw
+                if started:
+                    rendered = f' {started:%Y-%m-%d %H:%M:%S} '
+                else:
+                    rendered = f'({created:%Y-%m-%d %H:%M:%S})'
             elif colname == 'elapsed':
                 fmt = "%d:%02d:%02d"
                 fmt = f' {fmt} ' if finished else f'({fmt})'
