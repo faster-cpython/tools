@@ -1429,7 +1429,10 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
 
     @property
     def full(self):
-        ref = str(self)
+        ref = self.name
+        if not ref and self.commit:
+            # XXX Is this an okay shortening?
+            ref = self.commit[:12]
         return f'{self.remote}:{ref}' if self.remote else ref
 
     def as_jsonable(self, *, withextra=False):
