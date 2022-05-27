@@ -1013,6 +1013,14 @@ class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
             raise NotImplementedError(raw)
         elif isinstance(raw, cls):
             return raw
+        elif isinstance(raw, str):
+            raise NotImplementedError(raw)
+        elif hasattr(raw, 'items'):
+            orig = raw.pop('orig', None)
+            self = cls(**raw)
+            if orig:
+                self._orig = GitRefRequest.from_raw(orig)
+            return self
         else:
             return cls(*raw)
 
@@ -1044,6 +1052,12 @@ class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
     @property
     def orig(self):
         return getattr(self, '_orig', None)
+
+    def as_jsonable(self):
+        data = self._asdict()
+        if self.orig:
+            data['orig'] = self.orig.as_jsonable()
+        return data
 
 
 class GitRefCandidates:
@@ -1293,6 +1307,21 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
     }
 
     @classmethod
+    def from_raw(cls, raw):
+        if isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            raise TypeError(raw)
+        elif hasattr(raw, 'items'):
+            if raw.get('requested'):
+                raw['requested'] = GitRefRequest.from_raw(raw['requested'])
+            return cls(**raw)
+        else:
+            remote, branch, tag, commit, name, requested = raw
+            requested = GitRefRequest.from_raw(requested) if requested else None
+            return cls(remote, branch, tag, commit, name, requested)
+
+    @classmethod
     def resolve(cls, revision, branch, remote):
         candidates = GitRefCandidates.from_revision(revision, branch, remote)
         return candidates.find_ref(cls)
@@ -1435,9 +1464,11 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
             ref = self.commit[:12]
         return f'{self.remote}:{ref}' if self.remote else ref
 
-    def as_jsonable(self, *, withextra=False):
-        data = super().as_jsonable(withextra=withextra)
-        ...
+    def as_jsonable(self):
+        data = self._asdict()
+        if self.requested:
+            data['requested'] = self.requested.as_jsonable()
+        return data
 
 
 class GitRefs(types.SimpleNamespace):

@@ -431,16 +431,15 @@ class BenchCompileRequest(Request):
             raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
             raise ValueError(branch)
-        if not _utils.looks_like_git_ref(ref):
-            raise ValueError(ref)
 
         super().__init__(id, datadir, **kwargs)
 
-        if not isinstance(ref, _utils.GitRef):
+        if isinstance(ref, str):
             fast = True
             if fast:
-                tag = None
-                commit = ref if _utils.looks_like_git_commit(ref) else None
+                tag = commit = None
+                if ref and _utils.looks_like_git_commit(ref):
+                    commit = ref
                 try:
                     ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
                 except ValueError:
@@ -452,12 +451,14 @@ class BenchCompileRequest(Request):
                 ref = _utils.GitRef.resolve(revision, branch, remote)
                 if refstr not in (ref.commit, ref.branch, ref.tag, None):
                     raise ValueError(f'unexpected ref {refstr!r}')
+        else:
+            ref = _utils.GitRef.from_raw(ref)
 
         self.ref = ref
         self.pyperformance_ref = pyperformance_ref or str(ref)
-        self.remote = remote
+        self.remote = ref.remote
         self.revision = revision
-        self.branch = branch
+        self.branch = ref.branch
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
@@ -466,7 +467,7 @@ class BenchCompileRequest(Request):
     def cpython(self):
         # XXX Pass self.ref directly?
         ref = str(self.ref)
-        if self.remote:
+        if self.remote and self.remote != 'origin':
             return self.CPYTHON.fork(self.remote, ref=ref)
         else:
             return self.CPYTHON.copy(ref=ref)
@@ -625,8 +626,9 @@ def build_compile_script(req, bfiles, fake=None):
     _utils.check_shell_str(req.pyperformance.remote)
     _utils.check_shell_str(req.pyston_benchmarks.url)
     _utils.check_shell_str(req.pyston_benchmarks.remote)
-    _utils.check_shell_str(req.branch, required=False)
-    maybe_branch = req.branch or ''
+    branch = req.branch
+    _utils.check_shell_str(branch, required=False)
+    maybe_branch = branch or ''
     ref = _utils.check_shell_str(req.pyperformance_ref)
 
     cpython_repo = _utils.quote_shell_str(bfiles.repos.cpython)
@@ -708,12 +710,12 @@ def build_compile_script(req, bfiles, fake=None):
         branch='{maybe_branch}'
         if [ -n "$branch" ]; then
             if ! ( set -x
-                git -C {cpython_repo} checkout -b {req.branch or '$branch'} --track {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout -b {branch or '$branch'} --track {req.cpython.remote}/{branch or '$branch'}
             ); then
                 echo "It already exists; resetting to the right target."
                 ( set -x
-                git -C {cpython_repo} checkout {req.branch or '$branch'}
-                git -C {cpython_repo} reset --hard {req.cpython.remote}/{req.branch or '$branch'}
+                git -C {cpython_repo} checkout {branch or '$branch'}
+                git -C {cpython_repo} reset --hard {req.cpython.remote}/{branch or '$branch'}
                 )
             fi
         fi
