@@ -50,7 +50,7 @@ def cmd_list(jobs, selections=None, columns=None):
         ('commit', None, 40, None),
     ]
     if not columns:
-        columns = 'reqid,status,elapsed,created,started'
+        columns = 'reqid,status,elapsed,fullref,created,started'
     table = TableSpec.from_columns(colspecs, columns)
 
     rows = (j.as_row() for j in selected)
