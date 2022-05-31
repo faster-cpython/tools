@@ -538,7 +538,7 @@ def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
 
 #    if not branch and ref.branch == revision:
 #        revision = 'latest'
-    assert branch or ref.branch == revision, (branch, ref)
+    assert branch or ref.branch != revision, (branch, ref)
 
     meta = BenchCompileRequest(
         id=reqid,
