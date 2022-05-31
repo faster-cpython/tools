@@ -164,6 +164,13 @@ class Request(_utils.Metadata):
     def date(self):
         return self.id.date
 
+    @property
+    def fs(self):
+        try:
+            return self._fs
+        except AttributeError:
+            raise NotImplementedError
+
     def as_jsonable(self, *, withextra=False):
         data = super().as_jsonable(withextra=withextra)
         data['id'] = str(data['id'])
@@ -308,6 +315,13 @@ class Result(_utils.Metadata):
             return self._request
 
     @property
+    def fs(self):
+        try:
+            return self._fs
+        except AttributeError:
+            raise NotImplementedError
+
+    @property
     def started(self):
         history = list(self.history)
         if not history:
@@ -353,6 +367,9 @@ class Result(_utils.Metadata):
         self.history.append(
             (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
         )
+
+    def upload(self, req):
+        raise NotImplementedError
 
     def as_jsonable(self, *, withextra=False):
         data = super().as_jsonable(withextra=withextra)
@@ -517,6 +534,41 @@ class BenchCompileResult(Result):
                 del data[field]
         data['reqid'] = str(data['reqid'])
         return data
+
+    def upload(self):
+        # XXX Move some of this up to Request.upload()?
+        req = self.request
+        if not isinstance(req, BenchCompileRequest):
+            raise NotImplementedError
+        source = self.fs.pyperformance_results
+        if not os.path.exists(source):
+            logger.error(f'results for {self.reqid} not found ({source})')
+            return
+        name = self._get_upload_name()
+        target = f'benchmark-results/{name}'
+        url = f'https://github.com/faster-cpython/ideas/tree/main/{target}'
+        logger.info(f'uploading {self.reqid} to {url}...')
+
+        # Make sure the local repo is ready.
+        reporoot = os.path.join(HOME, 'faster-cpython-ideas')
+        if os.path.exists(reporoot):
+            _utils.git('checkout', 'main', cwd=reporoot)
+            #_utils.git('pull', cwd=reporoot)
+            _utils.git('reset', '--hard', 'origin/main', cwd=reporoot)
+        else:
+            remote = 'https://github.com/faster-cpython/ideas'
+            _utils.git('clone', remote, reporoot)
+
+        # Copy the results file, commit it to main, and upload it.
+        shutil.copyfile(source, f'{reporoot}/{target}')
+        _utils.git('add', target, cwd=reporoot)
+        _utils.git('commit', '-m', 'Add Benchmark Results', cwd=reporoot)
+        _utils.git('push', cwd=reporoot)
+
+        logger.info('...done uploading')
+
+    def _get_upload_name(self):
+        raise NotImplementedError
 
 
 def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
