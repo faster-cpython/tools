@@ -406,9 +406,9 @@ class BenchCompileRequest(Request):
         'debug',
     ]
 
-    CPYTHON = _utils.GitHubTarget.origin('python', 'cpython')
-    PYPERFORMANCE = _utils.GitHubTarget.origin('python', 'pyperformance')
-    PYSTON_BENCHMARKS = _utils.GitHubTarget.origin('pyston', 'python-macrobenchmarks')
+    CPYTHON = _utils.GitHubTarget.from_origin('python', 'cpython')
+    PYPERFORMANCE = _utils.GitHubTarget.from_origin('python', 'pyperformance')
+    PYSTON_BENCHMARKS = _utils.GitHubTarget.from_origin('pyston', 'python-macrobenchmarks')
 
     #pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
     pyperformance = PYPERFORMANCE.copy('5b6142e')  # will be 1.0.5 release
