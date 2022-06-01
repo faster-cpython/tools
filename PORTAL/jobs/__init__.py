@@ -379,8 +379,9 @@ class Job:
             req_cls = _requests.BenchCompileRequest
         else:
             raise NotImplementedError(self.reqid.kind)
-        req = req_cls.load(self._fs.request.metadata)
-        req._fs = self._fs.request
+        req = req_cls.load(self._fs.request.metadata,
+                           fs=self._fs.request,
+                           )
         return req
 
     def load_result(self):
@@ -388,8 +389,10 @@ class Job:
             res_cls = _requests.BenchCompileResult
         else:
             raise NotImplementedError(self.reqid.kind)
-        res = res_cls.load(self._fs.result.metadata)
-        res._fs = self._fs.result
+        res = res_cls.load(self._fs.result.metadata,
+                           fs=self._fs.result,
+                           request=(lambda *a, **k: self.load_request()),
+                           )
         return res
 
     def get_status(self, *, fail=True):
@@ -701,10 +704,10 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def upload_result(self):
-        req = self.load_request()
+        storage = _requests.FasterCPythonResults()
         res = self.load_result()
-        res._request = req
-        res.upload()
+        # We upload directly.
+        storage.add(res.pyperf, branch='main', split=True, push=True)
 
     def as_row(self):  # XXX Move to JobSummary.
         try:

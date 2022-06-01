@@ -1,9 +1,12 @@
 from collections import namedtuple
 import configparser
 import datetime
+import gzip
+import hashlib
 import json
 import logging
 import os.path
+import platform
 import re
 import textwrap
 import types
@@ -123,6 +126,13 @@ class Request(_utils.Metadata):
         except KeyError:
             raise ValueError(f'unsupported kind {kind!r}')
 
+    @classmethod
+    def load(cls, reqfile, *, fs=None, **kwargs):
+        self = super().load(reqfile, **kwargs)
+        if fs:
+            self._fs = fs
+        return self
+
     def __init__(self, id, datadir, *,
                  # These are ignored (duplicated by id):
                  kind=None, user=None, date=None,
@@ -241,6 +251,17 @@ class Result(_utils.Metadata):
         else:
             raise _utils.InvalidMetadataError(source=metafile)
 
+    @classmethod
+    def load(cls, resfile, *, fs=None, request=None, **kwargs):
+        self = super().load(resfile, **kwargs)
+        if fs:
+            self._fs = fs
+        if callable(request):
+            self._get_request = request
+        elif request:
+            self._request = request
+        return self
+
     def __init__(self, reqid, reqdir, status=STATUS.CREATED, history=None):
         if not reqid:
             raise ValueError('missing reqid')
@@ -311,7 +332,8 @@ class Result(_utils.Metadata):
         try:
             return self._request
         except AttributeError:
-            self._request = Request(self.reqid, self.reqdir)
+            get_request = getattr(self, '_get_request', Request)
+            self._request = get_request(self.reqid, self.reqdir)
             return self._request
 
     @property
@@ -320,6 +342,11 @@ class Result(_utils.Metadata):
             return self._fs
         except AttributeError:
             raise NotImplementedError
+
+    @property
+    def host(self):
+        # XXX This will need to support other hosts.
+        return 'fc_linux'
 
     @property
     def started(self):
@@ -490,6 +517,28 @@ class BenchCompileRequest(Request):
             return self.CPYTHON.copy(ref=ref)
 
     @property
+    def release(self):
+        if self.remote == 'origin':
+            if not self.branch:
+                raise NotImplementedError
+            elif self.branch == 'main':
+                release = 'main'
+            elif _utils.Version.parse(self.branch):
+                tag = self.ref.tag
+                if tag:
+                    ver = _utils.Version.parse(tag)
+                    if not ver:
+                        raise NotImplementedError(tag)
+                    release = str(ver)
+                else:
+                    raise NotImplementedError
+            else:
+                raise NotImplementedError(self.branch)
+        else:
+            raise NotImplementedError(self.remote)
+        return release
+
+    @property
     def result(self):
         return BenchCompileResult(self.id, self.reqdir)
 
@@ -519,56 +568,25 @@ class BenchCompileResult(Result):
 
     def __init__(self, reqid, reqdir, *,
                  status=None,
-                 pyperformance_results=None,
-                 pyperformance_results_orig=None,
+                 #pyperformance_results=None,
+                 #pyperformance_results_orig=None,
                  **kwargs
                  ):
         super().__init__(reqid, reqdir, status, **kwargs)
-        self.pyperformance_results = pyperformance_results
-        self.pyperformance_results_orig = pyperformance_results_orig
+        #self.pyperformance_results = pyperformance_results
+        #self.pyperformance_results_orig = pyperformance_results_orig
 
-    def as_jsonable(self, *, withextra=False):
-        data = super().as_jsonable(withextra=withextra)
-        for field in ['pyperformance_results', 'pyperformance_results_orig']:
-            if not data[field]:
-                del data[field]
-        data['reqid'] = str(data['reqid'])
-        return data
-
-    def upload(self):
-        # XXX Move some of this up to Request.upload()?
-        req = self.request
-        if not isinstance(req, BenchCompileRequest):
-            raise NotImplementedError
-        source = self.fs.pyperformance_results
-        if not os.path.exists(source):
-            logger.error(f'results for {self.reqid} not found ({source})')
-            return
-        name = self._get_upload_name()
-        target = f'benchmark-results/{name}'
-        url = f'https://github.com/faster-cpython/ideas/tree/main/{target}'
-        logger.info(f'uploading {self.reqid} to {url}...')
-
-        # Make sure the local repo is ready.
-        reporoot = os.path.join(HOME, 'faster-cpython-ideas')
-        if os.path.exists(reporoot):
-            _utils.git('checkout', 'main', cwd=reporoot)
-            #_utils.git('pull', cwd=reporoot)
-            _utils.git('reset', '--hard', 'origin/main', cwd=reporoot)
-        else:
-            remote = 'https://github.com/faster-cpython/ideas'
-            _utils.git('clone', remote, reporoot)
-
-        # Copy the results file, commit it to main, and upload it.
-        shutil.copyfile(source, f'{reporoot}/{target}')
-        _utils.git('add', target, cwd=reporoot)
-        _utils.git('commit', '-m', 'Add Benchmark Results', cwd=reporoot)
-        _utils.git('push', cwd=reporoot)
-
-        logger.info('...done uploading')
-
-    def _get_upload_name(self):
-        raise NotImplementedError
+    @property
+    def pyperf(self):
+        try:
+            return self._pyperf
+        except AttributeError:
+            filename = self.fs.pyperformance_results
+            self._pyperf = PyperfResults.from_file(filename,
+                                                   host=self.host,
+                                                   source=self.request.release,
+                                                   )
+            return self._pyperf
 
 
 def resolve_bench_compile_request(reqid, workdir, remote, revision, branch,
@@ -863,3 +881,277 @@ def build_compile_script(req, bfiles, fake=None):
 
         #rm -f {bfiles.work.pidfile}
     '''[1:-1])
+
+
+##################################
+# pyperformance helpers
+
+class PyperfResults:
+
+    @classmethod
+    def from_file(cls, filename, host=None, source=None):
+        if not filename:
+            raise ValueError('missing filename')
+        data = cls._read(filename)
+        self = cls(data, filename, host, source)
+        return self
+
+    @classmethod
+    def _read(cls, filename):
+        if filename.endswith('.json.gz'):
+            _open = gzip.open
+        else:
+            raise NotImplementedError(filename)
+        with _open(filename) as infile:
+            return json.load(infile)
+
+    @classmethod
+    def _get_os_name(cls, metadata=None):
+        if metadata:
+            platform = metadata['platform'].lower()
+            if 'linux' in platform:
+                return 'linux'
+            elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
+                return 'mac'
+            elif 'win' in platform:
+                return 'windows'
+            else:
+                raise NotImplementedError(platform)
+        else:
+            if sys.platform == 'win32':
+                return 'windows'
+            elif sys.paltform == 'linux':
+                return 'linux'
+            elif sys.platform == 'darwin':
+                return 'mac'
+            else:
+                raise NotImplementedError(sys.platform)
+
+    @classmethod
+    def _get_arch(cls, metadata=None):
+        if metadata:
+            platform = metadata['platform'].lower()
+            if 'x86_64' in platform:
+                return 'x86_64'
+            elif 'amd64' in platform:
+                return 'amd64'
+
+            procinfo = metadata['cpu_model_name'].lower()
+            if 'aarch64' in procinfo:
+                return 'arm64'
+            elif 'arm' in procinfo:
+                if '64' in procinfo:
+                    return 'arm64'
+                else:
+                    return 'arm32'
+            elif 'intel' in procinfo:
+                return 'x86_64'
+            else:
+                raise NotImplementedError((platform, procinfo))
+        else:
+            uname = _platform.uname()
+            machine = uname.machine.lower()
+            if machine in ('amd64', 'x86_64'):
+                return machine
+            elif machine == 'aarch64':
+                return 'arm64'
+            elif 'arm' in machine:
+                return 'arm'
+            else:
+                raise NotImplementedError(machine)
+
+    def __init__(self, data, filename=None, host=None, source=None):
+        if data:
+            self._set_data(data)
+        elif not filename:
+            raise ValueError('missing filename')
+        self.filename = filename or None
+        if host:
+            self._host = host
+        self.source = source
+
+    def _set_data(self, data):
+        if hasattr(self, '_data'):
+            raise Exception('already set')
+        # XXX Validate?
+        if data['version'] == '1.0':
+            self._data = data
+        else:
+            raise NotImplementedError(data['version'])
+
+    @property
+    def data(self):
+        try:
+            return self._data
+        except AttributeError:
+            data = self._read(self.filename)
+            self._set_data(data)
+            return self._data
+
+    @property
+    def metadata(self):
+        return self.data['metadata']
+
+    @property
+    def host(self):
+        try:
+            return self._host
+        except AttributeError:
+            metadata = self.metadata
+            # We could use metadata['hostname'] but that doesn't
+            # make a great label in the default case.
+            host = self._get_os_name(metadata)
+            arch = self._get_arch(metadata)
+            if arch in ('arm32', 'arm64'):
+                host += '-arm'
+            # Ignore everything else.
+            return host
+            return self._host
+
+    @property
+    def implementation(self):
+        return 'cpython'
+
+    @property
+    def compat_id(self):
+        return self._get_compat_id()
+
+    def _get_compat_id(self, *, short=True):
+        metadata = self.metadata
+        data = [
+            metadata['hostname'],
+            metadata['platform'],
+            metadata.get('perf_version'),
+            metadata['performance_version'],
+            metadata['cpu_model_name'],
+            metadata.get('cpu_freq'),
+            metadata['cpu_config'],
+            metadata.get('cpu_affinity'),
+        ]
+
+        h = hashlib.sha256()
+        for value in data:
+            if not value:
+                continue
+            h.update(value.encode('utf-8'))
+        compat = h.hexdigest()
+        if short:
+            compat = compat[:12]
+        return compat
+
+    def get_upload_name(self):
+        # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
+        # for details on this filename format.
+        metadata = self.metadata
+        commit = metadata.get('commit_id')
+        if not commit:
+            raise NotImplementedError
+        compat = self._get_compat_id()
+        source = self.source or 'main'
+        implname = self.implementation
+        host = self.host
+        name = f'{implname}-{source}-{commit[:10]}-{host}-{compat}'
+        #if suite and suite != 'pyperformance':
+        #    name f'{name}-{suite}'
+        return name
+
+
+class PyperfResultsStorage:
+
+    def add(self, results, *, unzipped=True):
+        raise NotImplementedError
+
+
+class PyperfResultsRepo(PyperfResultsStorage):
+
+    BRANCH = 'add-benchmark-results'
+
+    def __init__(self, root, remote=None, datadir=None):
+        if root:
+            root = os.path.abspath(root)
+        if remote:
+            if isinstance(remote, str):
+                remote = _utils.GitHubTarget.resolve(remote, root)
+            elif not isinstance(remote, _utils.GitHubTarget):
+                raise TypeError(f'unsupported remote {remote!r}')
+            root = remote.ensure_local(root)
+        else:
+            if root:
+                if not os.path.exists(root):
+                    raise FileNotFoundError(root)
+                #_utils.verify_git_repo(root)
+            else:
+                raise ValueError('missing root')
+            remote = None
+        self.root = root
+        self.remote = remote
+        self.datadir = datadir or None
+
+    def git(self, *args):
+        ec, text = _utils.git(*args, cwd=self.root)
+        if ec:
+            raise NotImplementedError((ec, text))
+        return text
+
+    def add(self, results, *,
+            branch=None,
+            unzipped=True,
+            split=True,
+            push=True,
+            ):
+        if not isinstance(results, PyperfResults):
+            raise NotImplementedError(results)
+        source = results.filename
+        if not os.path.exists(source):
+            logger.error(f'results not found at {source}')
+            return
+        name = results.get_upload_name()
+        reltarget = f'{name}.json'
+        if self.datadir:
+            reltarget = f'{self.datadir}/{reltarget}'
+        if not unzipped:
+            reltarget += '.gz'
+        target = os.path.join(self.root, reltarget)
+
+        logger.info(f'adding results {source} as {target}...')
+        self._prepare_repo(branch)
+        if unzipped:
+            data = results.data
+            print(target)
+            with open(target, 'w') as outfile:
+                json.dump(data, outfile, indent=2)
+        else:
+            shutil.copyfile(source, target)
+        self.git('add', reltarget)
+        self.git('commit', '-m', f'Add Benchmark Results ({name})')
+        logger.info('...done adding')
+
+        if push:
+            raise Exception
+            self._upload(reltarget)
+
+    def _prepare_repo(self, branch=None):
+        if not branch:
+            branch = self.BRANCH
+        if self.remote:
+            self.remote.ensure_local(self.root)
+        self.git('checkout', '-B', branch)
+
+    def _upload(self, reltarget):
+        if not self.remote:
+            raise Exception('missing remote')
+        url = f'{self.remote.url}/tree/main/{reltarget}'
+        logger.info(f'uploading results to {url}...')
+        self.git('push', self.remote.push_url)
+        logger.info('...done uploading')
+
+
+class FasterCPythonResults(PyperfResultsRepo):
+
+    REMOTE = _utils.GitHubTarget.from_origin('faster-cpython', 'ideas', ssh=True)
+    DATADIR = 'benchmark-results'
+
+    def __init__(self, root=None, remote=None):
+        if not remote:
+            remote = self.REMOTE
+        super().__init__(root, remote, self.DATADIR)
