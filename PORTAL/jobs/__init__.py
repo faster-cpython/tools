@@ -703,11 +703,19 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
-    def upload_result(self):
+    def upload_result(self, author=None):
         storage = _requests.FasterCPythonResults()
         res = self.load_result()
         # We upload directly.
-        storage.add(res.pyperf, branch='main', split=True, push=True)
+        storage.add(
+            res.pyperf,
+            branch='main',
+            author=author,
+            unzipped=True,
+            split=True,
+            #push=True,
+            push=False,
+        )
 
     def as_row(self):  # XXX Move to JobSummary.
         try:

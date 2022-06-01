@@ -1195,14 +1195,15 @@ class PyperfResultsRepo(PyperfResultsStorage):
         self.remote = remote
         self.datadir = datadir or None
 
-    def git(self, *args):
-        ec, text = _utils.git(*args, cwd=self.root)
+    def git(self, *args, cfg=None):
+        ec, text = _utils.git(*args, cwd=self.root, cfg=cfg)
         if ec:
             raise NotImplementedError((ec, text))
         return text
 
     def add(self, results, *,
             branch=None,
+            author=None,
             unzipped=True,
             split=True,
             push=True,
@@ -1226,6 +1227,24 @@ class PyperfResultsRepo(PyperfResultsStorage):
         if self.remote:
             self.remote.ensure_local(self.root)
 
+        authorargs = ()
+        cfg = {}
+        if not author:
+            pass
+        elif isinstance(author, str):
+            parsed = _utils.parse_email_address(author)
+            if not parsed:
+                raise ValueError(f'invalid author {author!r}')
+            name, email = parsed
+            if not name:
+                name = '???'
+                author = f'??? <{author}>'
+            cfg['user.name'] = name
+            cfg['user.email'] = email
+            #authorargs = ('--author', author)
+        else:
+            raise NotImplementedError(author)
+
         logger.info(f'adding results {source}...')
         for suite in by_suite:
             suite_results = by_suite[suite]
@@ -1247,7 +1266,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
             else:
                 shutil.copyfile(source, target)
             self.git('add', reltarget)
-            self.git('commit', '-m', f'Add Benchmark Results ({name})')
+            msg = f'Add Benchmark Results ({name})'
+            self.git('commit', *authorargs, '-m', msg, cfg=cfg)
         logger.info('...done adding')
 
         if push:

@@ -218,9 +218,9 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         jobs.ensure_next()
 
 
-def cmd_upload(jobs, reqid):
+def cmd_upload(jobs, reqid, author=None):
     job = jobs.get(reqid)
-    job.upload_result()
+    job.upload_result(author)
 
 
 # internal
@@ -839,6 +839,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
                      help='(default: the currently running job, if any)')
 
     sub = add_cmd('upload', help='Upload benchmark results to the public data store')
+    if add_hidden:
+        sub.add_argument('--author')
     sub.add_argument('reqid')
 
     # XXX Also add export and import?
