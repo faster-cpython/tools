@@ -929,8 +929,22 @@ def looks_like_git_ref(value):
         return False
 
 
-def git(*args, cwd=HOME, GIT=shutil.which('git')):
-    proc = run_fg(GIT, *args, cwd=cwd)
+def git(cmd, *args, cwd=HOME, cfg=None, GIT=shutil.which('git')):
+    env = dict(os.environ)
+    preargs = []
+    if cfg:
+        for name, value in cfg.items():
+            if value is None:
+                raise NotImplementedError
+            value = str(value)
+            preargs.extend(['-c', f'{name}={value}'])
+            if name == 'user.name':
+                env['GIT_AUTHOR_NAME'] = value
+                env['GIT_COMMITTER_NAME'] = value
+            elif name == 'user.email':
+                env['GIT_AUTHOR_EMAIL'] = value
+                env['GIT_COMMITTER_EMAIL'] = value
+    proc = run_fg(GIT, *preargs, cmd, *args, cwd=cwd, env=env)
     return proc.returncode, proc.stdout
 
 
