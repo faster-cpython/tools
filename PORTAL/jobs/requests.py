@@ -520,7 +520,8 @@ class BenchCompileRequest(Request):
     def release(self):
         if self.remote == 'origin':
             if not self.branch:
-                raise NotImplementedError
+                release = 'main'
+                #raise NotImplementedError
             elif self.branch == 'main':
                 release = 'main'
             elif _utils.Version.parse(self.branch):
