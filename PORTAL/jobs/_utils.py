@@ -1073,6 +1073,44 @@ class GitHubTarget(types.SimpleNamespace):
             branch = 'main'
         return f'{self.remote}/{branch}' if self.remote else branch
 
+    @property
+    def origin(self):
+        remote = vars(self)['remote']
+        if remote and remote == 'origin':
+            return self
+        elif not self.upstream:
+            return None  # unknown
+        else:
+            return self.upstream.origin
+
+    def ensure_local(self, reporoot=None):
+        remote = vars(self)['remote']
+        origin = self.origin or self
+        if reporoot:
+            reporoot = os.path.abspath(reporoot)
+        else:
+            reporoot = os.path.join(HOME, f'{origin.org}-{origin.project}')
+            #reporoot = os.path.join(HOME, self.project)
+        if os.path.exists(reporoot):
+            git('fetch', '--tags', 'origin', cwd=reporoot)
+            if remote and remote != 'origin':
+                git('fetch', '--tags', remote, cwd=reporoot)
+            ec, _ = git('checkout', 'main', cwd=reporoot)
+            if ec:
+                raise NotImplementedError
+            #git('pull', cwd=reporoot)
+            git('reset', '--hard', 'origin/main', cwd=reporoot)
+        else:
+            ec, _ = git('clone', origin.url, reporoot)
+            if ec:
+                raise NotImplementedError
+            if remote:
+                git('remote', 'add', '-f', '--tags', remote, self.url,
+                    cwd=reporoot)
+                git('remote', 'set-url', '--push', remote, self.push_url,
+                    cwd=reporoot)
+        return reporoot
+
     def copy(self, ref=None):
         return type(self)(
             org=self.org,
