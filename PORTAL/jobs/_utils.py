@@ -881,6 +881,14 @@ GITHUB_REMOTE_URL = re.compile(r'''
 ''', re.VERBOSE)
 
 
+def parse_github_url(value):
+    m = GITHUB_REMOTE_URL.match(value)
+    if not m:
+        return None
+    https_org, https_repo, ssh_org, ssh_repo = m
+    return (https_org or ssh_org, https_repo or ssh_repo)
+
+
 def looks_like_git_commit(value):
     return bool(re.match(r'^[a-fA-F0-9]{4,40}$', value))
 
@@ -929,10 +937,84 @@ def git(*args, cwd=HOME, GIT=shutil.which('git')):
 class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
-    def origin(cls, org, project):
-        return cls(org, project, remote='origin')
+    def from_origin(cls, org, project, *, ssh=False):
+        return cls(org, project, remote='origin', ssh=ssh)
 
-    def __init__(self, org, project, ref=None, remote=None, upstream=None):
+    @classmethod
+    def from_url(cls, url, remote=None, upstream=None):
+        m = GITHUB_REMOTE_URL.match(value)
+        if not m:
+            return None
+        https_org, https_repo, ssh_org, ssh_repo = m
+        org = https_org or ssh_org
+        project = https_repo or ssh_repo
+        ssh = bool(ssh_org)
+        ref = None
+        return cls(org, project, ref, remote, upstream, ssh=ssh)
+
+    @classmethod
+    def resolve(cls, remote, reporoot=None):
+        if not remote:
+            raise ValueError('missing remote')
+        if looks_like_git_name(remote):
+            if not reporoot:
+                raise ValueError('missing reporoot')
+            return cls._from_remote_name(remote, reporoot)
+        else:
+            if reporoot:
+                return cls.find(remote, reporoot)
+            else:
+                return cls.from_url(remote)
+
+    @classmethod
+    def from_remote_name(cls, remote, reporoot):
+        if not looks_like_git_name(remote):
+            raise ValueError(f'invalid remote {name!r}')
+        return cls._from_remote_name(remote, reporoot)
+
+    @classmethod
+    def find(cls, remote, reporoot, upstream=None):
+        if upstream and isinstance(upstream, str):
+            upstream = cls.resolve(upstream, reporoot)
+        self = cls.from_url(remote, upstream=upstream)
+        self.remote = cls._find(remote, reporoot)
+        if not self.remote:
+            raise Exception(f'no remote matching {remote} found')
+        if not upstream:
+            self.upstream = cls.from_remote_name('origin', reporoot)
+        return self
+
+    @classmethod
+    def _from_remote_name(cls, remote, reporoot):
+        ec, url = git('remote', 'get-url', remote, cwd=reporoot)
+        if ec:
+            return None
+        if remote == 'origin':
+            upstream = None
+        else:
+            upstream = cls._from_remote_name('origin', reporoot)
+        return cls.from_url(url, remote, upstream)
+
+    @classmethod
+    def _find(cls, remote, reporoot):
+        ec, text = git('remote', '-v', cwd=reporoot)
+        if ec:
+            raise NotImplementedError
+        for line in text.splitlines():
+            if line.endswith(' (fetch)'):
+                name, _url, _ = line.split()
+                if _url == remote:
+                    return name
+            elif line.endswith(' (pull)'):
+                pass
+            else:
+                raise NotImplementedError(line)
+        else:
+            return None
+
+    def __init__(self, org, project, ref=None, remote=None, upstream=None, *,
+                 ssh=False,
+                 ):
         check_name(org, loose=True)
         check_name(project, loose=True)
         if not ref:
@@ -949,6 +1031,7 @@ class GitHubTarget(types.SimpleNamespace):
             raise ValueError(remote)
         if upstream is not None and not isinstance(upstream, GitHubTarget):
             raise TypeError(upstream)
+        ssh = bool(ssh)
 
         kwargs = dict(locals())
         del kwargs['self']
@@ -962,6 +1045,24 @@ class GitHubTarget(types.SimpleNamespace):
             return remote
         return self.org if self.upstream else 'upstream'
 
+    remote_name = remote
+
+    @property
+    def url(self):
+        return f'https://github.com/{self.org}/{self.project}'
+
+    @property
+    def push_url(self):
+        if self.ssh:
+            return f'git@github.com:{self.org}/{self.project}.git'
+        else:
+            return self.url
+
+    @property
+    def archive_url(self):
+        ref = self.ref or 'main'
+        return f'{self.url}/archive/{self.ref or "main"}.tar.gz'
+
     @property
     def fullref(self):
         if self.ref:
@@ -973,13 +1074,42 @@ class GitHubTarget(types.SimpleNamespace):
         return f'{self.remote}/{branch}' if self.remote else branch
 
     @property
-    def url(self):
-        return f'https://github.com/{self.org}/{self.project}'
+    def origin(self):
+        remote = vars(self)['remote']
+        if remote and remote == 'origin':
+            return self
+        elif not self.upstream:
+            return None  # unknown
+        else:
+            return self.upstream.origin
 
-    @property
-    def archive_url(self):
-        ref = self.ref or 'main'
-        return f'{self.url}/archive/{self.ref or "main"}.tar.gz'
+    def ensure_local(self, reporoot=None):
+        remote = vars(self)['remote']
+        origin = self.origin or self
+        if reporoot:
+            reporoot = os.path.abspath(reporoot)
+        else:
+            reporoot = os.path.join(HOME, f'{origin.org}-{origin.project}')
+            #reporoot = os.path.join(HOME, self.project)
+        if os.path.exists(reporoot):
+            git('fetch', '--tags', 'origin', cwd=reporoot)
+            if remote and remote != 'origin':
+                git('fetch', '--tags', remote, cwd=reporoot)
+            ec, _ = git('checkout', 'main', cwd=reporoot)
+            if ec:
+                raise NotImplementedError
+            #git('pull', cwd=reporoot)
+            git('reset', '--hard', 'origin/main', cwd=reporoot)
+        else:
+            ec, _ = git('clone', origin.url, reporoot)
+            if ec:
+                raise NotImplementedError
+            if remote:
+                git('remote', 'add', '-f', '--tags', remote, self.url,
+                    cwd=reporoot)
+                git('remote', 'set-url', '--push', remote, self.push_url,
+                    cwd=reporoot)
+        return reporoot
 
     def copy(self, ref=None):
         return type(self)(
@@ -988,6 +1118,7 @@ class GitHubTarget(types.SimpleNamespace):
             ref=ref or self.ref,
             remote=vars(self)['remote'],
             upstream=self.upstream,
+            ssh=self.ssh,
         )
 
     def fork(self, org, project=None, ref=None, remote=None):
@@ -997,6 +1128,7 @@ class GitHubTarget(types.SimpleNamespace):
             ref=ref or self.ref,
             remote=remote,
             upstream=self,
+            ssh=self.ssh,
         )
 
     def as_jsonable(self):

@@ -374,12 +374,26 @@ class Job:
     def request(self):
         return Request(self._reqid, str(self._fs))
 
+    def load_request(self):
+        if self.reqid.kind == 'compile-bench':
+            req_cls = _requests.BenchCompileRequest
+        else:
+            raise NotImplementedError(self.reqid.kind)
+        req = req_cls.load(self._fs.request.metadata,
+                           fs=self._fs.request,
+                           )
+        return req
+
     def load_result(self):
         if self.reqid.kind == 'compile-bench':
             res_cls = _requests.BenchCompileResult
         else:
             raise NotImplementedError(self.reqid.kind)
-        return res_cls.load(self._fs.result.metadata)
+        res = res_cls.load(self._fs.result.metadata,
+                           fs=self._fs.result,
+                           request=(lambda *a, **k: self.load_request()),
+                           )
+        return res
 
     def get_status(self, *, fail=True):
         try:
@@ -688,6 +702,12 @@ class Job:
         result = self.load_result()
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
+
+    def upload_result(self):
+        storage = _requests.FasterCPythonResults()
+        res = self.load_result()
+        # We upload directly.
+        storage.add(res.pyperf, branch='main', split=True, push=True)
 
     def as_row(self):  # XXX Move to JobSummary.
         try:

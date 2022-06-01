@@ -218,6 +218,11 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
         jobs.ensure_next()
 
 
+def cmd_upload(jobs, reqid):
+    job = jobs.get(reqid)
+    job.upload_result()
+
+
 # internal
 def cmd_finish_run(jobs, reqid):
     job = jobs.finish_successful(reqid)
@@ -499,6 +504,7 @@ COMMANDS = {
     'run': cmd_run,
     'attach': cmd_attach,
     'cancel': cmd_cancel,
+    'upload': cmd_upload,
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
     # queue management
@@ -831,6 +837,9 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('cancel', help='Stop the current job (or prevent a pending one)')
     sub.add_argument('reqid', nargs='?',
                      help='(default: the currently running job, if any)')
+
+    sub = add_cmd('upload', help='Upload benchmark results to the public data store')
+    sub.add_argument('reqid')
 
     # XXX Also add export and import?
 
