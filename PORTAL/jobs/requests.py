@@ -886,6 +886,70 @@ def build_compile_script(req, bfiles, fake=None):
 ##################################
 # pyperformance helpers
 
+class Benchmarks:
+
+    REPOS = os.path.join(_utils.HOME, 'repos')
+    SUITES = {
+        'pyperformance': {
+            'url': 'https://github.com/python/pyperformance',
+            'reldir': 'pyperformance/data-files/benchmarks',
+        },
+        'pyston': {
+            'url': 'https://github.com/pyston/python-macrobenchmarks',
+            'reldir': 'benchmarks',
+        },
+    }
+
+    def __init__(self):
+        self._cache = {}
+
+    def load(self):
+        """Return the per-suite lists of benchmarks."""
+        benchmarks = {}
+        for suite, info in self.SUITES.items():
+            if suite in self._cache:
+                benchmarks[suite] = list(self._cache[suite])
+                continue
+            url = info['url']
+            reldir = info['reldir']
+            reporoot = os.path.join(self.REPOS,
+                                    os.path.basename(url))
+            if not os.path.exists(reporoot):
+                if not os.path.exists(self.REPOS):
+                    os.makedirs(self.REPOS)
+                _utils.git('clone', url, reporoot, cwd=None)
+            names = self._get_names(os.path.join(reporoot, reldir))
+            benchmarks[suite] = self._cache[suite] = names
+        return benchmarks
+
+    def _get_names(self, benchmarksdir):
+        manifest = os.path.join(benchmarksdir, 'MANIFEST')
+        if os.path.isfile(manifest):
+            with open(manifest) as infile:
+                for line in infile:
+                    if line.strip() == '[benchmarks]':
+                        for line in infile:
+                            if line.strip() == 'name\tmetafile':
+                                break
+                        else:
+                            raise NotImplementedError(manifest)
+                        break
+                else:
+                    raise NotImplementedError(manifest)
+                for line in infile:
+                    if line.startswith('['):
+                        break
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    name, _ = line.split('\t')
+                    yield name
+        else:
+            for name in os.listdir(benchmarksdir):
+                if name.startswith('bm_'):
+                    yield name[3:]
+
+
 class PyperfResults:
 
     @classmethod
@@ -960,7 +1024,7 @@ class PyperfResults:
             else:
                 raise NotImplementedError(machine)
 
-    def __init__(self, data, filename=None, host=None, source=None):
+    def __init__(self, data, filename=None, host=None, source=None, suite=None):
         if data:
             self._set_data(data)
         elif not filename:
@@ -969,6 +1033,7 @@ class PyperfResults:
         if host:
             self._host = host
         self.source = source
+        self.suite = suite or None
 
     def _set_data(self, data):
         if hasattr(self, '_data'):
@@ -1051,9 +1116,51 @@ class PyperfResults:
         implname = self.implementation
         host = self.host
         name = f'{implname}-{source}-{commit[:10]}-{host}-{compat}'
-        #if suite and suite != 'pyperformance':
-        #    name f'{name}-{suite}'
+        if self.suite and self.suite != 'pyperformance':
+            name = f'{name}-{self.suite}'
         return name
+
+    def split_benchmarks(self):
+        """Return results collated by suite."""
+        if self.suite:
+            raise Exception(f'already split ({self.suite})')
+        by_suite = {}
+        benchmarks = Benchmarks().load()
+        by_name = {}
+        for suite, names in benchmarks.items():
+            for name in names:
+                if name in by_name:
+                    raise NotImplementedError((suite, name))
+                by_name[name] = suite
+        results = self.data
+        for data in results['benchmarks']:
+            name = data['metadata']['name']
+            try:
+                suite = by_name[name]
+            except KeyError:
+                # Some benchmarks actually produce results for
+                # sub-benchmarks (e.g. logging -> logging_simple).
+                _name = name
+                while '_' in _name:
+                    _name, _, _ = _name.rpartition('_')
+                    if _name in by_name:
+                        suite = by_name[_name]
+                        break
+                else:
+                    suite = 'unknown'
+            if suite not in by_suite:
+                by_suite[suite] = {k: v
+                                   for k, v in results.items()
+                                   if k != 'benchmarks'}
+                by_suite[suite]['benchmarks'] = []
+            by_suite[suite]['benchmarks'].append(data)
+        cls = type(self)
+        for suite, data in by_suite.items():
+            host = getattr(self, '_host', None)
+            results = cls(None, self.filename, host, self.source, suite)
+            results._data = data
+            by_suite[suite] = results
+        return by_suite
 
 
 class PyperfResultsStorage:
@@ -1099,43 +1206,51 @@ class PyperfResultsRepo(PyperfResultsStorage):
             split=True,
             push=True,
             ):
+        if not branch:
+            branch = self.BRANCH
+
         if not isinstance(results, PyperfResults):
             raise NotImplementedError(results)
         source = results.filename
         if not os.path.exists(source):
             logger.error(f'results not found at {source}')
             return
-        name = results.get_upload_name()
-        reltarget = f'{name}.json'
-        if self.datadir:
-            reltarget = f'{self.datadir}/{reltarget}'
-        if not unzipped:
-            reltarget += '.gz'
-        target = os.path.join(self.root, reltarget)
-
-        logger.info(f'adding results {source} as {target}...')
-        self._prepare_repo(branch)
-        if unzipped:
-            data = results.data
-            print(target)
-            with open(target, 'w') as outfile:
-                json.dump(data, outfile, indent=2)
+        if split:
+            by_suite = results.split_benchmarks()
+            if 'other' in by_suite:
+                raise NotImplementedError(sorted(by_suite))
         else:
-            shutil.copyfile(source, target)
-        self.git('add', reltarget)
-        self.git('commit', '-m', f'Add Benchmark Results ({name})')
+            by_suite = {None: results}
+
+        if self.remote:
+            self.remote.ensure_local(self.root)
+
+        logger.info(f'adding results {source}...')
+        for suite in by_suite:
+            suite_results = by_suite[suite]
+            name = suite_results.get_upload_name()
+            reltarget = f'{name}.json'
+            if self.datadir:
+                reltarget = f'{self.datadir}/{reltarget}'
+            if not unzipped:
+                reltarget += '.gz'
+            target = os.path.join(self.root, reltarget)
+
+            logger.info(f'...as {target}...')
+            self.git('checkout', '-B', branch)
+            if unzipped:
+                data = suite_results.data
+                print(target)
+                with open(target, 'w') as outfile:
+                    json.dump(data, outfile, indent=2)
+            else:
+                shutil.copyfile(source, target)
+            self.git('add', reltarget)
+            self.git('commit', '-m', f'Add Benchmark Results ({name})')
         logger.info('...done adding')
 
         if push:
-            raise Exception
             self._upload(reltarget)
-
-    def _prepare_repo(self, branch=None):
-        if not branch:
-            branch = self.BRANCH
-        if self.remote:
-            self.remote.ensure_local(self.root)
-        self.git('checkout', '-B', branch)
 
     def _upload(self, reltarget):
         if not self.remote:
