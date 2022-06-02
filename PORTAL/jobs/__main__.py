@@ -86,14 +86,11 @@ def cmd_list(jobs, selections=None, columns=None):
 
 
 def cmd_show(jobs, reqid=None, fmt=None, *, lines=None):
-    if reqid:
-        job = jobs.get(reqid)
-    else:
-        job = jobs.get_current()
-        if not job:
-            # XXX Use the last finished?
-            logger.error('no job currently running')
-            sys.exit(1)
+    job = jobs.get(reqid)
+    if not job:
+        # XXX Use the last finished?
+        logger.error('no job currently running')
+        sys.exit(1)
 
     for line in job.render(fmt=fmt):
         print(line)

@@ -1024,13 +1024,14 @@ class Jobs:
             return None
         return self._get(reqid)
 
-    def get(self, reqid):
+    def get(self, reqid=None):
+        if not reqid:
+            return self.get_current()
         return self._get(reqid)
 
     def create(self, reqid, kind_kwargs=None, reqfsattrs=None):
         if kind_kwargs is None:
             kind_kwargs = {}
-
         job = self._get(reqid)
         job._create(kind_kwargs, reqfsattrs, self._fs.queue.log)
         return job
@@ -1122,12 +1123,9 @@ class Jobs:
         )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
-        if not reqid:
-            job = self.get_current()
-            if job is None:
-                raise NoRunningJobError()
-        else:
-            job = self._get(reqid)
+        job = self.get(reqid)
+        if job is None:
+            raise NoRunningJobError
         job.cancel(ifstatus=ifstatus)
 
         logger.info('# unstaging request %s', reqid)
