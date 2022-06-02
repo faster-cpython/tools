@@ -368,7 +368,7 @@ def get_termwidth(*, nontty=1000, unknown=80):
         return unknown or 80
 
 
-def _is_proc_running(pid):
+def is_proc_running(pid):
     if pid == PID:
         return True
     try:
@@ -594,7 +594,7 @@ class PIDFile:
         if pid <= 0:
             return handle_invalid(text)
 
-        if orphaned is not None and not _is_proc_running(pid):
+        if orphaned is not None and not is_proc_running(pid):
             if orphaned == 'fail':
                 raise OrphanedPIDFileError(self._filename, pid)
             elif orphaned == 'remove':
