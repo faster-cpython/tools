@@ -1016,10 +1016,13 @@ class Jobs:
         )
 
     def get_current(self):
-        reqid = _get_staged_request(self._fs)
+        try:
+            reqid = _get_staged_request(self._fs)
+        except StagedRequestResolveError:
+            reqid = None
         if not reqid:
             return None
-        return self.get(reqid)
+        return self._get(reqid)
 
     def get(self, reqid):
         return self._get(reqid)
@@ -1041,7 +1044,10 @@ class Jobs:
         return job
 
     def wait_until_job_started(self, job=None, *, timeout=True):
-        current = _get_staged_request(self._fs)
+        try:
+            current = _get_staged_request(self._fs)
+        except StagedRequestResolveError:
+            current = None
         if isinstance(job, Job):
             reqid = job.reqid
         else:
@@ -1249,14 +1255,14 @@ def _get_staged_request(pfiles):
         return None
     requests, reqidstr = os.path.split(reqdir)
     if requests != pfiles.requests.root:
-        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
+        raise StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     reqid = RequestID.parse(reqidstr)
     if not reqid:
-        return StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
+        raise StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
     if not os.path.exists(reqdir):
-        return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
+        raise StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
-        return StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
+        raise  StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
     reqfs = pfiles.resolve_request(reqid)
     # Check if the request is still running.
     status = Result.read_status(str(reqfs.result.metadata), fail=False)
@@ -1286,20 +1292,26 @@ def _stage_request(reqid, pfiles):
         os.symlink(jobfs.request, pfiles.requests.current)
     except FileExistsError:
         # XXX Delete the existing one if bogus?
-        curid = _get_staged_request(pfiles) or '???'
-        if isinstance(curid, Exception):
-            raise RequestAlreadyStagedError(reqid, '???') from curid
+        try:
+            curid = _get_staged_request(pfiles) or '???'
+        except StagedRequestResolveError:
+            raise RequestAlreadyStagedError(reqid, '???')
         else:
             raise RequestAlreadyStagedError(reqid, curid)
 
 
 def _unstage_request(reqid, pfiles):
     reqid = RequestID.from_raw(reqid)
-    curid = _get_staged_request(pfiles)
-    if not curid or not isinstance(curid, (str, RequestID)):
+    try:
+        curid = _get_staged_request(pfiles)
+    except StagedRequestResolveError:
         raise RequestNotStagedError(reqid)
-    elif str(curid) != str(reqid):
-        raise RequestNotStagedError(reqid, curid)
+    if not curid:
+        raise RequestNotStagedError(reqid)
+    else:
+        assert isinstance(curid, RequestID), (curid, reqid)
+        if curid != reqid:
+            raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.requests.current)
 
 
