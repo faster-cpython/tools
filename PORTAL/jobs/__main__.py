@@ -6,7 +6,8 @@ import sys
 import traceback
 
 from . import (
-    NoRunningJobError, JobNeverStartedError, JobFinishedError,
+    NoRunningJobError, JobNeverStartedError,
+    JobAlreadyFinishedError, JobFinishedError,
     RequestAlreadyStagedError,
     JobsConfig, Jobs, Worker, RequestID, Result,
     sort_jobs, select_jobs,
@@ -220,6 +221,27 @@ def cmd_cancel(jobs, reqid=None, *, _status=None):
 
     if current:
         jobs.ensure_next()
+
+
+def cmd_wait(jobs, reqid=None):
+    try:
+        try:
+            job, pid = jobs.wait_until_job_started(reqid)
+        except NoRunningJobError:
+            logger.error('no current request to wait for')
+            sys.exit(1)
+        except JobAlreadyFinishedError as exc:
+            logger.warning(f'job {exc.reqid} was already done')
+        except JobFinishedError:
+            # It already finished.
+            pass
+        else:
+            assert pid, job and job.reqid
+            job.wait_until_finished(pid)
+    except JobNeverStartedError as exc:
+        # XXX Optionally wait anyway?
+        logger.error(f'request {exc.reqid} has never started or been queued')
+        sys.exit(1)
 
 
 def cmd_upload(jobs, reqid, author=None):
@@ -508,6 +530,7 @@ COMMANDS = {
     'run': cmd_run,
     'attach': cmd_attach,
     'cancel': cmd_cancel,
+    'wait': cmd_wait,
     'upload': cmd_upload,
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
@@ -591,6 +614,9 @@ def _add_request_cli(add_cmd, add_hidden=True):
     sub.add_argument('--detached', dest='after',
                      action='store_const', const=('run',),
                      help='do not attach')
+    sub.add_argument('--wait', dest='after',
+                     action='store_const', const=('run', 'wait'),
+                     help='wait for the job to finish')
     sub.set_defaults(job='compile-bench')
 
     if add_hidden:
@@ -616,6 +642,9 @@ def _add_request_cli(add_cmd, add_hidden=True):
         _common.add_argument('--no-run', dest='after',
                              action='store_const', const=(),
                              help='only create the job')
+        _common.add_argument('--wait', dest='after',
+                             action='store_const', const=('run', 'wait'),
+                             help='wait for the job to finish')
         def add_job(job, p=(), **kw):
             return add_cmd(job, jobs, parents=[_common, *p], **kw)
 
@@ -841,6 +870,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('cancel', help='Stop the current job (or prevent a pending one)')
     sub.add_argument('reqid', nargs='?',
                      help='(default: the currently running job, if any)')
+
+    if add_hidden:
+        sub = add_cmd('wait', help='wait until the given (or current) job finishes')
+        # XXX Add a --timeout arg?
+        sub.add_argument('reqid', nargs='?',
+                         help='(default: the currently running job, if any)')
 
     sub = add_cmd('upload', help='Upload benchmark results to the public data store')
     if add_hidden:
