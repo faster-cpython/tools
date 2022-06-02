@@ -323,6 +323,14 @@ class JobNeverStartedError(JobNotRunningError):
     MSG = 'job {reqid} was never started'
 
 
+class JobFinishedError(JobNotRunningError):
+    MSG = 'job {reqid} is done'
+
+
+class JobAlreadyFinishedError(JobFinishedError):
+    MSG = 'job {reqid} is already done'
+
+
 class Job:
 
     def __init__(self, reqid, fs, worker, cfg):
@@ -666,16 +674,29 @@ class Job:
         if text and text.isdigit():
             self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
-    def wait_until_started(self, *, checkssh=False):
-        # XXX Add a timeout?
+    def wait_until_started(self, timeout=None, *, checkssh=False):
+        if not timeout or timeout < 0:
+            timeout = None
+        else:
+            end = time.time() + timeout
+        # First make sure it is queued or running.
+        status = self.get_status()
+        if status in Result.FINISHED:
+            raise JobAlreadyFinishedError(self.reqid)
+        elif status not in Result.ACTIVE:
+            raise JobNeverStartedError(self.reqid)
+        # Go until it has a PID or it finiishes.
         pid = self.get_pid()
         while pid is None:
-            status = self.get_status()
-            if status in Result.FINISHED:
-                raise JobNeverStartedError(reqid)
             if checkssh and os.path.exists(self._fs.ssh_okay):
                 break
+            if timeout and time.time() > end:
+                raise TimeoutError(f'timed out after {timeout} seconds')
             time.sleep(0.01)
+            status = self.get_status()
+            if status in Result.FINISHED:
+                # It finished but a PID file wasn't left behind.
+                raise JobFinishedError(self.reqid)
             pid = self.get_pid()
         return pid
 

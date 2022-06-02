@@ -6,7 +6,8 @@ import sys
 import traceback
 
 from . import (
-    NoRunningJobError, JobNeverStartedError, RequestAlreadyStagedError,
+    NoRunningJobError, JobNeverStartedError, JobFinishedError,
+    RequestAlreadyStagedError,
     JobsConfig, Jobs, Worker, RequestID, Result,
     sort_jobs, select_jobs,
 )
@@ -181,12 +182,15 @@ def cmd_attach(jobs, reqid=None, *, lines=None):
             sys.exit(1)
     else:
         job = jobs.get(reqid)
-    job.wait_until_started(checkssh=True)
-    job.check_ssh()
     try:
-        job.attach(lines)
-    except JobNeverStartedError:
-        logger.warn('job not started')
+        job.wait_until_started(checkssh=True)
+        job.check_ssh()
+        try:
+            job.attach(lines)
+        except JobNeverStartedError:
+            logger.warn('job not started')
+    except JobFinishedError:
+        pass
 
 
 def cmd_cancel(jobs, reqid=None, *, _status=None):
