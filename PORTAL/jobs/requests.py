@@ -1266,7 +1266,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
             self.git('checkout', '-B', branch)
             if unzipped:
                 data = suite_results.data
-                print(target)
                 with open(target, 'w') as outfile:
                     json.dump(data, outfile, indent=2)
             else:
