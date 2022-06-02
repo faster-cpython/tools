@@ -333,6 +333,10 @@ class JobAlreadyFinishedError(JobFinishedError):
 
 class Job:
 
+    TYPICAL_DURATION_SECS = {
+        'compile-bench': 40 * 60,
+    }
+
     def __init__(self, reqid, fs, worker, cfg):
         if not reqid:
             raise ValueError('missing reqid')
@@ -1006,6 +1010,50 @@ class Jobs:
         job = self._get(reqid)
         job.set_status('activated')
         return job
+
+    def wait_until_job_started(self, job=None, *, timeout=True):
+        current = _get_staged_request(self._fs)
+        if isinstance(job, Job):
+            reqid = job.reqid
+        else:
+            reqid = job
+            if not reqid:
+                reqid = current
+                if not reqid:
+                    raise NoRunningJobError
+            job = self._get(reqid)
+        if timeout is True:
+            # Calculate the timeout.
+            if current:
+                if reqid == current:
+                    timeout = 0
+                else:
+                    try:
+                        expected = Job.TYPICAL_DURATION_SECS[reqid.kind]
+                    except KeyError:
+                        raise NotImplementedError(reqid)
+                    # We could subtract the elapsed time, but it isn't worth it.
+                    timeout = expected
+            if timeout:
+                # Add the expected time for everything in the queue before the job.
+                if timeout is True:
+                    timeout = 0
+                for i, queued in enumerate(self.queue.snapshot):
+                    if queued == reqid:
+                        # Play it safe by doubling the timeout.
+                        timeout *= 2
+                        break
+                    try:
+                        expected = Job.TYPICAL_DURATION_SECS[queued.kind]
+                    except KeyError:
+                        raise NotImplementedError(queued)
+                    timeout += expected
+                else:
+                    # Either it hasn't been queued or it already finished.
+                    timeout = 0
+        # Wait!
+        pid = job.wait_until_started(timeout)
+        return job, pid
 
     def ensure_next(self):
         logger.debug('Making sure a job is running, if possible')
