@@ -117,7 +117,7 @@ class JobFS(types.SimpleNamespace):
 
         # XXX Move these to a subclass?
         if reqid.kind == 'compile-bench':
-            request.manifest = f'{request}/benchmarks.manifest'
+            request.pyperformance_manifest = f'{request}/benchmarks.manifest'
             #request.pyperformance_config = f'{request}/compile.ini'
             request.pyperformance_config = f'{request}/pyperformance.ini'
             #result.pyperformance_log = f'{result}/run.log'
@@ -169,6 +169,12 @@ class JobFS(types.SimpleNamespace):
     @property
     def ssh_okay(self):
         return self.work.ssh_okay
+
+    def look_up(self, name, subname=None):
+        value = getattr(self, name)
+        if subname:
+            value = getattr(value, subname)
+        return value
 
     def copy(self):
         return type(self)(
@@ -323,7 +329,19 @@ class JobNeverStartedError(JobNotRunningError):
     MSG = 'job {reqid} was never started'
 
 
+class JobFinishedError(JobNotRunningError):
+    MSG = 'job {reqid} is done'
+
+
+class JobAlreadyFinishedError(JobFinishedError):
+    MSG = 'job {reqid} is already done'
+
+
 class Job:
+
+    TYPICAL_DURATION_SECS = {
+        'compile-bench': 40 * 60,
+    }
 
     def __init__(self, reqid, fs, worker, cfg):
         if not reqid:
@@ -420,7 +438,7 @@ class Job:
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
-    def _create(self, kind_kwargs, reqfsattrs, queue_log):
+    def _create(self, kind_kwargs, pushfsattrs, pullfsattrs, queue_log):
         os.makedirs(self._fs.request.root, exist_ok=True)
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
@@ -435,7 +453,7 @@ class Job:
 
             # Write the benchmarks manifest.
             manifest = _requests.build_pyperformance_manifest(req, self._worker.topfs)
-            with open(self._fs.request.manifest, 'w') as outfile:
+            with open(self._fs.request.pyperformance_manifest, 'w') as outfile:
                 outfile.write(manifest)
 
             # Write the config.
@@ -458,12 +476,12 @@ class Job:
         os.chmod(self._fs.bench_script, 0o755)
 
         # Write the commands to execute locally.
-        script = self._build_send_script(queue_log, reqfsattrs)
+        script = self._build_send_script(queue_log, pushfsattrs, pullfsattrs)
         with open(self._fs.portal_script, 'w') as outfile:
             outfile.write(script)
         os.chmod(self._fs.portal_script, 0o755)
 
-    def _build_send_script(self, queue_log, resfsfields=None, *,
+    def _build_send_script(self, queue_log, pushfsfields=None, pullfsfields=None, *,
                            hidecfg=False,
                            ):
         reqid = self.reqid
@@ -490,24 +508,53 @@ class Job:
 
         _utils.check_shell_str(bfiles.request.root)
         _utils.check_shell_str(bfiles.bench_script)
+        _utils.check_shell_str(bfiles.work.root)
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
         ensure_user = ssh.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
-        resfiles = []
-        for attr in resfsfields or ():
-            pvalue = getattr(pfiles.result, attr)
+        pushfsfields = [
+            # Technically we don't need request.json on the bench host,
+            # but it can help with debugging.
+            ('request', 'metadata'),
+            ('work', 'bench_script'),
+            ('result', 'metadata'),
+            *pushfsfields,
+        ]
+        pushfiles = []
+        for field in pushfsfields or ():
+            if isinstance(field, str):
+                field = ('request', field)
+            area, name = field
+            pvalue = pfiles.look_up(area, name)
             pvalue = _utils.quote_shell_str(pvalue)
-            bvalue = getattr(bfiles.result, attr)
+            bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
-            resfiles.append((bvalue, pvalue))
-        resfiles = (ssh.pull(s, t) for s, t in resfiles)
-        resfiles = '\n                '.join(resfiles)
+            pushfiles.append((bvalue, pvalue))
+        pushfiles = (ssh.push(s, t) for s, t in pushfiles)
+        pushfiles = '\n                '.join(pushfiles)
 
-        push = ssh.push
-        pull = ssh.pull
+        pullfsfields = [
+            ('result', 'metadata'),
+            *pullfsfields,
+        ]
+        pullfiles = []
+        for field in pullfsfields or ():
+            if isinstance(field, str):
+                field = ('result', field)
+            area, name = field
+            pvalue = pfiles.look_up(area, name)
+            pvalue = _utils.quote_shell_str(pvalue)
+            bvalue = bfiles.look_up(area, name)
+            _utils.check_shell_str(bvalue)
+            pullfiles.append((bvalue, pvalue))
+        pullfiles = (ssh.pull(s, t) for s, t in pullfiles)
+        pullfiles = '\n                '.join(pullfiles)
+
+        #push = ssh.push
+        #pull = ssh.pull
         ssh = ssh.run_shell
 
         return textwrap.dedent(f'''
@@ -550,8 +597,9 @@ class Job:
 
                 # Set up before running.
                 {ssh(f'mkdir -p {bfiles.request}')}
-                {push(f'{reqdir}/*', bfiles.request)}
+                {ssh(f'mkdir -p {bfiles.work}')}
                 {ssh(f'mkdir -p {bfiles.result}')}
+                {pushfiles}
 
                 # Run the request.
                 {ssh(bfiles.bench_script)}
@@ -559,8 +607,8 @@ class Job:
 
                 # Finish up.
                 # XXX Push from the bench host in run.sh instead of pulling here?
-                {pull(bfiles.result.metadata, results_meta)}
-                {resfiles}
+                {pullfiles}
+
                 )
             fi
 
@@ -666,16 +714,29 @@ class Job:
         if text and text.isdigit():
             self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
-    def wait_until_started(self, *, checkssh=False):
-        # XXX Add a timeout?
+    def wait_until_started(self, timeout=None, *, checkssh=False):
+        if not timeout or timeout < 0:
+            timeout = None
+        else:
+            end = time.time() + timeout
+        # First make sure it is queued or running.
+        status = self.get_status()
+        if status in Result.FINISHED:
+            raise JobAlreadyFinishedError(self.reqid)
+        elif status not in Result.ACTIVE:
+            raise JobNeverStartedError(self.reqid)
+        # Go until it has a PID or it finiishes.
         pid = self.get_pid()
         while pid is None:
-            status = self.get_status()
-            if status in Result.FINISHED:
-                raise JobNeverStartedError(reqid)
             if checkssh and os.path.exists(self._fs.ssh_okay):
                 break
+            if timeout and time.time() > end:
+                raise TimeoutError(f'timed out after {timeout} seconds')
             time.sleep(0.01)
+            status = self.get_status()
+            if status in Result.FINISHED:
+                # It finished but a PID file wasn't left behind.
+                raise JobFinishedError(self.reqid)
             pid = self.get_pid()
         return pid
 
@@ -689,6 +750,35 @@ class Job:
         except KeyboardInterrupt:
             # XXX Prompt to cancel the job?
             return
+
+    def wait_until_finished(self, pid=None, *, timeout=True):
+        if timeout is True:
+            # Default to double the typical.
+            try:
+                timeout = self.TYPICAL_DURATION_SECS[self.reqid.kind]
+            except KeyError:
+                timeout = None
+                #raise NotImplementedError(self.reqid.kind)
+            else:
+                timeout *= 2
+        elif not timeout or timeout < 0:
+            timeout = None
+        if timeout:
+            end = time.time() + timeout
+        if not pid:
+            try:
+                pid = self.wait_until_started(timeout)
+            except JobFinishedError:
+                return
+        while _utils.is_proc_running(pid):
+            if timeout and time.time() > end:
+                raise TimeoutError(f'timed out after {timeout} seconds')
+            time.sleep(0.1)
+        # Make sure it finished.
+        status = self.get_status()
+        if status not in Result.FINISHED:
+            assert status not in Result.ACTIVE, (self, status)
+            raise JobNeverStartedError(self.reqid)
 
     def cancel(self, *, ifstatus=None):
         if ifstatus is not None:
@@ -839,7 +929,7 @@ class Job:
             req_cls = _requests.BenchCompileRequest
             res_cls = _requests.BenchCompileResult
             reqfs_fields.extend([
-                'manifest',
+                'pyperformance_manifest',
                 'pyperformance_config',
             ])
             resfs_fields.extend([
@@ -962,20 +1052,24 @@ class Jobs:
         )
 
     def get_current(self):
-        reqid = _get_staged_request(self._fs)
+        try:
+            reqid = _get_staged_request(self._fs)
+        except StagedRequestResolveError:
+            reqid = None
         if not reqid:
             return None
-        return self.get(reqid)
-
-    def get(self, reqid):
         return self._get(reqid)
 
-    def create(self, reqid, kind_kwargs=None, reqfsattrs=None):
+    def get(self, reqid=None):
+        if not reqid:
+            return self.get_current()
+        return self._get(reqid)
+
+    def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:
             kind_kwargs = {}
-
         job = self._get(reqid)
-        job._create(kind_kwargs, reqfsattrs, self._fs.queue.log)
+        job._create(kind_kwargs, pushfsattrs, pullfsattrs, self._fs.queue.log)
         return job
 
     def activate(self, reqid):
@@ -983,8 +1077,55 @@ class Jobs:
         _stage_request(reqid, self._fs)
         logger.debug('# done staging request')
         job = self._get(reqid)
-        job.set_status('active')
+        job.set_status('activated')
         return job
+
+    def wait_until_job_started(self, job=None, *, timeout=True):
+        try:
+            current = _get_staged_request(self._fs)
+        except StagedRequestResolveError:
+            current = None
+        if isinstance(job, Job):
+            reqid = job.reqid
+        else:
+            reqid = job
+            if not reqid:
+                reqid = current
+                if not reqid:
+                    raise NoRunningJobError
+            job = self._get(reqid)
+        if timeout is True:
+            # Calculate the timeout.
+            if current:
+                if reqid == current:
+                    timeout = 0
+                else:
+                    try:
+                        expected = Job.TYPICAL_DURATION_SECS[reqid.kind]
+                    except KeyError:
+                        raise NotImplementedError(reqid)
+                    # We could subtract the elapsed time, but it isn't worth it.
+                    timeout = expected
+            if timeout:
+                # Add the expected time for everything in the queue before the job.
+                if timeout is True:
+                    timeout = 0
+                for i, queued in enumerate(self.queue.snapshot):
+                    if queued == reqid:
+                        # Play it safe by doubling the timeout.
+                        timeout *= 2
+                        break
+                    try:
+                        expected = Job.TYPICAL_DURATION_SECS[queued.kind]
+                    except KeyError:
+                        raise NotImplementedError(queued)
+                    timeout += expected
+                else:
+                    # Either it hasn't been queued or it already finished.
+                    timeout = 0
+        # Wait!
+        pid = job.wait_until_started(timeout)
+        return job, pid
 
     def ensure_next(self):
         logger.debug('Making sure a job is running, if possible')
@@ -1018,12 +1159,9 @@ class Jobs:
         )
 
     def cancel_current(self, reqid=None, *, ifstatus=None):
-        if not reqid:
-            job = self.get_current()
-            if job is None:
-                raise NoRunningJobError()
-        else:
-            job = self._get(reqid)
+        job = self.get(reqid)
+        if job is None:
+            raise NoRunningJobError
         job.cancel(ifstatus=ifstatus)
 
         logger.info('# unstaging request %s', reqid)
@@ -1151,27 +1289,28 @@ def _get_staged_request(pfiles):
         return None
     requests, reqidstr = os.path.split(reqdir)
     if requests != pfiles.requests.root:
-        return StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
+        raise StagedRequestResolveError(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
     reqid = RequestID.parse(reqidstr)
     if not reqid:
-        return StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
+        raise StagedRequestResolveError(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
     if not os.path.exists(reqdir):
-        return StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
+        raise StagedRequestResolveError(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
-        return StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
+        raise  StagedRequestResolveError(reqid, reqdir, 'malformed', 'target is not a directory')
     reqfs = pfiles.resolve_request(reqid)
     # Check if the request is still running.
     status = Result.read_status(str(reqfs.result.metadata), fail=False)
-    if not status or status in ('created', 'pending'):
-        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
-        os.unlink(pfiles.requests.current)
-        reqid = None
-    elif status not in ('active', 'running'):
+    if status in Result.ACTIVE and status != 'pending':
+        if not _utils.PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
+            logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+            os.unlink(pfiles.requests.current)
+            reqid = None
+    elif status in Result.FINISHED:
         logger.warn(f'request {reqid} is still "current" even though it finished; unsetting...')
         os.unlink(pfiles.requests.current)
         reqid = None
-    elif not _utils.PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
-        logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+    else:  # missing/invalid, created, pending
+        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
         os.unlink(pfiles.requests.current)
         reqid = None
     # XXX Do other checks?
@@ -1187,20 +1326,26 @@ def _stage_request(reqid, pfiles):
         os.symlink(jobfs.request, pfiles.requests.current)
     except FileExistsError:
         # XXX Delete the existing one if bogus?
-        curid = _get_staged_request(pfiles) or '???'
-        if isinstance(curid, Exception):
-            raise RequestAlreadyStagedError(reqid, '???') from curid
+        try:
+            curid = _get_staged_request(pfiles) or '???'
+        except StagedRequestResolveError:
+            raise RequestAlreadyStagedError(reqid, '???')
         else:
             raise RequestAlreadyStagedError(reqid, curid)
 
 
 def _unstage_request(reqid, pfiles):
     reqid = RequestID.from_raw(reqid)
-    curid = _get_staged_request(pfiles)
-    if not curid or not isinstance(curid, (str, RequestID)):
+    try:
+        curid = _get_staged_request(pfiles)
+    except StagedRequestResolveError:
         raise RequestNotStagedError(reqid)
-    elif str(curid) != str(reqid):
-        raise RequestNotStagedError(reqid, curid)
+    if not curid:
+        raise RequestNotStagedError(reqid)
+    else:
+        assert isinstance(curid, RequestID), (curid, reqid)
+        if curid != reqid:
+            raise RequestNotStagedError(reqid, curid)
     os.unlink(pfiles.requests.current)
 
 

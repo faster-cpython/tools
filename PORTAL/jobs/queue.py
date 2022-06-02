@@ -59,6 +59,9 @@ class JobQueueData(types.SimpleNamespace):
     def __getitem__(self, idx):
         return self.jobs[idx]
 
+    def __contains__(self, reqid):
+        return reqid in self.jobs
+
 
 class JobQueueSnapshot(JobQueueData):
 
