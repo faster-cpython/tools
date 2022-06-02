@@ -123,7 +123,8 @@ def cmd_request_compile_bench(jobs, reqid, revision, *,
             debug=debug,
             _fake=_fake,
         ),
-        reqfsattrs=['pyperformance_results', 'pyperformance_log'],
+        pushfsattrs=['pyperformance_manifest', 'pyperformance_config'],
+        pullfsattrs=['pyperformance_results', 'pyperformance_log'],
     )
     logger.info('...done (generating request files)')
     return job

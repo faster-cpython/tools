@@ -117,7 +117,7 @@ class JobFS(types.SimpleNamespace):
 
         # XXX Move these to a subclass?
         if reqid.kind == 'compile-bench':
-            request.manifest = f'{request}/benchmarks.manifest'
+            request.pyperformance_manifest = f'{request}/benchmarks.manifest'
             #request.pyperformance_config = f'{request}/compile.ini'
             request.pyperformance_config = f'{request}/pyperformance.ini'
             #result.pyperformance_log = f'{result}/run.log'
@@ -169,6 +169,12 @@ class JobFS(types.SimpleNamespace):
     @property
     def ssh_okay(self):
         return self.work.ssh_okay
+
+    def look_up(self, name, subname=None):
+        value = getattr(self, name)
+        if subname:
+            value = getattr(value, subname)
+        return value
 
     def copy(self):
         return type(self)(
@@ -432,7 +438,7 @@ class Job:
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
-    def _create(self, kind_kwargs, reqfsattrs, queue_log):
+    def _create(self, kind_kwargs, pushfsattrs, pullfsattrs, queue_log):
         os.makedirs(self._fs.request.root, exist_ok=True)
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
@@ -447,7 +453,7 @@ class Job:
 
             # Write the benchmarks manifest.
             manifest = _requests.build_pyperformance_manifest(req, self._worker.topfs)
-            with open(self._fs.request.manifest, 'w') as outfile:
+            with open(self._fs.request.pyperformance_manifest, 'w') as outfile:
                 outfile.write(manifest)
 
             # Write the config.
@@ -470,12 +476,12 @@ class Job:
         os.chmod(self._fs.bench_script, 0o755)
 
         # Write the commands to execute locally.
-        script = self._build_send_script(queue_log, reqfsattrs)
+        script = self._build_send_script(queue_log, pushfsattrs, pullfsattrs)
         with open(self._fs.portal_script, 'w') as outfile:
             outfile.write(script)
         os.chmod(self._fs.portal_script, 0o755)
 
-    def _build_send_script(self, queue_log, resfsfields=None, *,
+    def _build_send_script(self, queue_log, pushfsfields=None, pullfsfields=None, *,
                            hidecfg=False,
                            ):
         reqid = self.reqid
@@ -502,24 +508,53 @@ class Job:
 
         _utils.check_shell_str(bfiles.request.root)
         _utils.check_shell_str(bfiles.bench_script)
+        _utils.check_shell_str(bfiles.work.root)
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
         ensure_user = ssh.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
-        resfiles = []
-        for attr in resfsfields or ():
-            pvalue = getattr(pfiles.result, attr)
+        pushfsfields = [
+            # Technically we don't need request.json on the bench host,
+            # but it can help with debugging.
+            ('request', 'metadata'),
+            ('work', 'bench_script'),
+            ('result', 'metadata'),
+            *pushfsfields,
+        ]
+        pushfiles = []
+        for field in pushfsfields or ():
+            if isinstance(field, str):
+                field = ('request', field)
+            area, name = field
+            pvalue = pfiles.look_up(area, name)
             pvalue = _utils.quote_shell_str(pvalue)
-            bvalue = getattr(bfiles.result, attr)
+            bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
-            resfiles.append((bvalue, pvalue))
-        resfiles = (ssh.pull(s, t) for s, t in resfiles)
-        resfiles = '\n                '.join(resfiles)
+            pushfiles.append((bvalue, pvalue))
+        pushfiles = (ssh.push(s, t) for s, t in pushfiles)
+        pushfiles = '\n                '.join(pushfiles)
 
-        push = ssh.push
-        pull = ssh.pull
+        pullfsfields = [
+            ('result', 'metadata'),
+            *pullfsfields,
+        ]
+        pullfiles = []
+        for field in pullfsfields or ():
+            if isinstance(field, str):
+                field = ('result', field)
+            area, name = field
+            pvalue = pfiles.look_up(area, name)
+            pvalue = _utils.quote_shell_str(pvalue)
+            bvalue = bfiles.look_up(area, name)
+            _utils.check_shell_str(bvalue)
+            pullfiles.append((bvalue, pvalue))
+        pullfiles = (ssh.pull(s, t) for s, t in pullfiles)
+        pullfiles = '\n                '.join(pullfiles)
+
+        #push = ssh.push
+        #pull = ssh.pull
         ssh = ssh.run_shell
 
         return textwrap.dedent(f'''
@@ -562,8 +597,9 @@ class Job:
 
                 # Set up before running.
                 {ssh(f'mkdir -p {bfiles.request}')}
-                {push(f'{reqdir}/*', bfiles.request)}
+                {ssh(f'mkdir -p {bfiles.work}')}
                 {ssh(f'mkdir -p {bfiles.result}')}
+                {pushfiles}
 
                 # Run the request.
                 {ssh(bfiles.bench_script)}
@@ -571,8 +607,8 @@ class Job:
 
                 # Finish up.
                 # XXX Push from the bench host in run.sh instead of pulling here?
-                {pull(bfiles.result.metadata, results_meta)}
-                {resfiles}
+                {pullfiles}
+
                 )
             fi
 
@@ -893,7 +929,7 @@ class Job:
             req_cls = _requests.BenchCompileRequest
             res_cls = _requests.BenchCompileResult
             reqfs_fields.extend([
-                'manifest',
+                'pyperformance_manifest',
                 'pyperformance_config',
             ])
             resfs_fields.extend([
@@ -1029,11 +1065,11 @@ class Jobs:
             return self.get_current()
         return self._get(reqid)
 
-    def create(self, reqid, kind_kwargs=None, reqfsattrs=None):
+    def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:
             kind_kwargs = {}
         job = self._get(reqid)
-        job._create(kind_kwargs, reqfsattrs, self._fs.queue.log)
+        job._create(kind_kwargs, pushfsattrs, pullfsattrs, self._fs.queue.log)
         return job
 
     def activate(self, reqid):

@@ -663,7 +663,7 @@ def build_pyperformance_config(req, bfiles):
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
-    cfg['run_benchmark']['manifest'] = bfiles.request.manifest
+    cfg['run_benchmark']['manifest'] = bfiles.request.pyperformance_manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
