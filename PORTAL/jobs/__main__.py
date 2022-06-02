@@ -176,21 +176,21 @@ def _cmd_run(jobs, reqid):
 
 
 def cmd_attach(jobs, reqid=None, *, lines=None):
-    if not reqid:
-        job = jobs.get_current()
-        if not job:
+    try:
+        try:
+            job, pid = jobs.wait_until_job_started(reqid)
+        except NoRunningJobError:
             logger.error('no current request to attach')
             sys.exit(1)
-    else:
-        job = jobs.get(reqid)
-    try:
-        job.wait_until_started(checkssh=True)
+        except JobAlreadyFinishedError as exc:
+            logger.warning(f'job {exc.reqid} was already done')
         job.check_ssh()
-        try:
-            job.attach(lines)
-        except JobNeverStartedError:
-            logger.warn('job not started')
+        job.attach(lines)
+    except JobNeverStartedError:
+        # XXX Optionally wait anyway?
+        logger.warn('job not started')
     except JobFinishedError:
+        # It already finished.
         pass
 
 
@@ -232,16 +232,15 @@ def cmd_wait(jobs, reqid=None):
             sys.exit(1)
         except JobAlreadyFinishedError as exc:
             logger.warning(f'job {exc.reqid} was already done')
-        except JobFinishedError:
-            # It already finished.
-            pass
         else:
             assert pid, job and job.reqid
             job.wait_until_finished(pid)
     except JobNeverStartedError as exc:
         # XXX Optionally wait anyway?
-        logger.error(f'request {exc.reqid} has never started or been queued')
-        sys.exit(1)
+        logger.warn('job not started')
+    except JobFinishedError:
+        # It already finished.
+        pass
 
 
 def cmd_upload(jobs, reqid, author=None):
