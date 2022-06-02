@@ -271,7 +271,7 @@ def cmd_run_next(jobs):
             return
         elif status is not Result.STATUS.PENDING:
             logger.warn('expected "pending" status for queued request %s, got %r', reqid, status)
-            # XXX Give the option to force the status to "active"?
+            # XXX Give the option to force the status to "activated"?
             logger.info('trying next job...')
             cmd_run_next(jobs)
             return
@@ -425,9 +425,9 @@ def cmd_queue_pop(jobs):
         logger.warn('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
         logger.warn(f'expected "pending" status for queued request %s, got %r', reqid, status)
-        # XXX Give the option to force the status to "active"?
+        # XXX Give the option to force the status to "activated"?
     else:
-        # XXX Set the status to "active"?
+        # XXX Set the status to "activated"?
         pass
 
     print(reqid)

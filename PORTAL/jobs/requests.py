@@ -200,7 +200,7 @@ class Result(_utils.Metadata):
     STATUS = types.SimpleNamespace(
         CREATED='created',
         PENDING='pending',
-        ACTIVE='active',
+        ACTIVATED='activated',  # AKA staged
         RUNNING='running',
         SUCCESS='success',
         FAILED='failed',
@@ -208,6 +208,13 @@ class Result(_utils.Metadata):
     )
     _STATUS_BY_VALUE = {v: v for _, v in vars(STATUS).items()}
     _STATUS_BY_VALUE['cancelled'] = STATUS.CANCELED
+    # For backward compatibility:
+    _STATUS_BY_VALUE['active'] = STATUS.ACTIVATED
+    ACTIVE = frozenset([
+        STATUS.PENDING,
+        STATUS.ACTIVATED,
+        STATUS.RUNNING,
+    ])
     FINISHED = frozenset([
         STATUS.SUCCESS,
         STATUS.FAILED,
@@ -354,7 +361,7 @@ class Result(_utils.Metadata):
         if not history:
             return None
         last_st, last_date = history[-1]
-        if last_st == Result.STATUS.ACTIVE:
+        if last_st == Result.STATUS.ACTIVATED:
             return last_date, last_st
         for st, date in reversed(history):
             if st == Result.STATUS.RUNNING:
@@ -733,8 +740,8 @@ def build_compile_script(req, bfiles, fake=None):
         echo "$$" > {bfiles.work.pidfile}
 
         status=$(jq -r '.status' {bfiles.result.metadata})
-        if [ "$status" != 'active' ]; then
-            2>&1 echo "ERROR: expected active status, got $status"
+        if [ "$status" != 'activated' ]; then
+            2>&1 echo "ERROR: expected activated status, got $status"
             2>&1 echo "       (see {bfiles.result.metadata})"
             exit 1
         fi

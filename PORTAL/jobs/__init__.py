@@ -983,7 +983,7 @@ class Jobs:
         _stage_request(reqid, self._fs)
         logger.debug('# done staging request')
         job = self._get(reqid)
-        job.set_status('active')
+        job.set_status('activated')
         return job
 
     def ensure_next(self):
@@ -1162,16 +1162,17 @@ def _get_staged_request(pfiles):
     reqfs = pfiles.resolve_request(reqid)
     # Check if the request is still running.
     status = Result.read_status(str(reqfs.result.metadata), fail=False)
-    if not status or status in ('created', 'pending'):
-        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
-        os.unlink(pfiles.requests.current)
-        reqid = None
-    elif status not in ('active', 'running'):
+    if status in Result.ACTIVE and status != 'pending':
+        if not _utils.PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
+            logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+            os.unlink(pfiles.requests.current)
+            reqid = None
+    elif status in Result.FINISHED:
         logger.warn(f'request {reqid} is still "current" even though it finished; unsetting...')
         os.unlink(pfiles.requests.current)
         reqid = None
-    elif not _utils.PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
-        logger.warn(f'request {reqid} is no longer running; unsetting as the current job...')
+    else:  # missing/invalid, created, pending
+        logger.error(f'request {reqid} was set as the current job incorrectly; unsetting...')
         os.unlink(pfiles.requests.current)
         reqid = None
     # XXX Do other checks?
