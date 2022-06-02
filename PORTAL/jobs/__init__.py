@@ -715,6 +715,35 @@ class Job:
             # XXX Prompt to cancel the job?
             return
 
+    def wait_until_finished(self, pid=None, *, timeout=True):
+        if timeout is True:
+            # Default to double the typical.
+            try:
+                timeout = self.TYPICAL_DURATION_SECS[self.reqid.kind]
+            except KeyError:
+                timeout = None
+                #raise NotImplementedError(self.reqid.kind)
+            else:
+                timeout *= 2
+        elif not timeout or timeout < 0:
+            timeout = None
+        if timeout:
+            end = time.time() + timeout
+        if not pid:
+            try:
+                pid = self.wait_until_started(timeout)
+            except JobFinishedError:
+                return
+        while _utils.is_proc_running(pid):
+            if timeout and time.time() > end:
+                raise TimeoutError(f'timed out after {timeout} seconds')
+            time.sleep(0.1)
+        # Make sure it finished.
+        status = self.get_status()
+        if status not in Result.FINISHED:
+            assert status not in Result.ACTIVE, (self, status)
+            raise JobNeverStartedError(self.reqid)
+
     def cancel(self, *, ifstatus=None):
         if ifstatus is not None:
             if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
