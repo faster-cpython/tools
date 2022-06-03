@@ -793,7 +793,7 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
-    def upload_result(self, author=None):
+    def upload_result(self, author=None, *, push=True):
         storage = _requests.FasterCPythonResults()
         res = self.load_result()
         # We upload directly.
@@ -803,8 +803,7 @@ class Job:
             author=author,
             unzipped=True,
             split=True,
-            #push=True,
-            push=False,
+            push=push,
         )
 
     def as_row(self):  # XXX Move to JobSummary.

@@ -241,9 +241,9 @@ def cmd_wait(jobs, reqid=None):
         pass
 
 
-def cmd_upload(jobs, reqid, author=None):
+def cmd_upload(jobs, reqid, *, author=None, push=True):
     job = jobs.get(reqid)
-    job.upload_result(author)
+    job.upload_result(author, push=push)
 
 
 # internal
@@ -877,6 +877,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('upload', help='Upload benchmark results to the public data store')
     if add_hidden:
         sub.add_argument('--author')
+        sub.add_argument('--no-push', dest='push', action='store_false')
+        sub.add_argument('--push', dest='push', action='store_const', const=True)
     sub.add_argument('reqid')
 
     # XXX Also add export and import?
