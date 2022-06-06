@@ -624,6 +624,8 @@ def _add_request_cli(add_cmd, add_hidden=True):
         )
 
         _common = argparse.ArgumentParser(add_help=False)
+        if add_hidden:
+            _common.add_argument('--user', help='use the given user')
         _common.add_argument('--run', dest='after',
                              action='store_const', const=('run', 'attach'),
                              help='(alias for --run-attached)')
@@ -936,10 +938,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     handle_queue_args(args, parser)
     cmd = ns.pop('cmd')
 
-    return cmd, ns, cfgfile, verbosity, logfile, devmode
+    user = ns.pop('user', None)
+
+    return cmd, ns, cfgfile, user, verbosity, logfile, devmode
 
 
-def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
+def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
     try:
         run_cmd = COMMANDS[cmd]
     except KeyError:
@@ -984,7 +988,7 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
             reqid = parsed
         cmd_kwargs['reqid'] = reqid
     elif cmd.startswith('request-'):
-        reqid = RequestID.generate(cfg, kind=cmd[8:])
+        reqid = RequestID.generate(cfg, user, kind=cmd[8:])
         cmd_kwargs['reqid'] = reqid
     else:
         reqid = None
@@ -1020,6 +1024,6 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, verbosity, logfile, devmode = parse_args()
+    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args()
     configure_root_logger(verbosity, logfile)
-    main(cmd, cmd_kwargs, cfgfile, devmode)
+    main(cmd, cmd_kwargs, cfgfile, user, devmode)
