@@ -611,9 +611,6 @@ def _add_request_cli(add_cmd, add_hidden=True):
     sub.add_argument('--detached', dest='after',
                      action='store_const', const=('run',),
                      help='do not attach')
-    sub.add_argument('--wait', dest='after',
-                     action='store_const', const=('run', 'wait'),
-                     help='wait for the job to finish')
     sub.set_defaults(job='compile-bench')
 
     if add_hidden:
@@ -627,6 +624,8 @@ def _add_request_cli(add_cmd, add_hidden=True):
         )
 
         _common = argparse.ArgumentParser(add_help=False)
+        if add_hidden:
+            _common.add_argument('--user', help='use the given user')
         _common.add_argument('--run', dest='after',
                              action='store_const', const=('run', 'attach'),
                              help='(alias for --run-attached)')
@@ -642,6 +641,12 @@ def _add_request_cli(add_cmd, add_hidden=True):
         _common.add_argument('--wait', dest='after',
                              action='store_const', const=('run', 'wait'),
                              help='wait for the job to finish')
+        _common.add_argument('--upload', dest='after',
+                             action='store_const', const=('run', 'wait', 'upload'),
+                             help='upload after the job finishes')
+        if add_hidden:
+            _common.add_argument('--upload-arg', dest='uploadargs',
+                                 action='append', default=[])
         def add_job(job, p=(), **kw):
             return add_cmd(job, jobs, parents=[_common, *p], **kw)
 
@@ -675,6 +680,23 @@ def _add_request_cli(add_cmd, add_hidden=True):
         if args.after is None:
             # Use --run-attached as the default.
             args.after = ('run', 'attach')
+        elif type(args.after) is not tuple:
+            raise NotImplementedError(args.after)
+        # Handle --upload-arg.
+        uploadargs = ns.pop('uploadargs')
+        if uploadargs:
+            if 'upload' not in args.after:
+                parser.error('--upload-arg requires --upload')
+            args.upload_kwargs = {}
+            for arg in uploadargs:
+                if arg == '<no-push>':
+                    args.upload_kwargs['push'] = False
+                #elif arg in ('', '-', '<>', '<default>'):
+                #    args.upload_kwargs['repo'] = 'gh:faster-cpython/ideas'
+                else:
+                    raise NotImplementedError(arg)
+        elif 'upload' in args.after:
+            args.upload_kwargs = {}
     return handle_args
 
 
@@ -923,10 +945,12 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     handle_queue_args(args, parser)
     cmd = ns.pop('cmd')
 
-    return cmd, ns, cfgfile, verbosity, logfile, devmode
+    user = ns.pop('user', None)
+
+    return cmd, ns, cfgfile, user, verbosity, logfile, devmode
 
 
-def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
+def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
     try:
         run_cmd = COMMANDS[cmd]
     except KeyError:
@@ -940,7 +964,8 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
         except KeyError:
             logger.error('unsupported "after" cmd %r', _cmd)
             sys.exit(1)
-        after.append((_cmd, run_after))
+        _cmd_kwargs = cmd_kwargs.pop(f'{_cmd}_kwargs', None)
+        after.append((_cmd, run_after, _cmd_kwargs))
 
     logger.debug('')
     logger.debug('# PID: %s', PID)
@@ -970,7 +995,7 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
             reqid = parsed
         cmd_kwargs['reqid'] = reqid
     elif cmd.startswith('request-'):
-        reqid = RequestID.generate(cfg, kind=cmd[8:])
+        reqid = RequestID.generate(cfg, user, kind=cmd[8:])
         cmd_kwargs['reqid'] = reqid
     else:
         reqid = None
@@ -993,7 +1018,7 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
             logger.info(line)
 
     # Run "after" commands, if any
-    for cmd, run_cmd in after:
+    for cmd, run_cmd, cmd_kwargs in after:
         logger.info('')
         logger.info('#'*40)
         if reqid:
@@ -1002,10 +1027,10 @@ def main(cmd, cmd_kwargs, cfgfile=None, devmode=False):
             logger.info('# Running %r command', cmd)
         logger.info('')
         # XXX Add --lines='-1' for attach.
-        run_cmd(jobs, reqid=reqid)
+        run_cmd(jobs, reqid=reqid, **(cmd_kwargs or {}))
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, verbosity, logfile, devmode = parse_args()
+    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args()
     configure_root_logger(verbosity, logfile)
-    main(cmd, cmd_kwargs, cfgfile, devmode)
+    main(cmd, cmd_kwargs, cfgfile, user, devmode)
