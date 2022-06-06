@@ -642,7 +642,11 @@ def _add_request_cli(add_cmd, add_hidden=True):
                              action='store_const', const=('run', 'wait'),
                              help='wait for the job to finish')
         _common.add_argument('--upload', dest='after',
+                             action='store_const', const=('run', 'wait', 'upload'),
                              help='upload after the job finishes')
+        if add_hidden:
+            _common.add_argument('--upload-arg', dest='uploadargs',
+                                 action='append', default=[])
         def add_job(job, p=(), **kw):
             return add_cmd(job, jobs, parents=[_common, *p], **kw)
 
@@ -676,20 +680,23 @@ def _add_request_cli(add_cmd, add_hidden=True):
         if args.after is None:
             # Use --run-attached as the default.
             args.after = ('run', 'attach')
-        elif isinstance(args.after, str):
-            # --upload
-            upload = args.after
-            if upload == '<no-push>':
-                args.upload_kwargs = {'push': False}
-            elif upload in ('', '-', '<>', '<default>'):
-                pass
-            elif upload:
-                raise NotImplementedError(upload)
-            args.after = ('run', 'wait', 'upload')
         elif type(args.after) is not tuple:
             raise NotImplementedError(args.after)
-        if 'upload' in args.after and 'upload_kwargs' not in ns:
-            ns['upload_kwargs'] = {}
+        # Handle --upload-arg.
+        uploadargs = ns.pop('uploadargs')
+        if uploadargs:
+            if 'upload' not in args.after:
+                parser.error('--upload-arg requires --upload')
+            args.upload_kwargs = {}
+            for arg in uploadargs:
+                if arg == '<no-push>':
+                    args.upload_kwargs['push'] = False
+                #elif arg in ('', '-', '<>', '<default>'):
+                #    args.upload_kwargs['repo'] = 'gh:faster-cpython/ideas'
+                else:
+                    raise NotImplementedError(arg)
+        elif 'upload' in args.after:
+            args.upload_kwargs = {}
     return handle_args
 
 
