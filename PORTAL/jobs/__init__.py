@@ -9,7 +9,7 @@ import textwrap
 import time
 import types
 
-from . import _utils, requests as _requests
+from . import _utils, _pyperformance, requests as _requests
 from .requests import RequestID, Request, Result
 
 
@@ -817,7 +817,7 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def upload_result(self, author=None, *, push=True):
-        storage = _requests.FasterCPythonResults()
+        storage = _pyperformance.FasterCPythonResults()
         res = self.load_result()
         # We upload directly.
         storage.add(
