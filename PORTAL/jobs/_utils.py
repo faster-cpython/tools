@@ -2025,7 +2025,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         else:
             pid = None
 
-        return cls.__new__(sock, pid)
+        return cls.__new__(cls, sock, pid)
 
     @classmethod
     def parse_script(cls, script=None, *, requirepid=False):
@@ -2084,7 +2084,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
                     created = _created
         if not latest:
             return None
-        return cls.__new__(latest, None)
+        return cls.__new__(cls, latest, None)
 
     @classmethod
     def from_jsonable(cls, data):
