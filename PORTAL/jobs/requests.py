@@ -513,6 +513,7 @@ class BenchCompileRequest(Request):
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
+        self._impl = _utils.CPython()
 
     @property
     def cpython(self):
@@ -531,10 +532,10 @@ class BenchCompileRequest(Request):
                 #raise NotImplementedError
             elif self.branch == 'main':
                 release = 'main'
-            elif _utils.Version.parse(self.branch):
+            elif self._impl.parse_version(self.branch):
                 tag = self.ref.tag
                 if tag:
-                    ver = _utils.Version.parse(tag)
+                    ver = self._impl.parse_version(tag)
                     if not ver:
                         raise NotImplementedError(tag)
                     release = str(ver)

@@ -1234,30 +1234,35 @@ class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
 class GitRefCandidates:
 
     @classmethod
-    def from_revision(cls, revision, branch, remote):
+    def from_revision(cls, revision, branch, remote, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
         orig = GitRefRequest(remote, branch, revision)
-        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote)
-        self = cls()
+        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote,
+                                  parse_version)
+        self = cls(parse_version=parse_version)
         for req in reqs:
             self._add_req(req, orig)
         return self
 
     @classmethod
-    def _from_revision(cls, revision, branch, remote):
+    def _from_revision(cls, revision, branch, remote, parse_version):
         if branch == 'main':
             reqs = cls._from_main(revision, remote)
         elif remote == 'origin':
-            reqs = cls._from_origin(revision, branch)
+            reqs = cls._from_origin(revision, branch, parse_version)
         elif remote:
-            reqs = cls._from_non_origin(revision, branch, remote)
+            reqs = cls._from_non_origin(revision, branch, remote, parse_version)
         elif branch:  # no remote, maybe a revision
             # We know all remotes have release (version) branches.
-            reqs = cls._from_version(revision, branch, 'origin', required=False)
+            reqs = cls._from_version(revision, branch, 'origin',
+                                     parse_version, required=False)
             if not reqs:
                 # We don't bother trying to guess the remote at this point.
                 raise ValueError('missing remote for branch {branch!r}')
         elif revision:  # no remote or branch
-            reqs = cls._from_origin(revision, branch, required=False)
+            reqs = cls._from_origin(revision, branch,
+                                    parse_version, required=False)
             if not reqs:
                 raise ValueError(f'missing remote for revision {revision!r}')
         else:
@@ -1280,11 +1285,11 @@ class GitRefCandidates:
             raise ValueError(f'unexpected revision {revision!r}')
 
     @classmethod
-    def _from_origin(cls, revision, branch, required=True):
+    def _from_origin(cls, revision, branch, parse_version, required=True):
         if branch == 'main':
             return cls._from_main(revision, 'origin')
         elif branch:
-            return cls._from_version(revision, branch, 'origin')
+            return cls._from_version(revision, branch, 'origin', parse_version)
         elif revision == 'main':
             return cls._from_main(None, 'origin')
         elif revision in ('latest', 'HEAD'):
@@ -1295,17 +1300,18 @@ class GitRefCandidates:
             else:
                 # The only remaining possibility for origin
                 # is a release branch or tag.
-                return cls._from_version(revision, branch, 'origin', required)
+                return cls._from_version(revision, branch, 'origin',
+                                         parse_version, required)
         else:
             return cls._from_main(revision, 'origin')
 
     @classmethod
-    def _from_non_origin(cls, revision, branch, remote):
+    def _from_non_origin(cls, revision, branch, remote, parse_version):
         if branch:
             if not revision:
                 # For non-origin, we don't bother with "latest" for versions.
                 return [(remote, branch, 'HEAD')]
-            elif Version.parse(branch, match=revision):
+            elif parse_version(branch, match=revision):
                 return [(remote, branch, revision)]
             else:
                 if revision == 'latest':
@@ -1323,7 +1329,8 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, None, revision)]
             else:
-                reqs = cls._from_version(revision, None, remote, required=False)
+                reqs = cls._from_version(revision, None, remote,
+                                         parse_version, required=False)
                 if reqs:
                     return reqs
                 if looks_like_git_branch(revision):
@@ -1335,11 +1342,12 @@ class GitRefCandidates:
                     raise ValueError(f'unexpected revision {revision!r}')
 
     @classmethod
-    def _from_version(cls, revision, branch, remote, required=True):
+    def _from_version(cls, revision, branch, remote,
+                      parse_version, required=True):
         if not remote:
             remote = 'origin'
         if branch:
-            version = Version.parse(branch)
+            version = parse_version(branch)
             if not version:
                 if required:
                     raise ValueError(f'unexpected branch {branch!r}')
@@ -1356,14 +1364,14 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, branch, revision)]
             else:
-                tagver = Version.parse(revision)
+                tagver = parse_version(revision)
                 if not tagver:
                     raise ValueError(f'unexpected revision {revision!r}')
                 if tagver[:2] != version[:2]:
                     raise ValueError(f'tag {revision!r} does not match branch {branch!r}')
                 return [(remote, branch, revision)]
         else:
-            tagver = Version.parse(revision)
+            tagver = parse_version(revision)
             if not tagver:
                 if required:
                     raise ValueError(f'unexpected revision {revision!r}')
@@ -1374,7 +1382,10 @@ class GitRefCandidates:
                 (remote, verstr, 'latest' if revision == verstr else revision),
             ]
 
-    def __init__(self, reqs=None):
+    def __init__(self, reqs=None, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
+        self._parse_version = parse_version
         self._reqs = []
         for req in reqs or ():
             self._add_req(req)
@@ -1406,7 +1417,7 @@ class GitRefCandidates:
         for req in self._reqs:
             remote, branch, revision = req
             if remote not in by_remote:
-                by_remote[remote] = GitRefs.from_remote(remote)
+                by_remote[remote] = CPythonGitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
 
             match = self._find_ref(branch, revision, repo_refs)
@@ -1433,7 +1444,7 @@ class GitRefCandidates:
                 logger.warning(f'branch {branch} not found')
         elif revision == 'latest':
             assert branch, self
-            assert Version.parse(branch), (branch, self)
+            assert self._parse_version(branch), (branch, self)
             matched = repo_refs.match_latest_version(branch)
             if matched:
                 _branch, tag, commit = matched
@@ -1493,8 +1504,11 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
             return cls(remote, branch, tag, commit, name, requested)
 
     @classmethod
-    def resolve(cls, revision, branch, remote):
-        candidates = GitRefCandidates.from_revision(revision, branch, remote)
+    def resolve(cls, revision, branch, remote, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
+        candidates = GitRefCandidates.from_revision(revision, branch, remote,
+                                                    parse_version=parse_version)
         return candidates.find_ref(cls)
 
     @classmethod
@@ -1654,7 +1668,7 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
         return data
 
 
-class GitRefs(types.SimpleNamespace):
+class CPythonGitRefs(types.SimpleNamespace):
 
     @classmethod
     def from_remote(cls, remote):
@@ -1702,10 +1716,14 @@ class GitRefs(types.SimpleNamespace):
             tags=tags,
         )
 
+    @property
+    def _impl(self):
+        return CPython()
+
     def _release_branches(self):
         by_version = {}
         for branch in self.branches:
-            version = Version.parse(branch)
+            version = self._impl.parse_version(branch)
             if version and branch == f'{version.major}.{version.minor}':
                 by_version[version] = branch
         return by_version
@@ -1715,6 +1733,7 @@ class GitRefs(types.SimpleNamespace):
         if not releases:
             return ()
         latest, _ = sorted(releases.items())[-1]
+        Version = self._impl.VERSION
         return [
             Version(latest.major, latest.minor + 1),
             Version(latest.major + 1, 0),
@@ -1738,7 +1757,7 @@ class GitRefs(types.SimpleNamespace):
         else:
             # Treat it like main if one higher than the latest.
             branch = None
-            version = Version.parse(ref)
+            version = self._impl.parse_version(ref)
             if version and ref == f'{version.major}.{version.minor}':
                 if version in self._next_versions():
                     branch = 'main'
@@ -1757,11 +1776,11 @@ class GitRefs(types.SimpleNamespace):
     def match_tag(self, ref): 
         if not ref or not looks_like_git_branch(ref):
             return None
-        version = Version.parse(ref)
+        version = self._impl.parse_version(ref)
         if version:
             # Find a tag that matches the version.
             for tag in self.tags:
-                tagver = Version.parse(tag)
+                tagver = self._impl.parse_version(tag)
                 if tagver:
                     if tagver == version:
                         commit = self.tags[tag]
@@ -1800,12 +1819,12 @@ class GitRefs(types.SimpleNamespace):
     def match_latest_version(self, branch):
         if not branch or not looks_like_git_branch(branch):
             return None
-        version = Version.parse(branch)
+        version = CPython.version.parse(branch)
         if version:
             # Find the latest tag that matches the branch.
             matched = {}
             for tag in self.tags:
-                tagver = Version.parse(tag)
+                tagver = self._impl.parse_version(tag)
                 if version.match(tagver):
                     matched[(tagver.full, tag)] = (self.tags[tag], tagver)
             if matched:
@@ -2266,105 +2285,7 @@ class SSHClient(SSHCommands):
 
 
 ##################################
-# other utils
-
-def ensure_int(raw, min=None):
-    if isinstance(raw, int):
-        value = raw
-    elif isinstance(raw, str):
-        value = int(raw)
-    else:
-        raise TypeError(raw)
-    if value < min:
-        raise ValueError(raw)
-    return value
-
-
-def coerce_int(value, *, fail=True):
-    if isinstance(value, int):
-        return value
-    elif not value:
-        if fail:
-            raise ValueError('missing')
-    elif isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            if fail:
-                raise  # re-raise
-    else:
-        if fail:
-            raise TypeError(f'unsupported value {value!r}')
-    return None
-
-
-def validate_int(value, name=None, *, range=None, required=True):
-    if isinstance(value, int):
-        if not range:
-            return value
-        elif range == 'non-negative':
-            if value >= 0:
-                return value
-        else:
-            raise NotImplementedError(f'unsupported range {range!r}')
-        Error = ValueError
-    elif not value:
-        if not required:
-            return None
-        raise ValueError(f'missing {name}' if name else 'missing')
-    else:
-        Error = TypeError
-    # Failed!
-    qualifier = f'a {range}' if range else 'an'
-    namepart = f' for {name}' if name else ''
-    raise Error(f'expected {qualifier} int{namepart}, got {value}')
-
-
-def normalize_int(value, name=None, *,
-                  range=None,
-                  coerce=False,
-                  required=True,
-                  ):
-    if coerce:
-        value = coerce_int(value)
-    return validate_int(value, name, range=range, required=required)
-
-
-def get_slice(raw):
-    if isinstance(raw, int):
-        start = stop = None
-        if raw < 0:
-            start = raw
-        elif criteria > 0:
-            stop = raw
-        return slice(start, stop)
-    elif isinstance(raw, str):
-        if raw.isdigit():
-            return get_slice(int(raw))
-        elif raw.startswith('-') and raw[1:].isdigit():
-            return get_slice(int(raw))
-        else:
-            raise NotImplementedError(repr(raw))
-    else:
-        raise TypeError(f'expected str, got {criteria!r}')
-
-
-def as_jsonable(data):
-    if hasattr(data, 'as_jsonable'):
-        return data.as_jsonable()
-    elif data in (True, False, None):
-        return data
-    elif type(data) in (int, float, str):
-        return data
-    else:
-        # Recurse into containers.
-        if hasattr(data, 'items'):
-            return {k: as_jsonable(v) for k, v in data.items()}
-        elif hasattr(data, '__getitem__'):
-            return [as_jsonable(v) for v in data]
-        else:
-            raise TypeError(f'unsupported data {data!r}')
-
+# versions
 
 class VersionRelease(namedtuple('VersionRelease', 'level serial')):
 
@@ -2580,6 +2501,162 @@ class Version(namedtuple('Version', 'major minor micro release')):
         else:
             raise NotImplementedError(self.level)
         return f'v{self.major}.{self.minor}{micro}{release}'
+
+
+##################################
+# Python
+
+class PythonImplementation:
+
+    VERSION = Version
+
+    def __init__(self, name):
+        if not name:
+            raise ValueError('missing name')
+        self._name = name
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._name!r})'
+
+    def __str__(self):
+        return self.name
+
+    # XXX Support comparision with str.
+
+    @property
+    def name(self):
+        return self._name
+
+    def parse_version(self, version, *, requirestr=True):
+        try:
+            return self.VERSION.parse(version)
+        except TypeError:
+            if requirestr:
+                raise  # re-rase
+            return self.VERSION.from_raw(version)
+
+
+class CPython(PythonImplementation):
+
+    def __init__(self):
+        super().__init__('cpython')
+
+    class VERSION(Version):
+        ...
+
+        #@classmethod
+        #def find
+
+
+def resolve_python_implementation(impl):
+    if isinstance(impl, str):
+        if impl == 'cpython':
+            return CPython()
+        else:
+            return PythonImplementation(impl)
+    else:
+        raise NotImplementedError(impl)
+
+
+##################################
+# other utils
+
+def ensure_int(raw, min=None):
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        value = int(raw)
+    else:
+        raise TypeError(raw)
+    if value < min:
+        raise ValueError(raw)
+    return value
+
+
+def coerce_int(value, *, fail=True):
+    if isinstance(value, int):
+        return value
+    elif not value:
+        if fail:
+            raise ValueError('missing')
+    elif isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            if fail:
+                raise  # re-raise
+    else:
+        if fail:
+            raise TypeError(f'unsupported value {value!r}')
+    return None
+
+
+def validate_int(value, name=None, *, range=None, required=True):
+    if isinstance(value, int):
+        if not range:
+            return value
+        elif range == 'non-negative':
+            if value >= 0:
+                return value
+        else:
+            raise NotImplementedError(f'unsupported range {range!r}')
+        Error = ValueError
+    elif not value:
+        if not required:
+            return None
+        raise ValueError(f'missing {name}' if name else 'missing')
+    else:
+        Error = TypeError
+    # Failed!
+    qualifier = f'a {range}' if range else 'an'
+    namepart = f' for {name}' if name else ''
+    raise Error(f'expected {qualifier} int{namepart}, got {value}')
+
+
+def normalize_int(value, name=None, *,
+                  range=None,
+                  coerce=False,
+                  required=True,
+                  ):
+    if coerce:
+        value = coerce_int(value)
+    return validate_int(value, name, range=range, required=required)
+
+
+def get_slice(raw):
+    if isinstance(raw, int):
+        start = stop = None
+        if raw < 0:
+            start = raw
+        elif criteria > 0:
+            stop = raw
+        return slice(start, stop)
+    elif isinstance(raw, str):
+        if raw.isdigit():
+            return get_slice(int(raw))
+        elif raw.startswith('-') and raw[1:].isdigit():
+            return get_slice(int(raw))
+        else:
+            raise NotImplementedError(repr(raw))
+    else:
+        raise TypeError(f'expected str, got {criteria!r}')
+
+
+def as_jsonable(data):
+    if hasattr(data, 'as_jsonable'):
+        return data.as_jsonable()
+    elif data in (True, False, None):
+        return data
+    elif type(data) in (int, float, str):
+        return data
+    else:
+        # Recurse into containers.
+        if hasattr(data, 'items'):
+            return {k: as_jsonable(v) for k, v in data.items()}
+        elif hasattr(data, '__getitem__'):
+            return [as_jsonable(v) for v in data]
+        else:
+            raise TypeError(f'unsupported data {data!r}')
 
 
 class MetadataError(ValueError):
