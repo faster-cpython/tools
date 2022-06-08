@@ -2592,25 +2592,34 @@ def coerce_int(value, *, fail=True):
 
 
 def validate_int(value, name=None, *, range=None, required=True):
-    if isinstance(value, int):
+    def fail(value=value, name=name, range=range):
+        qualifier = 'an'
+        if isinstance(value, int):
+            if range:
+                qualifier = f'a {range}'
+            Error = ValueError
+        else:
+            Error = TypeError
+        namepart = f' for {name}' if name else ''
+        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+
+    if isinstance(value, int) and value is not False:
         if not range:
             return value
         elif range == 'non-negative':
-            if value >= 0:
-                return value
+            if value < 0:
+                fail()
+        elif range == 'positive':
+            if value <= 0:
+                fail()
         else:
             raise NotImplementedError(f'unsupported range {range!r}')
-        Error = ValueError
     elif not value:
         if not required:
             return None
         raise ValueError(f'missing {name}' if name else 'missing')
     else:
-        Error = TypeError
-    # Failed!
-    qualifier = f'a {range}' if range else 'an'
-    namepart = f' for {name}' if name else ''
-    raise Error(f'expected {qualifier} int{namepart}, got {value}')
+        fail()
 
 
 def normalize_int(value, name=None, *,
