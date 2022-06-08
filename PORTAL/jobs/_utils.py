@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import os.path
+import platform
 import re
 import shlex
 import shutil
@@ -354,6 +355,30 @@ def get_bool_env_var(name, default=None, *, failunknown=False):
     if value is None:
         return default
     return parse_bool_env_var(value, failunknown=failunknown)
+
+
+def resolve_os_name():
+    if sys.platform == 'win32':
+        return 'windows'
+    elif sys.paltform == 'linux':
+        return 'linux'
+    elif sys.platform == 'darwin':
+        return 'mac'
+    else:
+        raise NotImplementedError(sys.platform)
+
+
+def resolve_cpu_arch():
+    uname = platform.uname()
+    machine = uname.machine.lower()
+    if machine in ('amd64', 'x86_64'):
+        return machine
+    elif machine == 'aarch64':
+        return 'arm64'
+    elif 'arm' in machine:
+        return 'arm'
+    else:
+        raise NotImplementedError(machine)
 
 
 def get_termwidth(*, nontty=1000, unknown=80):
