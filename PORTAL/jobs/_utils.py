@@ -1733,10 +1733,9 @@ class CPythonGitRefs(types.SimpleNamespace):
         if not releases:
             return ()
         latest, _ = sorted(releases.items())[-1]
-        Version = self._impl.VERSION
         return [
-            Version(latest.major, latest.minor + 1),
-            Version(latest.major + 1, 0),
+            latest.next_minor(),
+            latest.next_major(),
         ]
 
     def match_ref(self, ref):
@@ -1773,7 +1772,7 @@ class CPythonGitRefs(types.SimpleNamespace):
                     return branch, None, commit
         return None
 
-    def match_tag(self, ref): 
+    def match_tag(self, ref):
         if not ref or not looks_like_git_branch(ref):
             return None
         version = self._impl.parse_version(ref)
@@ -2304,25 +2303,55 @@ class VersionRelease(namedtuple('VersionRelease', 'level serial')):
     )''')
 
     @classmethod
-    def from_values(cls, level=None, serial=None, *, usedefault=True):
+    def unreleased(cls):
+        return cls.__new__(cls, 'alpha', 0)
+
+    @classmethod
+    def initial(cls, level=None):
+        return cls.__new__(cls, level or 'alpha', 1)
+
+    @classmethod
+    def final(cls):
+        return cls.__new__(cls, 'final', 0)
+
+    @classmethod
+    def from_values(cls, level=None, serial=None):
+        # self._validate() will catch any bogus/missing level or serial.
+        try:
+            level = cls.LEVEL_SYMBOLS[level]
+        except (KeyError, TypeError):
+            pass
+
         if isinstance(serial, int):
-            return cls(level, serial)
+            pass
+        elif not serial:
+            if level == 'final':
+                serial = 0
+            elif not level:
+                level = 'final'
+                serial = 0
+        elif isinstance(serial, str):
+            serial = coerce_int(serial, fail=False)
+        return cls(level, serial)
+
+    @classmethod
+    def handle_parsed(cls, level, serial):
+        level, serial = cls._handle_parsed(level, serial)
+        if not level:
+            return None
+        return cls.__new__(cls, level, serial)
+
+    @classmethod
+    def _handle_parsed(cls, level, serial):
+        if level:
+            assert serial, (level, serial)
+            return (
+                cls.LEVEL_SYMBOLS[level],
+                coerce_int(serial, fail=False),
+            )
         else:
-            if not serial:
-                if level == 'final':
-                    serial = 0
-                elif not level:
-                    if not usedefault:
-                        return None
-                    level = 'final'
-                    serial = 0
-            elif isinstance(serial, str):
-                serial = coerce_int(serial, fail=False)
-            try:
-                level = cls.LEVEL_SYMBOLS[level]
-            except (KeyError, TypeError):
-                pass
-            return cls(level, serial)
+            assert not serial, (level, serial)
+            return None, None
 
     @classmethod
     def validate(cls, release):
@@ -2334,8 +2363,7 @@ class VersionRelease(namedtuple('VersionRelease', 'level serial')):
         self._validate()
 
     def __str__(self):
-        level = self.LEVELS[self.level]
-        return f'{self.LEVELS[self.level]}{self.serial}'
+        return self.render()
 
     def _validate(self):
         if not self.level:
@@ -2345,7 +2373,166 @@ class VersionRelease(namedtuple('VersionRelease', 'level serial')):
         elif self.level == 'final':
             if self.serial != 0:
                 raise ValueError(f'final releases always have a serial of 0, got {self.serial}')
-        validate_int(self.serial, 'serial', range='non-negative', required=True)
+        if self.level == 'alpha':
+            validate_int(self.serial, 'serial', range='non-negative', required=True)
+        else:
+            validate_int(self.serial, 'serial', range='positive', required=True)
+
+    @property
+    def is_unreleased(self):
+        return self.level == 'alpha' and self.serial == 0
+
+    def next_level(self):
+        cls = type(self)
+        if self.level == 'alpha':
+            return cls.__new__(cls, 'beta', 1)
+        elif self.level == 'beta':
+            return cls.__new__(cls, 'candidate', 1)
+        elif self.level == 'candidate':
+            return cls.__new__(cls, 'final', 0)
+        elif self.level == 'final':
+            raise ValueError('a final release has no next level')
+        else:
+            raise NotImplementedError(self.level)
+
+    def next_serial(self, max=None):
+        if self.level == 'final':
+            raise ValueError('a final release has no next serial')
+        elif max and self.serial >= max:
+            return self.next_level()
+        else:
+            cls = type(self)
+            return cls.__new__(cls, self.level, self.serial + 1)
+
+    def next(self, plan=None):
+        if self.level == 'alpha':
+            maxserial = plan.nalphas if plan else None
+        elif self.level == 'beta':
+            maxserial = plan.nbetas if plan else None
+        elif self.level == 'candidate':
+            maxserial = plan.ncandidates if plan else None
+        elif self.level == 'final':
+            maxserial = None
+        else:
+            raise NotImplementedError(self.level)
+        return self.next_serial(maxserial)
+
+    def render(self):
+        level = self.LEVELS[self.level]
+        return f'{self.LEVELS[self.level]}{self.serial}'
+
+
+class ReleaseInfo(namedtuple('ReleaseInfo', 'date rm')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, (datetime.date, datetime.datetime)):
+            return cls(date=raw)
+        else:
+            raise TypeError(f'unsupported raw value {raw!r}')
+
+    def __new__(cls, date=None, rm=None):
+        return super().__new__(cls, date, rm)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        ...
+
+
+class ReleasePlan:
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            return cls(raw)
+
+    @classmethod
+    def _normalize_data(cls, data):
+        levels = sorted(VersionRelease.LEVELS)
+
+        schedule = []
+        bylevel = {l: [] for l in levels}
+        bylevel['final'] = None
+        if hasattr(data, 'items'):
+            if set(data) - bylevel:
+                raise ValueError(f'got unexpected release levels in {data}')
+            for level in levels:
+                if level == 'final':
+                    continue
+                for info in data.get(level) or ():
+                    info = ReleaseInfo.from_raw(info)
+                    schedule.append((level, info))
+                    bylevel[level].append(info)
+            final = ReleaseInfo.from_raw(data.get('final'))
+            if final:
+                schedule.append(('final', final))
+                bylevel['final'] = final
+        elif isinstance(data, str):
+            raise NotImplementedError(repr(schedule))
+        else:
+            for entry in data:
+                if isinstance(entry, (tuple, list)):
+                    level, info= entry
+                    if level not in bylevel:
+                        raise ValueError(f'unsupported release level {level!r}')
+                    info = ReleaseInfo.from_raw(info)
+                    schedule.append((level, info))
+                    bylevel[level].append(info)
+                else:
+                    raise NotImplementedError(entry)
+        return schedule, bylevel
+
+    def __init__(self, data):
+        if not data:
+            raise ValueError('missing data')
+        self._schedule, self._bylevel = self._normalize_data(data)
+
+    @property
+    def nalphas(self):
+        return len(self._bylevel['alpha'])
+
+    @property
+    def nbetas(self):
+        return len(self._bylevel['beta'])
+
+    @property
+    def ncandidates(self):
+        return len(self._bylevel['candidate'])
+
+
+class ReleasePlans:
+
+    @classmethod
+    def _normalize_data(cls, data):
+        plans = {}
+        for ver, plan in data.items():
+            version = Version.from_raw(ver)
+            if not version:
+                raise ValueError(f'bad version {ver!r}')
+            version = version.plain
+            if version in plans:
+                raise KeyError(f'duplicate release plan for {version}')
+            plan = ReleasePlan.from_raw(plan)
+            plans[version.plain] = plan
+        return plans
+
+    def __init__(self, plans):
+        if not plans:
+            raise ValueError('missing plans')
+        self._plans = self._normalize_data(plans)
+
+    def get(self, version):
+        return self._plans.get(version.plain)
 
 
 class Version(namedtuple('Version', 'major minor micro release')):
@@ -2355,16 +2542,17 @@ class Version(namedtuple('Version', 'major minor micro release')):
         \.
         (\d+)  # <minor>
         (?:
-            (?:
-                \.
-                (\d+)  # <micro>
-             )?
-            (?:
-                {VersionRelease.PAT}  # <level> <serial>
-            )?
+            \.
+            (\d+)  # <micro>
          )?
+        (?:
+            {VersionRelease.PAT}  # <level> <serial>
+         )?
+        ( \+ )?  # <extra>
     )''')
     REGEX = re.compile(f'^v?{PAT}$', re.VERBOSE)
+
+    _extra = None
 
     @classmethod
     def from_raw(cls, raw):
@@ -2384,19 +2572,35 @@ class Version(namedtuple('Version', 'major minor micro release')):
         m = cls.REGEX.match(verstr)
         if not m:
             return None
-        major, minor, micro, level, serial = m.groups()
-        release = VersionRelease.from_values(level, serial, usedefault=False)
-        self = cls.__new__(
-            cls,
+        (major, minor, micro, release, extra,
+         ) = cls._handle_parsed(verstr, *m.groups())
+        cls._validate_values(verstr, major, minor, micro, release)
+        cls._validate_extra(verstr, extra, major, minor, micro, release)
+        self = cls.__new__(cls, major, minor, micro, release)
+        self._raw = verstr
+        self._extra = extra
+        if match is not None and not self.match(match):
+            return None
+        return self
+
+    @classmethod
+    def _handle_parsed(cls, verstr, major, minor, micro, level, serial, extra):
+        release = VersionRelease.handle_parsed(level, serial)
+        return (
             int(major),
             int(minor),
             int(micro) if micro else 0 if release else None,
             release,
+            extra or None,
         )
-        self._raw = verstr
-        if match is not None and not self.match(match):
-            return None
-        return self
+
+    @classmethod
+    def _validate_values(cls, verstr, major, minor, micro, release):
+        return
+
+    @classmethod
+    def _validate_extra(cls, verstr, extra, major, minor, micro, release):
+        return
 
     def __new__(cls, major, minor, micro=None, release=None):
         return super().__new__(cls, major, minor, micro, release or None)
@@ -2418,6 +2622,8 @@ class Version(namedtuple('Version', 'major minor micro release')):
             VersionRelease.validate(self.release)
             if self.micro is None:
                 raise ValueError('missing micro')
+        self._validate_values(self, *self)
+        self._validate_extra(self, self._extra, *self)
 
     @property
     def branch(self):
@@ -2427,8 +2633,8 @@ class Version(namedtuple('Version', 'major minor micro release')):
     def full(self):
         if self.release:
             return self
-        major, minor, micro = self[:3]
-        release = VersionRelease.from_values()
+        major, minor, micro, _ = self
+        release = VersionRelease.final()
         cls = type(self)
         full = cls.__new__(cls, major, minor, micro or 0, release)
         full._raw = self._raw
@@ -2436,7 +2642,7 @@ class Version(namedtuple('Version', 'major minor micro release')):
 
     @property
     def plain(self):
-        major, minor, micro = self[:3]
+        major, minor, micro, _ = self
         if micro and not self.release:
             return self
         cls = type(self)
@@ -2449,6 +2655,7 @@ class Version(namedtuple('Version', 'major minor micro release')):
         major, minor, micro, release = self
         level, serial = release if release else (None, None)
         return major, minor, micro, level, serial
+        #return major, minor, micro, level, serial, self._extra
 
     @property
     def raw(self):
@@ -2457,6 +2664,58 @@ class Version(namedtuple('Version', 'major minor micro release')):
         except AttributeError:
             self._raw = self.render()
             return self._raw
+
+    @property
+    def unreleased(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.unreleased()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    @property
+    def initial(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.initial()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    @property
+    def final(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.final()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    def next_major(self):
+        cls = type(self)
+        return cls.__new__(cls, self.major + 1, 0)
+
+    def next_minor(self):
+        cls = type(self)
+        return cls.__new__(cls, self.major, self.minor + 1)
+
+    def next_micro(self):
+        major, minor, micro, _ = self
+        cls = type(self)
+        return cls.__new__(cls, major, minor, (micro or 0) + 1)
+
+    def next(self):
+        if self.release:
+            return self.next_release()
+        elif micro:
+            return self.next_micro()
+        else:
+            return self.next_minor()
+
+    def next_release(self, plans=None):
+        cls = type(self)
+        major, minor, micro, release = self
+        if not release or release.level == 'final':
+            # It's a final release.
+            return self.next_micro().initial
+        plan = plans.get(self) if plans else None
+        release = release.next(plan)
+        return cls.__new__(cls, major, minor, micro, release)
 
 #    def compare(self, other):
 #        raise NotImplementedError
@@ -2480,13 +2739,14 @@ class Version(namedtuple('Version', 'major minor micro release')):
                     return self[:2] == other[:2]
         return False
 
-    def render(self):
+    def render(self, *, withextra=True):
         if self.release:
-            return f'{self.major}.{self.minor}.{self.micro}{self.release}'
+            verstr = f'{self.major}.{self.minor}.{self.micro}{self.release}'
         elif self.micro:
-            return f'{self.major}.{self.minor}.{self.micro}'
+            verstr = f'{self.major}.{self.minor}.{self.micro}'
         else:
-            return f'{self.major}.{self.minor}'
+            verstr = f'{self.major}.{self.minor}'
+        return f'{verstr}{self._extra}' if self._extra else verstr
 
     def as_tag(self):
         micro = f'.{self.micro}' if self.micro else ''
@@ -2501,6 +2761,41 @@ class Version(namedtuple('Version', 'major minor micro release')):
         else:
             raise NotImplementedError(self.level)
         return f'v{self.major}.{self.minor}{micro}{release}'
+
+
+class CPythonVersion(Version):
+
+    #@classmethod
+    #def _validate_values(cls, verstr, major, minor, micro, release):
+    #    if micro:
+    #        if release and release.level != 'final':
+    #            raise ValueError(f'bugfix versions can only be final, got {verstr})')
+
+    @classmethod
+    def _validate_extra(cls, verstr, extra, major, minor, micro, release):
+        if extra == '+':
+            if not self.release:
+                raise ValueError('missing release (for dev version)')
+            elif self.release.is_dev:
+                raise ValueError('dev release not supported for dev version')
+        elif extra:
+            raise ValueError(f'unexpected data {extra!r}')
+
+    @property
+    def is_dev(self):
+        if self._extra:
+            return True
+        return self.release and self.release.is_unreleased
+
+    @property
+    def is_bugfix(self):
+        return bool(self.micro)
+
+    def next_release(self, plans=None):
+        if self.micro:
+            return self.next_micro().final
+        else:
+            return super().next_release(plans)
 
 
 ##################################
@@ -2538,14 +2833,10 @@ class PythonImplementation:
 
 class CPython(PythonImplementation):
 
+    VERSION = CPythonVersion
+
     def __init__(self):
         super().__init__('cpython')
-
-    class VERSION(Version):
-        ...
-
-        #@classmethod
-        #def find
 
 
 def resolve_python_implementation(impl):
