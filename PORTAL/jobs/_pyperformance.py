@@ -87,8 +87,6 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
     # for details on this filename format.
 
-    MAIN_VERSION = '3.12a0'
-
     REGEX = re.compile(r'''
         ^
         ( \w+ )  # <impl>
@@ -116,9 +114,10 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         impl, verstr, commit, host, compatid, suite, suffix = m.groups()
         impl = _utils.resolve_python_implementation(impl)
         if verstr == 'main':
-            verstr = cls.MAIN_VERSION
-            name = name.replace('-main-', f'-{verstr}-')
-        version = impl.parse_version(verstr)
+            version = impl.VERSION.resolve_main()
+            name = name.replace('-main-', f'-{version}-')
+        else:
+            version = impl.parse_version(verstr)
         self = cls(impl, version, commit, host, compatid, suite)
         self._name = name
         self._suffix = suffix
@@ -145,9 +144,14 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         impl = _utils.resolve_python_implementation(
             impl or metadata.python_implementation or 'cpython',
         )
+        if not version or version == 'main':
+            # We assume "main".
+            version = impl.VERSION.resolve_main()
+        else:
+            version = impl.parse_version(version, requirestr=False)
         self = cls(
             impl=impl,
-            version=impl.parse_version(version, requirestr=False),
+            version=version,
             commit=metadata.commit,
             host=host or metadata.host,
             compatid=metadata.compatid,
@@ -176,7 +180,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             return self._name
         except AttributeError:
             impl, version, commit, host, compatid, suite = self
-            name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid}'
+            name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid[:12]}'
             if suite and suite != 'pyperformance':
                 name = f'{name}-{suite}'
             self._name = name
@@ -283,7 +287,7 @@ class PyperfResults:
         except AttributeError:
             self._uploadid = PyperfUploadID.from_metadata(
                 self.metadata,
-                version = self.version,
+                version=self.version,
                 host=getattr(self, '_host', None) or None,
                 suite=self.suite,
             )
@@ -334,7 +338,7 @@ class PyperfResults:
         cls = type(self)
         for suite, data in by_suite.items():
             host = getattr(self, '_host', None)
-            results = cls(None, self.filename, host, suite)
+            results = cls(None, self.filename, self.version, host, suite)
             results._data = data
             by_suite[suite] = results
         return by_suite

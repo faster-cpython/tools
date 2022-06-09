@@ -2568,6 +2568,10 @@ class Version(namedtuple('Version', 'major minor micro release')):
             return cls(**raw)
 
     @classmethod
+    def resolve_main(cls):
+        raise NotImplementedError
+
+    @classmethod
     def parse(cls, verstr, match=None):
         m = cls.REGEX.match(verstr)
         if not m:
@@ -2764,6 +2768,11 @@ class Version(namedtuple('Version', 'major minor micro release')):
 
 
 class CPythonVersion(Version):
+
+    @classmethod
+    def resolve_main(cls):
+        # XXX Use CPythonGitRefs to get the right one.
+        return cls(3, 12, 0).unreleased
 
     #@classmethod
     #def _validate_values(cls, verstr, major, minor, micro, release):
