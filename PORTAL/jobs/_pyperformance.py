@@ -345,6 +345,31 @@ class PyperfResults:
 
 class PyperfResultsMetadata:
 
+    EXPECTED = {
+        # top-level
+        "aslr",
+        "boot_time",
+        "commit_branch",
+        "commit_date",
+        "commit_id",
+        "cpu_affinity",
+        "cpu_config",
+        "cpu_count",
+        "cpu_model_name",
+        "hostname",
+        "performance_version",
+        "platform",
+        "unit",
+        # per-benchmark
+        "perf_version",
+        "python_cflags",
+        "python_compiler",
+        "python_implementation",
+        "python_version",
+        "timer",
+        "runnable_threads",
+    }
+
     @classmethod
     def from_raw(cls, raw):
         if not raw:
@@ -357,7 +382,35 @@ class PyperfResultsMetadata:
     @classmethod
     def from_full_results(cls, data):
         metadata = dict(data['metadata'])
+        for key, value in cls._merge_from_benchmarks(data['benchmarks']).items():
+            if key in metadata:
+                if value != metadata[key]:
+                    logger.warn(f'metadata mismatch for {key} (top: {metadata[key]!r}, bench: {value!r}); ignoring')
+            else:
+                metadata[key] = value
         return cls(metadata, data['version'])
+
+    @classmethod
+    def _merge_from_benchmarks(cls, data):
+        metadata = {}
+        for bench in data:
+            for key, value in bench['metadata'].items():
+                if key not in cls.EXPECTED:
+                    continue
+                if not value:
+                    continue
+                if key in metadata:
+                    if metadata[key] is None:
+                        continue
+                    if value != metadata[key]:
+                        logger.warn(f'metadata mismatch for {key} ({value!r} != {metadata[key]!r}); ignoring')
+                        metadata[key] = None
+                else:
+                    metadata[key] = value
+        for key, value in list(metadata.items()):
+            if value is None:
+                del metadata[key]
+        return metadata
 
     def __init__(self, data, version=None):
         self._data = data
