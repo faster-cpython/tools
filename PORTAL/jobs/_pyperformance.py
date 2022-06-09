@@ -82,6 +82,45 @@ class Benchmarks:
                     yield name[3:]
 
 
+class PyperfTable:
+
+    FORMATS = ['raw', 'meanonly']
+
+    @classmethod
+    def parse(cls, text):
+        rows = (l.split('|')[1:-1]
+                for l in text.splitlines()
+                if not l.startswith('+'))
+        rows = [[v.strip() for v in r] for r in rows]
+        self = cls(rows[2:], rows[0])
+        self._text = text
+        return self
+
+    def __init__(self, rows, header=None):
+        self.header = tuple(header)
+        self.rows = [zip(self.header, r) for r in rows]
+
+    def render(self, fmt=None):
+        if not fmt:
+            fmt = 'raw'
+        if fmt == 'raw':
+            text = getattr(self, '_text', None)
+            if not text:
+                raise NotImplementedError
+            yield from text.splitlines()
+        elif fmt == 'meanonly':
+            text = getattr(self, '_text', None)
+            if not text:
+                raise NotImplementedError
+            for line in text.splitlines():
+                if 'Geometric mean' in line:
+                    break
+            else:
+                raise NotImplementedError(text)
+        else:
+            raise ValueError(f'unsupported fmt {fmt!r}')
+
+
 class PyperfUploadID(namedtuple('PyperfUploadName',
                                 'impl version commit host compatid suite')):
     # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
@@ -225,15 +264,14 @@ class PyperfResultsFile:
         return PyperfResults(data, filename, version, host)
 
     def compare(self, others):
-        argv = [
+        proc = _utils.run_fg(
             sys.executable, '-m', 'pyperf', 'compare_to',
             '--group-by-speed',
             '--table',
             os.path.relpath(self._filename),
             *(os.path.relpath(o.filename)
               for o in others),
-        ]
-        proc = subprocess.run(argv, stdout=subprocess.PIPE, encoding='utf-8')
+        )
         if proc.returncode:
             return None
         return PyperfTable.parse(proc.stdout)

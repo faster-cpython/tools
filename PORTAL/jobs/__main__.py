@@ -16,6 +16,7 @@ from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
 )
+from ._pyperformance import PyperfResultsFile, PyperfTable
 from ._utils import (
     LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
 )
@@ -244,6 +245,27 @@ def cmd_wait(jobs, reqid=None):
 def cmd_upload(jobs, reqid, *, author=None, push=True):
     job = jobs.get(reqid)
     job.upload_result(author, push=push)
+
+
+def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
+    results = [res1, *others]
+    for i, res in enumerate(results):
+        if isinstance(res, str):
+            reqid = RequestID.parse(res)
+            if reqid:
+                job = jobs.get(reqid)
+                res = job.fs.result.pyperformance_results
+            elif os.path.isfile(res):
+                pass
+            else:
+                sys.exit(f'unsupported ID or filename {res!r}')
+        else:
+            sys.exit(f'unsupported ID or filename {res!r}')
+        results[i] = PyperfResultsFile(res)
+    table = results[0].compare(results[1:])
+    fmt = 'meanonly' if meanonly else 'raw'
+    for line in table.render(fmt):
+        print(line)
 
 
 # internal
@@ -529,6 +551,7 @@ COMMANDS = {
     'cancel': cmd_cancel,
     'wait': cmd_wait,
     'upload': cmd_upload,
+    'compare': cmd_compare,
     # specific jobs
     'request-compile-bench': cmd_request_compile_bench,
     # queue management
@@ -902,6 +925,13 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         sub.add_argument('--no-push', dest='push', action='store_false')
         sub.add_argument('--push', dest='push', action='store_const', const=True)
     sub.add_argument('reqid')
+
+    sub = add_cmd('compare', help='Compare two or more results')
+    #sub.add_argument('--fmt', choices=PyperfTable.FORMATS)
+    sub.add_argument('--mean-only', dest='meanonly', action='store_true')
+    sub.add_argument('--pyston', action='store_true')
+    sub.add_argument('res1')
+    sub.add_argument('others', nargs='+')
 
     # XXX Also add export and import?
 
