@@ -188,11 +188,7 @@ class CompileBenchResult(Result):
             resfile = _pyperformance.PyperfResultsFile(
                 self.fs.pyperformance_results,
             )
-            self._pyperf = _pyperformance.PyperfResults.from_file(
-                filename,
-                host=self.host,
-                source=self.request.release,
-            )
+            self._pyperf = resfile.read(self.host, self.request.release)
             return self._pyperf
 
 
