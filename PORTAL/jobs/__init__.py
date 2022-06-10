@@ -394,7 +394,7 @@ class JobAlreadyFinishedError(JobFinishedError):
 
 class Job:
 
-    def __init__(self, reqid, fs, worker, cfg):
+    def __init__(self, reqid, fs, worker, cfg, store):
         if not reqid:
             raise ValueError('missing reqid')
         if not fs:
@@ -409,12 +409,13 @@ class Job:
         self._fs = fs
         self._worker = worker
         self._cfg = cfg
+        self._store = store
         self._pidfile = _utils.PIDFile(fs.pidfile)
         self._kind = resolve_job_kind(self._reqid.kind)
 
     def __repr__(self):
         args = (f'{n}={str(getattr(self, "_"+n))!r}'
-                for n in 'reqid fs worker cfg'.split())
+                for n in 'reqid fs worker cfg store'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
     def __str__(self):
@@ -822,14 +823,13 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def upload_result(self, author=None, *, push=True):
-        storage = _pyperformance.FasterCPythonResults()
         res = self.load_result()
         # We upload directly.
-        storage.add(
+        self._store.add(
             res.pyperf,
             branch='main',
             author=author,
-            unzipped=True,
+            compressed=False,
             split=True,
             push=push,
         )
@@ -1004,6 +1004,7 @@ class Jobs:
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
+        self._store = _pyperformance.FasterCPythonResults()
 
     def __str__(self):
         return self._fs.root
@@ -1042,6 +1043,7 @@ class Jobs:
             self._fs.resolve_request(reqid),
             self._worker.resolve(reqid),
             self._cfg,
+            self._store,
         )
 
     def get_current(self):
@@ -1053,7 +1055,39 @@ class Jobs:
     def get(self, reqid=None):
         if not reqid:
             return self.get_current()
+        orig = reqid
+        reqid = RequestID.from_raw(orig)
+        if not reqid:
+            if isinstance(orig, str):
+                reqid = self._parse_reqdir(orig)
+            if not reqid:
+                return None
         return self._get(reqid)
+
+    def _parse_reqdir(self, filename):
+        dirname, basename = os.path.split(filename)
+        reqid = RequestID.parse(basename)
+        if not reqid:
+            # It must be a file in the request dir.
+            reqid = RequestID.parse(os.path.basename(dirname))
+        return reqid
+
+    def match_results(self, specifier, suites=None):
+        matched = list(self._store.match(specifier, suites=suites))
+        if matched:
+            yield from matched
+        else:
+            yield from self._match_job_results(specifier, suites)
+
+    def _match_job_results(self, specifier, suites):
+        if isinstance(specifier, str):
+            job = self.get(specifier)
+            if job:
+                filename = job.fs.result.pyperformance_results
+                if suites:
+                    # XXX Handle this?
+                    pass
+                yield _pyperformance.PyperfResultsFile(filename)
 
     def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:

@@ -127,7 +127,9 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     # for details on this filename format.
 
     REGEX = re.compile(r'''
+        # We do no strip leading/trailing whitespace in this regex.
         ^
+        ( .*? )  # <prefix>
         ( \w+ )  # <impl>
         -
         ( main | \d\.\d+\. (?: 0a\d+ | 0b\d+ | 0rc\d+ | [1-9]\d* ) )  # <version>
@@ -141,16 +143,58 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             -
             ( pyston )  # <suite>
         )?
-        ( \.json (?: \.gz)? )?  # <suffix>
+        #( \.json (?: \.gz )? )?  # <suffix>
+        ( \. .*? )?  # <suffix>
         $
     ''', re.VERBOSE)
 
     @classmethod
-    def parse(cls, name):
-        m = cls.REGEX.match(name)
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            self = cls.parse(raw)
+            if not self:
+                return cls.from_filename(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def from_filename(cls, filename):
+        # XXX Add a "checkexists" option?
+        basename = os.path.basename(filename)
+        self = cls._parse(basename)
+        if self is None:
+            return None
+        if self.name != basename:
+            filename = os.path.abspath(filename)
+        self._filename = filename
+        return self
+
+    @classmethod
+    def parse(cls, name, *, allowprefix=False, allowsuffix=False):
+        self = cls._parse(name)
+        if self:
+            if not allowprefix and self._prefix:
+                return None
+            if not allowsuffix and self._suffix:
+                return None
+        return self
+
+    @classmethod
+    def _parse(cls, uploadid):
+        m = cls.REGEX.match(uploadid)
         if not m:
             return None
-        impl, verstr, commit, host, compatid, suite, suffix = m.groups()
+        (prefix, impl, verstr, commit, host, compatid, suite, suffix,
+         ) = m.groups()
+        name = uploadid
+        if prefix:
+            name = name[len(prefix):]
+        if suffix:
+            name = name[:-len(suffix)]
         impl = _utils.resolve_python_implementation(impl)
         if verstr == 'main':
             version = impl.VERSION.resolve_main()
@@ -159,17 +203,8 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             version = impl.parse_version(verstr)
         self = cls(impl, version, commit, host, compatid, suite)
         self._name = name
-        self._suffix = suffix
-        return self
-
-    @classmethod
-    def from_filename(cls, filename):
-        filename = os.path.abspath(filename)
-        _, basename = os.path.split(filename)
-        self = cls.parse(basename)
-        if self is None:
-            return None
-        self._filename = filename
+        self._prefix = prefix or None
+        self._suffix = suffix or None
         return self
 
     @classmethod
@@ -202,18 +237,6 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         return self.name
 
     @property
-    def implementation(self):
-        return self.impl
-
-    @property
-    def filename(self):
-        try:
-            return self._filename
-        except AttributeError:
-            suffix = getattr(self, '_suffix', None) or ''
-            return f'{self.name}{suffix}'
-
-    @property
     def name(self):
         try:
             return self._name
@@ -224,6 +247,87 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
                 name = f'{name}-{suite}'
             self._name = name
             return name
+
+    @property
+    def implementation(self):
+        return self.impl
+
+    @property
+    def filename(self):
+        try:
+            return self._filename
+        except AttributeError:
+            filename, *_ = self.resolve_filenames()
+            return filename
+
+    def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
+        if dirname is True:
+            if hasattr(self, '_dirname') and self._dirname:
+                dirnames = [self._dirname]
+        elif dirname:
+            if isinstance(dirname, str):
+                dirnames = [dirname]
+            else:
+                dirnames = list(dirname)
+            if any(not d for d in dirnames):
+                raise ValueError(f'blank dirname in {dirname}')
+        else:
+            dirnames = []
+
+        if prefix is True:
+            if hasattr(self, '_prefix') and self._prefix:
+                prefixes = [self._prefix]
+        elif prefix:
+            if isinstance(prefix, str):
+                prefixes = [prefix]
+            else:
+                prefixes = list(prefix)
+            if any(not p for p in prefixes):
+                raise ValueError(f'blank prefix in {prefix}')
+        else:
+            prefixes = [None]
+
+        if suffix is True:
+            if hasattr(self, '_suffix') and self._suffix:
+                suffixes = [self._suffix]
+        elif suffix:
+            if isinstance(suffix, str):
+                suffixes = [suffix]
+            else:
+                suffixes = list(suffix)
+            if any(not s for s in suffixes):
+                raise ValueError(f'blank suffix in {suffix}')
+        else:
+            suffixes = [None]
+
+        name = self.name
+        # XXX Ignore duplicates?
+        for suffix in suffixes:
+            for prefix in prefixes:
+                filename = f'{prefix or ""}{name}{suffix or ""}'
+                if dirnames:
+                    for dirname in dirnames:
+                        yield os.path.join(dirname, filename)
+                else:
+                    yield filename
+
+    def copy(self, **replacements):
+        if not replacements:
+            return self
+        kwargs = dict(self._asdict(), **replacements)
+        # XXX Validate the replacements.
+        cls = type(self)
+        copied = cls(**kwargs)
+        # We do not copy self._name.
+        suffix = getattr(self, '_suffix', None)
+        if suffix:
+            copied._suffix = suffix
+        dirname = getattr(self, '_dirname', None)
+        if dirname:
+            copied._dirname = dirname
+        elif hasattr(self, '_filename') and self._filename:
+            copied._dirname = os.path.dirname(filename)
+        return copied
 
 
 class PyperfResultsFile:
@@ -239,10 +343,18 @@ class PyperfResultsFile:
         else:
             raise TypeError(raw)
 
-    def __init__(self, filename):
+    def __init__(self, filename, uploadid=None):
         if not filename:
             raise ValueError('missing filename')
         self._filename = os.path.abspath(filename)
+        if uploadid:
+            uploadid = PyperfUploadID.from_raw(uploadid)
+        else:
+            uploadid = PyperfUploadID.from_filename(filename)
+        self._uploadid = uploadid
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self.filename!r})'
 
     def __str__(self):
         return self._filename
@@ -261,25 +373,38 @@ class PyperfResultsFile:
             raise NotImplementedError(filename)
         with _open(filename) as infile:
             data = json.load(infile)
-        return PyperfResults(data, filename, version, host)
+        return PyperfResults(
+            data,
+            filename,
+            version,
+            host,
+            uploadid=self._uploadid,
+        )
 
     def compare(self, others):
+        optional = []
+        if len(others) == 1:
+            optional.append('--group-by-speed')
         proc = _utils.run_fg(
             sys.executable, '-m', 'pyperf', 'compare_to',
-            '--group-by-speed',
+            *(optional),
             '--table',
             os.path.relpath(self._filename),
             *(os.path.relpath(o.filename)
               for o in others),
         )
         if proc.returncode:
+            logger.warn(proc.stdout)
             return None
         return PyperfTable.parse(proc.stdout)
 
 
 class PyperfResults:
 
-    def __init__(self, data, resfile=None, version=None, host=None, suite=None):
+    def __init__(self, data, resfile=None, version=None, host=None, *,
+                 suite=None,
+                 uploadid=None,
+                 ):
         if data:
             self._set_data(data)
         elif not resfile:
@@ -289,6 +414,10 @@ class PyperfResults:
         if host:
             self._host = host
         self.suite = suite or None
+        if uploadid:
+            self._uploadid = PyperfUploadID.from_raw(uploadid)
+            if not version:
+                self.version = self._uploadid.version
 
     def _set_data(self, data):
         if hasattr(self, '_data'):
@@ -378,6 +507,8 @@ class PyperfResults:
             host = getattr(self, '_host', None)
             results = cls(None, self.filename, self.version, host, suite)
             results._data = data
+            if hasattr(self, '_uploadid') and self._uploadid:
+                results._uploadid = self._uploadid.copy(suite=suite)
             by_suite[suite] = results
         return by_suite
 
@@ -554,6 +685,15 @@ class PyperfResultsMetadata:
 
 class PyperfResultsStorage:
 
+    def iter_all(self):
+        raise NotImplementedError
+
+    def get(self, uploadid):
+        raise NotImplementedError
+
+    def match(self, specifier):
+        raise NotImplementedError
+
     def add(self, results, *, unzipped=True):
         raise NotImplementedError
 
@@ -561,6 +701,10 @@ class PyperfResultsStorage:
 class PyperfResultsRepo(PyperfResultsStorage):
 
     BRANCH = 'add-benchmark-results'
+
+    SUFFIX = '.json'
+    COMPRESSED_SUFFIX = '.json.gz'
+    COMPRESSOR = gzip
 
     def __init__(self, root, remote=None, datadir=None):
         if root:
@@ -590,12 +734,114 @@ class PyperfResultsRepo(PyperfResultsStorage):
         return text
 
     def iter_all(self):
-        ...
+        for name in os.listdir(self._dataroot):
+            res = PyperfUploadID.parse(name, allowsuffix=True)
+            if res:
+                yield res
+
+    @property
+    def _suffixes(self):
+        return [self.SUFFIX, self.COMPRESSED_SUFFIX]
+
+    @property
+    def _dataroot(self):
+        if self.datadir:
+            return os.path.join(self.root, self.datadir)
+        else:
+            return self.root
+
+    def _resolve_filenames(self, uploadid, suffix=None):
+        return uploadid.resolve_filenames(
+            dirname=self._dataroot,
+            prefix=None,
+            suffix=self._suffixes if suffix is None else suffix,
+        )
+
+    def get(self, uploadid):
+        if not uploadid:
+            return None
+        found = self._match_uploadid(uploadid)
+        if not found:
+            raise TypeError(uploadid)
+
+        matched = None
+        for filename in self._resolve_filenames(found):
+            if not os.path.exists(filename):
+                continue
+            if matched:
+                raise RuntimeError('matched multiple, consider using match()')
+            matched = filename
+        if matched:
+            return PyperfResultsFile(filename, uploadid=found)
+        return None
+
+    def match(self, specifier, suites=None):
+        for uploadid in self._match(specifier, suites):
+            for filename in self._resolve_filenames(uploadid):
+                if not os.path.exists(filename):
+                    continue
+                yield PyperfResultsFile(filename, uploadid)
+
+    def _match(self, specifier, suites):
+        # specifier: uploadID, version, filename
+        if not specifier:
+            return
+
+        uploadid = self._match_uploadid(specifier)
+        if uploadid:
+            if suites:
+                for suite in suites:
+                    yield uploadid.copy(suite=suite)
+            else:
+                yield uploadid
+            return
+
+        matched = False
+        for uploadid in self._match_versions(specifier):
+            matched = True
+            if suites and uploadid.suite not in suites:
+                continue
+            yield uploadid
+        if matched:
+            return
+
+        #if isinstance(specifier, str):
+        #    yield from self._match_uploadid_pattern(specifier)
+
+        return None
+
+    def _match_uploadid(self, uploadid):
+        orig = uploadid
+        if isinstance(orig, str):
+            uploadid = PyperfUploadID.parse(orig)
+            if not uploadid:
+                uploadid = PyperfUploadID.from_filename(orig)
+        elif isinstance(orig, PyperfUploadID):
+            uploadid = orig
+        else:
+            return None
+        return uploadid
+
+    def _match_uploadid_pattern(self, pat):
+        raise NotImplementedError
+
+    def _match_versions(self, version):
+        if isinstance(version, str):
+            version = _utils.Version.parse(version)
+            if not version:
+                return
+        elif not isinstance(version, _utils.Version):
+            return
+        # XXX Treat missing micro/release as wildcard?
+        version = version.full
+        for uploadid in self.iter_all():
+            if version == uploadid.version.full:
+                yield uploadid
 
     def add(self, results, *,
             branch=None,
             author=None,
-            unzipped=True,
+            compressed=False,
             split=True,
             push=True,
             ):
@@ -636,29 +882,20 @@ class PyperfResultsRepo(PyperfResultsStorage):
         else:
             raise NotImplementedError(author)
 
+        dirname = self.root
+        reldir = ''
+        if self.datadir:
+            dirname = os.path.join(self.root, self.datadir)
+            reldir = self.datadir
+
         logger.info(f'adding results {source or "???"}...')
         for suite in by_suite:
             suite_results = by_suite[suite]
-            name = suite_results.uploadid
-            reltarget = f'{name}.json'
-            if self.datadir:
-                reltarget = f'{self.datadir}/{reltarget}'
-            if not unzipped:
-                reltarget += '.gz'
-            target = os.path.join(self.root, reltarget)
+            reltarget = self._resolve_reltarget(suite_results, compressed)
 
-            logger.info(f'...as {target}...')
+            logger.info(f'...as {reltarget}...')
             self.git('checkout', '-B', branch)
-            if unzipped:
-                data = suite_results.data
-                with open(target, 'w') as outfile:
-                    json.dump(data, outfile, indent=2)
-            elif not source:
-                data = suite_results.data
-                with gzip.open(target, 'w') as outfile:
-                    json.dump(data, outfile, indent=2)
-            else:
-                shutil.copyfile(source, target)
+            self._save(suite_results.data, reltarget, source, compressed)
             self.git('add', reltarget)
             msg = f'Add Benchmark Results ({name})'
             self.git('commit', *authorargs, '-m', msg, cfg=cfg)
@@ -666,6 +903,26 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         if push:
             self._upload(reltarget)
+
+    def _resolve_reltarget(self, results, compressed=False):
+        reltarget, = results.uploadid.resolve_filenames(
+            dirname=self.datadir if self.datadir else None,
+            suffix=self.COMPRESSED_SUFFIX if compressed else self.SUFFIX,
+        )
+        return  reltarget
+
+    def _save(self, data, reltarget, source=None, compressed=False):
+        #if compressed: assert reltarget.endswith(self.COMPRESSED_SUFFIX)
+        #else: assert reltarget.endswith(self.SUFFIX)
+        target = os.path.join(self.root, reltarget)
+#        if source:
+#            _, suffix = os.path.splitext(reltarget)
+#            if os.path.splitext(source)[1] == suffix:
+#                shutil.copyfile(source, target)
+#                return
+        _open = self.COMPRESSOR.open if compressed else open
+        with _open(target, 'w') as outfile:
+            json.dump(data, outfile, indent=2)
 
     def _upload(self, reltarget):
         if not self.remote:

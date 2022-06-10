@@ -16,7 +16,7 @@ from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
 )
-from ._pyperformance import PyperfResultsFile, PyperfTable
+from ._pyperformance import PyperfResultsFile, PyperfTable, FasterCPythonResults
 from ._utils import (
     LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
 )
@@ -248,21 +248,21 @@ def cmd_upload(jobs, reqid, *, author=None, push=True):
 
 
 def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
-    results = [res1, *others]
-    for i, res in enumerate(results):
-        if isinstance(res, str):
-            reqid = RequestID.parse(res)
-            if reqid:
-                job = jobs.get(reqid)
-                res = job.fs.result.pyperformance_results
-            elif os.path.isfile(res):
-                pass
-            else:
-                sys.exit(f'unsupported ID or filename {res!r}')
-        else:
-            sys.exit(f'unsupported ID or filename {res!r}')
-        results[i] = PyperfResultsFile(res)
-    table = results[0].compare(results[1:])
+    suites = ['pyston'] if pyston else [None]
+    matched = list(jobs.match_results(res1, suites=suites))
+    if not matched:
+        logger.error(f'no results matched {res1!r}')
+        sys.exit(1)
+    res1, = matched
+    for _ in range(len(others)):
+        spec = others.pop(0)
+        matched = list(jobs.match_results(spec, suites=suites))
+        if not matched:
+            logger.error(f'no results matched {spec!r}')
+            sys.exit(1)
+        others.extend(matched)
+    #others = [*jobs.match_results(r) for r in others]
+    table = res1.compare(others)
     fmt = 'meanonly' if meanonly else 'raw'
     for line in table.render(fmt):
         print(line)
