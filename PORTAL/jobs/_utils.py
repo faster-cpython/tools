@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import os.path
+import platform
 import re
 import shlex
 import shutil
@@ -354,6 +355,30 @@ def get_bool_env_var(name, default=None, *, failunknown=False):
     if value is None:
         return default
     return parse_bool_env_var(value, failunknown=failunknown)
+
+
+def resolve_os_name():
+    if sys.platform == 'win32':
+        return 'windows'
+    elif sys.paltform == 'linux':
+        return 'linux'
+    elif sys.platform == 'darwin':
+        return 'mac'
+    else:
+        raise NotImplementedError(sys.platform)
+
+
+def resolve_cpu_arch():
+    uname = platform.uname()
+    machine = uname.machine.lower()
+    if machine in ('amd64', 'x86_64'):
+        return machine
+    elif machine == 'aarch64':
+        return 'arm64'
+    elif 'arm' in machine:
+        return 'arm'
+    else:
+        raise NotImplementedError(machine)
 
 
 def get_termwidth(*, nontty=1000, unknown=80):
@@ -1209,30 +1234,35 @@ class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
 class GitRefCandidates:
 
     @classmethod
-    def from_revision(cls, revision, branch, remote):
+    def from_revision(cls, revision, branch, remote, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
         orig = GitRefRequest(remote, branch, revision)
-        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote)
-        self = cls()
+        reqs = cls._from_revision(orig.revision, orig.branch, orig.remote,
+                                  parse_version)
+        self = cls(parse_version=parse_version)
         for req in reqs:
             self._add_req(req, orig)
         return self
 
     @classmethod
-    def _from_revision(cls, revision, branch, remote):
+    def _from_revision(cls, revision, branch, remote, parse_version):
         if branch == 'main':
             reqs = cls._from_main(revision, remote)
         elif remote == 'origin':
-            reqs = cls._from_origin(revision, branch)
+            reqs = cls._from_origin(revision, branch, parse_version)
         elif remote:
-            reqs = cls._from_non_origin(revision, branch, remote)
+            reqs = cls._from_non_origin(revision, branch, remote, parse_version)
         elif branch:  # no remote, maybe a revision
             # We know all remotes have release (version) branches.
-            reqs = cls._from_version(revision, branch, 'origin', required=False)
+            reqs = cls._from_version(revision, branch, 'origin',
+                                     parse_version, required=False)
             if not reqs:
                 # We don't bother trying to guess the remote at this point.
                 raise ValueError('missing remote for branch {branch!r}')
         elif revision:  # no remote or branch
-            reqs = cls._from_origin(revision, branch, required=False)
+            reqs = cls._from_origin(revision, branch,
+                                    parse_version, required=False)
             if not reqs:
                 raise ValueError(f'missing remote for revision {revision!r}')
         else:
@@ -1255,11 +1285,11 @@ class GitRefCandidates:
             raise ValueError(f'unexpected revision {revision!r}')
 
     @classmethod
-    def _from_origin(cls, revision, branch, required=True):
+    def _from_origin(cls, revision, branch, parse_version, required=True):
         if branch == 'main':
             return cls._from_main(revision, 'origin')
         elif branch:
-            return cls._from_version(revision, branch, 'origin')
+            return cls._from_version(revision, branch, 'origin', parse_version)
         elif revision == 'main':
             return cls._from_main(None, 'origin')
         elif revision in ('latest', 'HEAD'):
@@ -1270,17 +1300,18 @@ class GitRefCandidates:
             else:
                 # The only remaining possibility for origin
                 # is a release branch or tag.
-                return cls._from_version(revision, branch, 'origin', required)
+                return cls._from_version(revision, branch, 'origin',
+                                         parse_version, required)
         else:
             return cls._from_main(revision, 'origin')
 
     @classmethod
-    def _from_non_origin(cls, revision, branch, remote):
+    def _from_non_origin(cls, revision, branch, remote, parse_version):
         if branch:
             if not revision:
                 # For non-origin, we don't bother with "latest" for versions.
                 return [(remote, branch, 'HEAD')]
-            elif Version.parse(branch, match=revision):
+            elif parse_version(branch, match=revision):
                 return [(remote, branch, revision)]
             else:
                 if revision == 'latest':
@@ -1298,7 +1329,8 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, None, revision)]
             else:
-                reqs = cls._from_version(revision, None, remote, required=False)
+                reqs = cls._from_version(revision, None, remote,
+                                         parse_version, required=False)
                 if reqs:
                     return reqs
                 if looks_like_git_branch(revision):
@@ -1310,11 +1342,12 @@ class GitRefCandidates:
                     raise ValueError(f'unexpected revision {revision!r}')
 
     @classmethod
-    def _from_version(cls, revision, branch, remote, required=True):
+    def _from_version(cls, revision, branch, remote,
+                      parse_version, required=True):
         if not remote:
             remote = 'origin'
         if branch:
-            version = Version.parse(branch)
+            version = parse_version(branch)
             if not version:
                 if required:
                     raise ValueError(f'unexpected branch {branch!r}')
@@ -1331,14 +1364,14 @@ class GitRefCandidates:
             elif looks_like_git_commit(revision):
                 return [(remote, branch, revision)]
             else:
-                tagver = Version.parse(revision)
+                tagver = parse_version(revision)
                 if not tagver:
                     raise ValueError(f'unexpected revision {revision!r}')
                 if tagver[:2] != version[:2]:
                     raise ValueError(f'tag {revision!r} does not match branch {branch!r}')
                 return [(remote, branch, revision)]
         else:
-            tagver = Version.parse(revision)
+            tagver = parse_version(revision)
             if not tagver:
                 if required:
                     raise ValueError(f'unexpected revision {revision!r}')
@@ -1349,7 +1382,10 @@ class GitRefCandidates:
                 (remote, verstr, 'latest' if revision == verstr else revision),
             ]
 
-    def __init__(self, reqs=None):
+    def __init__(self, reqs=None, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
+        self._parse_version = parse_version
         self._reqs = []
         for req in reqs or ():
             self._add_req(req)
@@ -1381,7 +1417,7 @@ class GitRefCandidates:
         for req in self._reqs:
             remote, branch, revision = req
             if remote not in by_remote:
-                by_remote[remote] = GitRefs.from_remote(remote)
+                by_remote[remote] = CPythonGitRefs.from_remote(remote)
             repo_refs = by_remote[remote]
 
             match = self._find_ref(branch, revision, repo_refs)
@@ -1408,7 +1444,7 @@ class GitRefCandidates:
                 logger.warning(f'branch {branch} not found')
         elif revision == 'latest':
             assert branch, self
-            assert Version.parse(branch), (branch, self)
+            assert self._parse_version(branch), (branch, self)
             matched = repo_refs.match_latest_version(branch)
             if matched:
                 _branch, tag, commit = matched
@@ -1468,8 +1504,11 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
             return cls(remote, branch, tag, commit, name, requested)
 
     @classmethod
-    def resolve(cls, revision, branch, remote):
-        candidates = GitRefCandidates.from_revision(revision, branch, remote)
+    def resolve(cls, revision, branch, remote, *, parse_version=None):
+        if parse_version is None:
+            parse_version = Version.parse
+        candidates = GitRefCandidates.from_revision(revision, branch, remote,
+                                                    parse_version=parse_version)
         return candidates.find_ref(cls)
 
     @classmethod
@@ -1629,7 +1668,7 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
         return data
 
 
-class GitRefs(types.SimpleNamespace):
+class CPythonGitRefs(types.SimpleNamespace):
 
     @classmethod
     def from_remote(cls, remote):
@@ -1677,10 +1716,14 @@ class GitRefs(types.SimpleNamespace):
             tags=tags,
         )
 
+    @property
+    def _impl(self):
+        return CPython()
+
     def _release_branches(self):
         by_version = {}
         for branch in self.branches:
-            version = Version.parse(branch)
+            version = self._impl.parse_version(branch)
             if version and branch == f'{version.major}.{version.minor}':
                 by_version[version] = branch
         return by_version
@@ -1691,8 +1734,8 @@ class GitRefs(types.SimpleNamespace):
             return ()
         latest, _ = sorted(releases.items())[-1]
         return [
-            Version(latest.major, latest.minor + 1),
-            Version(latest.major + 1, 0),
+            latest.next_minor(),
+            latest.next_major(),
         ]
 
     def match_ref(self, ref):
@@ -1713,7 +1756,7 @@ class GitRefs(types.SimpleNamespace):
         else:
             # Treat it like main if one higher than the latest.
             branch = None
-            version = Version.parse(ref)
+            version = self._impl.parse_version(ref)
             if version and ref == f'{version.major}.{version.minor}':
                 if version in self._next_versions():
                     branch = 'main'
@@ -1729,14 +1772,14 @@ class GitRefs(types.SimpleNamespace):
                     return branch, None, commit
         return None
 
-    def match_tag(self, ref): 
+    def match_tag(self, ref):
         if not ref or not looks_like_git_branch(ref):
             return None
-        version = Version.parse(ref)
+        version = self._impl.parse_version(ref)
         if version:
             # Find a tag that matches the version.
             for tag in self.tags:
-                tagver = Version.parse(tag)
+                tagver = self._impl.parse_version(tag)
                 if tagver:
                     if tagver == version:
                         commit = self.tags[tag]
@@ -1775,12 +1818,12 @@ class GitRefs(types.SimpleNamespace):
     def match_latest_version(self, branch):
         if not branch or not looks_like_git_branch(branch):
             return None
-        version = Version.parse(branch)
+        version = CPython.version.parse(branch)
         if version:
             # Find the latest tag that matches the branch.
             matched = {}
             for tag in self.tags:
-                tagver = Version.parse(tag)
+                tagver = self._impl.parse_version(tag)
                 if version.match(tagver):
                     matched[(tagver.full, tag)] = (self.tags[tag], tagver)
             if matched:
@@ -1981,7 +2024,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         else:
             pid = None
 
-        return cls.__new__(sock, pid)
+        return cls.__new__(cls, sock, pid)
 
     @classmethod
     def parse_script(cls, script=None, *, requirepid=False):
@@ -2040,7 +2083,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
                     created = _created
         if not latest:
             return None
-        return cls.__new__(latest, None)
+        return cls.__new__(cls, latest, None)
 
     @classmethod
     def from_jsonable(cls, data):
@@ -2241,6 +2284,581 @@ class SSHClient(SSHCommands):
 
 
 ##################################
+# versions
+
+class VersionRelease(namedtuple('VersionRelease', 'level serial')):
+
+    LEVELS = {
+        'alpha': 'a',
+        'beta': 'b',
+        'candidate': 'rc',
+        'final': 'f',
+    }
+    LEVEL_SYMBOLS = {s: l for l, s in LEVELS.items()}
+    LEVEL_SYMBOLS['c'] = 'candidate'
+
+    PAT = textwrap.dedent(rf'''(?:
+        ( {'|'.join(LEVEL_SYMBOLS)} )  # <level>
+        ( \d+ )  # <serial>
+    )''')
+
+    @classmethod
+    def unreleased(cls):
+        return cls.__new__(cls, 'alpha', 0)
+
+    @classmethod
+    def initial(cls, level=None):
+        return cls.__new__(cls, level or 'alpha', 1)
+
+    @classmethod
+    def final(cls):
+        return cls.__new__(cls, 'final', 0)
+
+    @classmethod
+    def from_values(cls, level=None, serial=None):
+        # self._validate() will catch any bogus/missing level or serial.
+        try:
+            level = cls.LEVEL_SYMBOLS[level]
+        except (KeyError, TypeError):
+            pass
+
+        if isinstance(serial, int):
+            pass
+        elif not serial:
+            if level == 'final':
+                serial = 0
+            elif not level:
+                level = 'final'
+                serial = 0
+        elif isinstance(serial, str):
+            serial = coerce_int(serial, fail=False)
+        return cls(level, serial)
+
+    @classmethod
+    def handle_parsed(cls, level, serial):
+        level, serial = cls._handle_parsed(level, serial)
+        if not level:
+            return None
+        return cls.__new__(cls, level, serial)
+
+    @classmethod
+    def _handle_parsed(cls, level, serial):
+        if level:
+            assert serial, (level, serial)
+            return (
+                cls.LEVEL_SYMBOLS[level],
+                coerce_int(serial, fail=False),
+            )
+        else:
+            assert not serial, (level, serial)
+            return None, None
+
+    @classmethod
+    def validate(cls, release):
+        if not isinstance(release, cls):
+            raise TypeError(f'expected a {cls.__name__}, got {release!r}')
+        release._validate()
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def __str__(self):
+        return self.render()
+
+    def _validate(self):
+        if not self.level:
+            raise ValueError('missing level')
+        elif self.level not in self.LEVELS:
+            raise ValueError(f'unsupported level {self.level}')
+        elif self.level == 'final':
+            if self.serial != 0:
+                raise ValueError(f'final releases always have a serial of 0, got {self.serial}')
+        if self.level == 'alpha':
+            validate_int(self.serial, 'serial', range='non-negative', required=True)
+        else:
+            validate_int(self.serial, 'serial', range='positive', required=True)
+
+    @property
+    def is_unreleased(self):
+        return self.level == 'alpha' and self.serial == 0
+
+    def next_level(self):
+        cls = type(self)
+        if self.level == 'alpha':
+            return cls.__new__(cls, 'beta', 1)
+        elif self.level == 'beta':
+            return cls.__new__(cls, 'candidate', 1)
+        elif self.level == 'candidate':
+            return cls.__new__(cls, 'final', 0)
+        elif self.level == 'final':
+            raise ValueError('a final release has no next level')
+        else:
+            raise NotImplementedError(self.level)
+
+    def next_serial(self, max=None):
+        if self.level == 'final':
+            raise ValueError('a final release has no next serial')
+        elif max and self.serial >= max:
+            return self.next_level()
+        else:
+            cls = type(self)
+            return cls.__new__(cls, self.level, self.serial + 1)
+
+    def next(self, plan=None):
+        if self.level == 'alpha':
+            maxserial = plan.nalphas if plan else None
+        elif self.level == 'beta':
+            maxserial = plan.nbetas if plan else None
+        elif self.level == 'candidate':
+            maxserial = plan.ncandidates if plan else None
+        elif self.level == 'final':
+            maxserial = None
+        else:
+            raise NotImplementedError(self.level)
+        return self.next_serial(maxserial)
+
+    def render(self):
+        level = self.LEVELS[self.level]
+        return f'{self.LEVELS[self.level]}{self.serial}'
+
+
+class ReleaseInfo(namedtuple('ReleaseInfo', 'date rm')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, (datetime.date, datetime.datetime)):
+            return cls(date=raw)
+        else:
+            raise TypeError(f'unsupported raw value {raw!r}')
+
+    def __new__(cls, date=None, rm=None):
+        return super().__new__(cls, date, rm)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        ...
+
+
+class ReleasePlan:
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            return cls(raw)
+
+    @classmethod
+    def _normalize_data(cls, data):
+        levels = sorted(VersionRelease.LEVELS)
+
+        schedule = []
+        bylevel = {l: [] for l in levels}
+        bylevel['final'] = None
+        if hasattr(data, 'items'):
+            if set(data) - bylevel:
+                raise ValueError(f'got unexpected release levels in {data}')
+            for level in levels:
+                if level == 'final':
+                    continue
+                for info in data.get(level) or ():
+                    info = ReleaseInfo.from_raw(info)
+                    schedule.append((level, info))
+                    bylevel[level].append(info)
+            final = ReleaseInfo.from_raw(data.get('final'))
+            if final:
+                schedule.append(('final', final))
+                bylevel['final'] = final
+        elif isinstance(data, str):
+            raise NotImplementedError(repr(schedule))
+        else:
+            for entry in data:
+                if isinstance(entry, (tuple, list)):
+                    level, info= entry
+                    if level not in bylevel:
+                        raise ValueError(f'unsupported release level {level!r}')
+                    info = ReleaseInfo.from_raw(info)
+                    schedule.append((level, info))
+                    bylevel[level].append(info)
+                else:
+                    raise NotImplementedError(entry)
+        return schedule, bylevel
+
+    def __init__(self, data):
+        if not data:
+            raise ValueError('missing data')
+        self._schedule, self._bylevel = self._normalize_data(data)
+
+    @property
+    def nalphas(self):
+        return len(self._bylevel['alpha'])
+
+    @property
+    def nbetas(self):
+        return len(self._bylevel['beta'])
+
+    @property
+    def ncandidates(self):
+        return len(self._bylevel['candidate'])
+
+
+class ReleasePlans:
+
+    @classmethod
+    def _normalize_data(cls, data):
+        plans = {}
+        for ver, plan in data.items():
+            version = Version.from_raw(ver)
+            if not version:
+                raise ValueError(f'bad version {ver!r}')
+            version = version.plain
+            if version in plans:
+                raise KeyError(f'duplicate release plan for {version}')
+            plan = ReleasePlan.from_raw(plan)
+            plans[version.plain] = plan
+        return plans
+
+    def __init__(self, plans):
+        if not plans:
+            raise ValueError('missing plans')
+        self._plans = self._normalize_data(plans)
+
+    def get(self, version):
+        return self._plans.get(version.plain)
+
+
+class Version(namedtuple('Version', 'major minor micro release')):
+
+    PAT = textwrap.dedent(rf'''(?:
+        (\d+)  # <major>
+        \.
+        (\d+)  # <minor>
+        (?:
+            \.
+            (\d+)  # <micro>
+         )?
+        (?:
+            {VersionRelease.PAT}  # <level> <serial>
+         )?
+        ( \+ )?  # <extra>
+    )''')
+    REGEX = re.compile(f'^v?{PAT}$', re.VERBOSE)
+
+    _extra = None
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        elif isinstance(raw, (tuple, list)):
+            return cls(*raw)
+        else:
+            return cls(**raw)
+
+    @classmethod
+    def resolve_main(cls):
+        raise NotImplementedError
+
+    @classmethod
+    def parse(cls, verstr, match=None):
+        m = cls.REGEX.match(verstr)
+        if not m:
+            return None
+        (major, minor, micro, release, extra,
+         ) = cls._handle_parsed(verstr, *m.groups())
+        cls._validate_values(verstr, major, minor, micro, release)
+        cls._validate_extra(verstr, extra, major, minor, micro, release)
+        self = cls.__new__(cls, major, minor, micro, release)
+        self._raw = verstr
+        self._extra = extra
+        if match is not None and not self.match(match):
+            return None
+        return self
+
+    @classmethod
+    def _handle_parsed(cls, verstr, major, minor, micro, level, serial, extra):
+        release = VersionRelease.handle_parsed(level, serial)
+        return (
+            int(major),
+            int(minor),
+            int(micro) if micro else 0 if release else None,
+            release,
+            extra or None,
+        )
+
+    @classmethod
+    def _validate_values(cls, verstr, major, minor, micro, release):
+        return
+
+    @classmethod
+    def _validate_extra(cls, verstr, extra, major, minor, micro, release):
+        return
+
+    def __new__(cls, major, minor, micro=None, release=None):
+        return super().__new__(cls, major, minor, micro, release or None)
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def __str__(self):
+        return self.render()
+
+    def _validate(self):
+        def _validate_int(name, *, required=False):
+            val = getattr(self, name)
+            validate_int(val, name, range='non-negative', required=required)
+        _validate_int('major', required=True)
+        _validate_int('minor', required=True)
+        _validate_int('micro')
+        if self.release is not None:
+            VersionRelease.validate(self.release)
+            if self.micro is None:
+                raise ValueError('missing micro')
+        self._validate_values(self, *self)
+        self._validate_extra(self, self._extra, *self)
+
+    @property
+    def branch(self):
+        return self[:2]
+
+    @property
+    def full(self):
+        if self.release:
+            return self
+        major, minor, micro, _ = self
+        release = VersionRelease.final()
+        cls = type(self)
+        full = cls.__new__(cls, major, minor, micro or 0, release)
+        full._raw = self._raw
+        return full
+
+    @property
+    def plain(self):
+        major, minor, micro, _ = self
+        if micro and not self.release:
+            return self
+        cls = type(self)
+        plain = cls.__new__(cls, major, minor, micro or 0)
+        plain._raw = self.raw
+        return plain
+
+    @property
+    def flat(self):
+        major, minor, micro, release = self
+        level, serial = release if release else (None, None)
+        return major, minor, micro, level, serial
+        #return major, minor, micro, level, serial, self._extra
+
+    @property
+    def raw(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = self.render()
+            return self._raw
+
+    @property
+    def unreleased(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.unreleased()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    @property
+    def initial(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.initial()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    @property
+    def final(self):
+        cls = type(self)
+        major, minor, micro, _ = self
+        release = VersionRelease.final()
+        return cls.__new__(cls, major, minor, micro or 0, release)
+
+    def next_major(self):
+        cls = type(self)
+        return cls.__new__(cls, self.major + 1, 0)
+
+    def next_minor(self):
+        cls = type(self)
+        return cls.__new__(cls, self.major, self.minor + 1)
+
+    def next_micro(self):
+        major, minor, micro, _ = self
+        cls = type(self)
+        return cls.__new__(cls, major, minor, (micro or 0) + 1)
+
+    def next(self):
+        if self.release:
+            return self.next_release()
+        elif micro:
+            return self.next_micro()
+        else:
+            return self.next_minor()
+
+    def next_release(self, plans=None):
+        cls = type(self)
+        major, minor, micro, release = self
+        if not release or release.level == 'final':
+            # It's a final release.
+            return self.next_micro().initial
+        plan = plans.get(self) if plans else None
+        release = release.next(plan)
+        return cls.__new__(cls, major, minor, micro, release)
+
+#    def compare(self, other):
+#        raise NotImplementedError
+
+    def match(self, other, *, subversiononly=False):
+        """Return True if other is a subversion."""
+        if not other:
+            return None
+        else:
+            other = Version.from_raw(other)
+            if not other:
+                return None
+        if not subversiononly and self == other:
+            return True
+        if not self.release:
+            if self.micro is not None:
+                if other.release:
+                    return self[:3] == other[:3]
+            else:
+                if other.micro is not None:
+                    return self[:2] == other[:2]
+        return False
+
+    def render(self, *, withextra=True):
+        if self.release:
+            verstr = f'{self.major}.{self.minor}.{self.micro}{self.release}'
+        elif self.micro:
+            verstr = f'{self.major}.{self.minor}.{self.micro}'
+        else:
+            verstr = f'{self.major}.{self.minor}'
+        return f'{verstr}{self._extra}' if self._extra else verstr
+
+    def as_tag(self):
+        micro = f'.{self.micro}' if self.micro else ''
+        if self.level == 'alpha':
+            release = f'a{self.serial}'
+        elif self.level == 'beta':
+            release = f'b{self.serial}'
+        elif self.level == 'candidate':
+            release = f'rc{self.serial}'
+        elif self.level == 'final':
+            release = ''
+        else:
+            raise NotImplementedError(self.level)
+        return f'v{self.major}.{self.minor}{micro}{release}'
+
+
+class CPythonVersion(Version):
+
+    @classmethod
+    def resolve_main(cls):
+        # XXX Use CPythonGitRefs to get the right one.
+        return cls(3, 12, 0).unreleased
+
+    #@classmethod
+    #def _validate_values(cls, verstr, major, minor, micro, release):
+    #    if micro:
+    #        if release and release.level != 'final':
+    #            raise ValueError(f'bugfix versions can only be final, got {verstr})')
+
+    @classmethod
+    def _validate_extra(cls, verstr, extra, major, minor, micro, release):
+        if extra == '+':
+            if not self.release:
+                raise ValueError('missing release (for dev version)')
+            elif self.release.is_dev:
+                raise ValueError('dev release not supported for dev version')
+        elif extra:
+            raise ValueError(f'unexpected data {extra!r}')
+
+    @property
+    def is_dev(self):
+        if self._extra:
+            return True
+        return self.release and self.release.is_unreleased
+
+    @property
+    def is_bugfix(self):
+        return bool(self.micro)
+
+    def next_release(self, plans=None):
+        if self.micro:
+            return self.next_micro().final
+        else:
+            return super().next_release(plans)
+
+
+##################################
+# Python
+
+class PythonImplementation:
+
+    VERSION = Version
+
+    def __init__(self, name):
+        if not name:
+            raise ValueError('missing name')
+        self._name = name
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._name!r})'
+
+    def __str__(self):
+        return self.name
+
+    # XXX Support comparision with str.
+
+    @property
+    def name(self):
+        return self._name
+
+    def parse_version(self, version, *, requirestr=True):
+        try:
+            return self.VERSION.parse(version)
+        except TypeError:
+            if requirestr:
+                raise  # re-rase
+            return self.VERSION.from_raw(version)
+
+
+class CPython(PythonImplementation):
+
+    VERSION = CPythonVersion
+
+    def __init__(self):
+        super().__init__('cpython')
+
+
+def resolve_python_implementation(impl):
+    if isinstance(impl, str):
+        if impl == 'cpython':
+            return CPython()
+        else:
+            return PythonImplementation(impl)
+    else:
+        raise NotImplementedError(impl)
+
+
+##################################
 # other utils
 
 def ensure_int(raw, min=None):
@@ -2274,25 +2892,34 @@ def coerce_int(value, *, fail=True):
 
 
 def validate_int(value, name=None, *, range=None, required=True):
-    if isinstance(value, int):
+    def fail(value=value, name=name, range=range):
+        qualifier = 'an'
+        if isinstance(value, int):
+            if range:
+                qualifier = f'a {range}'
+            Error = ValueError
+        else:
+            Error = TypeError
+        namepart = f' for {name}' if name else ''
+        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+
+    if isinstance(value, int) and value is not False:
         if not range:
             return value
         elif range == 'non-negative':
-            if value >= 0:
-                return value
+            if value < 0:
+                fail()
+        elif range == 'positive':
+            if value <= 0:
+                fail()
         else:
             raise NotImplementedError(f'unsupported range {range!r}')
-        Error = ValueError
     elif not value:
         if not required:
             return None
         raise ValueError(f'missing {name}' if name else 'missing')
     else:
-        Error = TypeError
-    # Failed!
-    qualifier = f'a {range}' if range else 'an'
-    namepart = f' for {name}' if name else ''
-    raise Error(f'expected {qualifier} int{namepart}, got {value}')
+        fail()
 
 
 def normalize_int(value, name=None, *,
@@ -2339,222 +2966,6 @@ def as_jsonable(data):
             return [as_jsonable(v) for v in data]
         else:
             raise TypeError(f'unsupported data {data!r}')
-
-
-class VersionRelease(namedtuple('VersionRelease', 'level serial')):
-
-    LEVELS = {
-        'alpha': 'a',
-        'beta': 'b',
-        'candidate': 'rc',
-        'final': 'f',
-    }
-    LEVEL_SYMBOLS = {s: l for l, s in LEVELS.items()}
-    LEVEL_SYMBOLS['c'] = 'candidate'
-
-    PAT = textwrap.dedent(rf'''(?:
-        ( {'|'.join(LEVEL_SYMBOLS)} )  # <level>
-        ( \d+ )  # <serial>
-    )''')
-
-    @classmethod
-    def from_values(cls, level=None, serial=None, *, usedefault=True):
-        if isinstance(serial, int):
-            return cls(level, serial)
-        else:
-            if not serial:
-                if level == 'final':
-                    serial = 0
-                elif not level:
-                    if not usedefault:
-                        return None
-                    level = 'final'
-                    serial = 0
-            elif isinstance(serial, str):
-                serial = coerce_int(serial, fail=False)
-            try:
-                level = cls.LEVEL_SYMBOLS[level]
-            except (KeyError, TypeError):
-                pass
-            return cls(level, serial)
-
-    @classmethod
-    def validate(cls, release):
-        if not isinstance(release, cls):
-            raise TypeError(f'expected a {cls.__name__}, got {release!r}')
-        release._validate()
-
-    def __init__(self, *args, **kwargs):
-        self._validate()
-
-    def __str__(self):
-        level = self.LEVELS[self.level]
-        return f'{self.LEVELS[self.level]}{self.serial}'
-
-    def _validate(self):
-        if not self.level:
-            raise ValueError('missing level')
-        elif self.level not in self.LEVELS:
-            raise ValueError(f'unsupported level {self.level}')
-        elif self.level == 'final':
-            if self.serial != 0:
-                raise ValueError(f'final releases always have a serial of 0, got {self.serial}')
-        validate_int(self.serial, 'serial', range='non-negative', required=True)
-
-
-class Version(namedtuple('Version', 'major minor micro release')):
-
-    PAT = textwrap.dedent(rf'''(?:
-        (\d+)  # <major>
-        \.
-        (\d+)  # <minor>
-        (?:
-            (?:
-                \.
-                (\d+)  # <micro>
-             )?
-            (?:
-                {VersionRelease.PAT}  # <level> <serial>
-            )?
-         )?
-    )''')
-    REGEX = re.compile(f'^v?{PAT}$', re.VERBOSE)
-
-    @classmethod
-    def from_raw(cls, raw):
-        if not raw:
-            return None
-        elif isinstance(raw, cls):
-            return raw
-        elif isinstance(raw, str):
-            return cls.parse(raw)
-        elif isinstance(raw, (tuple, list)):
-            return cls(*raw)
-        else:
-            return cls(**raw)
-
-    @classmethod
-    def parse(cls, verstr, match=None):
-        m = cls.REGEX.match(verstr)
-        if not m:
-            return None
-        major, minor, micro, level, serial = m.groups()
-        release = VersionRelease.from_values(level, serial, usedefault=False)
-        self = cls.__new__(
-            cls,
-            int(major),
-            int(minor),
-            int(micro) if micro else 0 if release else None,
-            release,
-        )
-        self._raw = verstr
-        if match is not None and not self.match(match):
-            return None
-        return self
-
-    def __new__(cls, major, minor, micro=None, release=None):
-        return super().__new__(cls, major, minor, micro, release or None)
-
-    def __init__(self, *args, **kwargs):
-        self._validate()
-
-    def __str__(self):
-        return self.render()
-
-    def _validate(self):
-        def _validate_int(name, *, required=False):
-            val = getattr(self, name)
-            validate_int(val, name, range='non-negative', required=required)
-        _validate_int('major', required=True)
-        _validate_int('minor', required=True)
-        _validate_int('micro')
-        if self.release is not None:
-            VersionRelease.validate(self.release)
-            if self.micro is None:
-                raise ValueError('missing micro')
-
-    @property
-    def branch(self):
-        return self[:2]
-
-    @property
-    def full(self):
-        if self.release:
-            return self
-        major, minor, micro = self[:3]
-        release = VersionRelease.from_values()
-        cls = type(self)
-        full = cls.__new__(cls, major, minor, micro or 0, release)
-        full._raw = self._raw
-        return full
-
-    @property
-    def plain(self):
-        major, minor, micro = self[:3]
-        if micro and not self.release:
-            return self
-        cls = type(self)
-        plain = cls.__new__(cls, major, minor, micro or 0)
-        plain._raw = self.raw
-        return plain
-
-    @property
-    def flat(self):
-        major, minor, micro, release = self
-        level, serial = release if release else (None, None)
-        return major, minor, micro, level, serial
-
-    @property
-    def raw(self):
-        try:
-            return self._raw
-        except AttributeError:
-            self._raw = self.render()
-            return self._raw
-
-#    def compare(self, other):
-#        raise NotImplementedError
-
-    def match(self, other, *, subversiononly=False):
-        """Return True if other is a subversion."""
-        if not other:
-            return None
-        else:
-            other = Version.from_raw(other)
-            if not other:
-                return None
-        if not subversiononly and self == other:
-            return True
-        if not self.release:
-            if self.micro is not None:
-                if other.release:
-                    return self[:3] == other[:3]
-            else:
-                if other.micro is not None:
-                    return self[:2] == other[:2]
-        return False
-
-    def render(self):
-        if self.release:
-            return f'{self.major}.{self.minor}.{self.micro}{self.release}'
-        elif self.micro:
-            return f'{self.major}.{self.minor}.{self.micro}'
-        else:
-            return f'{self.major}.{self.minor}'
-
-    def as_tag(self):
-        micro = f'.{self.micro}' if self.micro else ''
-        if self.level == 'alpha':
-            release = f'a{self.serial}'
-        elif self.level == 'beta':
-            release = f'b{self.serial}'
-        elif self.level == 'candidate':
-            release = f'rc{self.serial}'
-        elif self.level == 'final':
-            release = ''
-        else:
-            raise NotImplementedError(self.level)
-        return f'v{self.major}.{self.minor}{micro}{release}'
 
 
 class MetadataError(ValueError):

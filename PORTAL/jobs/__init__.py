@@ -9,7 +9,7 @@ import textwrap
 import time
 import types
 
-from . import _utils, requests as _requests
+from . import _utils, _pyperformance, requests as _requests
 from .requests import RequestID, Request, Result
 
 
@@ -17,6 +17,52 @@ PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 SYS_PATH_ENTRY = os.path.dirname(PKG_ROOT)
 
 logger = logging.getLogger(__name__)
+
+
+##################################
+# request kinds
+
+class JobKind:
+
+    NAME = None
+
+    TYPICAL_DURATION_SECS = None
+
+    REQFS_FIELDS = [
+        'bench_script',
+        'portal_script',
+        'ssh_okay',
+    ]
+    RESFS_FIELDS = [
+        'pidfile',
+        'logfile',
+    ]
+
+    Request = Request
+    Result = Result
+
+    def set_request_fs(self, fs, context):
+        raise NotImplementedError
+
+    def set_work_fs(self, fs, context):
+        raise NotImplementedError
+
+    def set_result_fs(self, fs, context):
+        raise NotImplementedError
+
+    def create(self, reqid, jobfs, workerfs, **req_kwargs):
+        raise NotImplementedError
+
+    def as_row(self, req):
+        raise NotImplementedError
+
+
+def resolve_job_kind(kind):
+    if kind == 'compile-bench':
+        from ._job_compile_bench import CompileBenchKind
+        return CompileBenchKind()
+    else:
+        raise KeyError(f'unsupported job kind {kind}')
 
 
 ##################################
@@ -115,24 +161,10 @@ class JobFS(types.SimpleNamespace):
             result=result,
         )
 
-        # XXX Move these to a subclass?
-        if reqid.kind == 'compile-bench':
-            request.pyperformance_manifest = f'{request}/benchmarks.manifest'
-            #request.pyperformance_config = f'{request}/compile.ini'
-            request.pyperformance_config = f'{request}/pyperformance.ini'
-            #result.pyperformance_log = f'{result}/run.log'
-            result.pyperformance_log = f'{result}/pyperformance.log'
-            #result.pyperformance_results = f'{result}/results-data.json.gz'
-            result.pyperformance_results = f'{result}/pyperformance-results.json.gz'
-            if self.context == 'bench':
-                # other directories needed by the job
-                work.venv = f'{work}/pyperformance-venv'
-                work.scratch_dir = f'{work}/pyperformance-scratch'
-                # the results
-                # XXX Is this right?
-                work.pyperformance_results_glob = f'{work}/*.json.gz'
-        else:
-            raise ValueError(f'unsupported job kind for {reqid}')
+        jobkind = resolve_job_kind(reqid.kind)
+        jobkind.set_request_fs(request, context)
+        jobkind.set_work_fs(work, context)
+        jobkind.set_result_fs(result, context)
 
     def __str__(self):
         return str(self.request)
@@ -362,11 +394,7 @@ class JobAlreadyFinishedError(JobFinishedError):
 
 class Job:
 
-    TYPICAL_DURATION_SECS = {
-        'compile-bench': 40 * 60,
-    }
-
-    def __init__(self, reqid, fs, worker, cfg):
+    def __init__(self, reqid, fs, worker, cfg, store):
         if not reqid:
             raise ValueError('missing reqid')
         if not fs:
@@ -381,11 +409,13 @@ class Job:
         self._fs = fs
         self._worker = worker
         self._cfg = cfg
+        self._store = store
         self._pidfile = _utils.PIDFile(fs.pidfile)
+        self._kind = resolve_job_kind(self._reqid.kind)
 
     def __repr__(self):
         args = (f'{n}={str(getattr(self, "_"+n))!r}'
-                for n in 'reqid fs worker cfg'.split())
+                for n in 'reqid fs worker cfg store'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
     def __str__(self):
@@ -415,25 +445,21 @@ class Job:
     def request(self):
         return Request(self._reqid, str(self._fs))
 
-    def load_request(self):
-        if self.reqid.kind == 'compile-bench':
-            req_cls = _requests.BenchCompileRequest
-        else:
-            raise NotImplementedError(self.reqid.kind)
-        req = req_cls.load(self._fs.request.metadata,
-                           fs=self._fs.request,
-                           )
+    def load_request(self, *, fail=True):
+        req = self._kind.Request.load(
+            self._fs.request.metadata,
+            fs=self._fs.request,
+            fail=fail,
+        )
         return req
 
-    def load_result(self):
-        if self.reqid.kind == 'compile-bench':
-            res_cls = _requests.BenchCompileResult
-        else:
-            raise NotImplementedError(self.reqid.kind)
-        res = res_cls.load(self._fs.result.metadata,
-                           fs=self._fs.result,
-                           request=(lambda *a, **k: self.load_request()),
-                           )
+    def load_result(self, *, fail=True):
+        res = self._kind.Result.load(
+            self._fs.result.metadata,
+            fs=self._fs.result,
+            request=(lambda *a, **k: self.load_request()),
+            fail=fail,
+        )
         return res
 
     def get_status(self, *, fail=True):
@@ -466,28 +492,12 @@ class Job:
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
 
-        if self._reqid.kind == 'compile-bench':
-            fake = kind_kwargs.pop('_fake', None)
-            req = _requests.resolve_bench_compile_request(
-                self._reqid,
-                self._fs.work.root,
-                **kind_kwargs,
-            )
-
-            # Write the benchmarks manifest.
-            manifest = _requests.build_pyperformance_manifest(req, self._worker.topfs)
-            with open(self._fs.request.pyperformance_manifest, 'w') as outfile:
-                outfile.write(manifest)
-
-            # Write the config.
-            ini = _requests.build_pyperformance_config(req, self._worker.topfs)
-            with open(self._fs.request.pyperformance_config, 'w') as outfile:
-                ini.write(outfile)
-
-            # Build the script for the commands to execute remotely.
-            script = _requests.build_compile_script(req, self._worker.topfs, fake)
-        else:
-            raise ValueError(f'unsupported job kind in {self._reqid}')
+        req, worker_script = self._kind.create(
+            self._reqid,
+            self._fs,
+            self._worker.topfs,
+            **kind_kwargs,
+        )
 
         # Write metadata.
         req.save(self._fs.request.metadata)
@@ -495,7 +505,7 @@ class Job:
 
         # Write the commands to execute remotely.
         with open(self._fs.bench_script, 'w') as outfile:
-            outfile.write(script)
+            outfile.write(worker_script)
         os.chmod(self._fs.bench_script, 0o755)
 
         # Write the commands to execute locally.
@@ -777,12 +787,8 @@ class Job:
     def wait_until_finished(self, pid=None, *, timeout=True):
         if timeout is True:
             # Default to double the typical.
-            try:
-                timeout = self.TYPICAL_DURATION_SECS[self.reqid.kind]
-            except KeyError:
-                timeout = None
-                #raise NotImplementedError(self.reqid.kind)
-            else:
+            timeout = self._kind.TYPICAL_DURATION_SECS or None
+            if timeout:
                 timeout *= 2
         elif not timeout or timeout < 0:
             timeout = None
@@ -817,14 +823,13 @@ class Job:
         result.save(self._fs.result.metadata, withextra=True)
 
     def upload_result(self, author=None, *, push=True):
-        storage = _requests.FasterCPythonResults()
         res = self.load_result()
         # We upload directly.
-        storage.add(
+        self._store.add(
             res.pyperf,
             branch='main',
             author=author,
-            unzipped=True,
+            compressed=False,
             split=True,
             push=push,
         )
@@ -849,19 +854,9 @@ class Job:
         if not any(date):
             date = None
         fullref = ref = remote = branch = tag = commit = None
-        if self.kind is RequestID.KIND.BENCHMARKS:
-            req_cls = _requests.BenchCompileRequest
-            req = req_cls.load(self._fs.request.metadata, fail=False)
-            if req:
-                ref = req.ref
-                assert not isinstance(ref, str), repr(ref)
-                fullref = ref.full
-                remote = ref.remote
-                branch = ref.branch
-                tag = ref.tag
-                commit = ref.commit
-        else:
-            raise NotImplementedError(self.kind)
+        req = self.load_request(fail=False)
+        if req:
+            fullref, ref, remote, branch, tag, commit = self._kind.as_row(req)
         data = {
             'reqid': self.reqid,
             'status': status,
@@ -938,32 +933,12 @@ class Job:
         if not fmt:
             fmt = 'verbose'
 
-        reqfs_fields = [
-            'bench_script',
-            'portal_script',
-            'ssh_okay',
-        ]
-        resfs_fields = [
-            'pidfile',
-            'logfile',
-        ]
-        if self.kind is RequestID.KIND.BENCHMARKS:
-            req_cls = _requests.BenchCompileRequest
-            res_cls = _requests.BenchCompileResult
-            reqfs_fields.extend([
-                'pyperformance_manifest',
-                'pyperformance_config',
-            ])
-            resfs_fields.extend([
-                'pyperformance_log',
-                'pyperformance_results',
-            ])
-        else:
-            raise NotImplementedError(self.kind)
+        reqfs_fields = self._kind.REQFS_FIELDS
+        resfs_fields = self._kind.RESFS_FIELDS
 
         fs = self._fs
-        req = req_cls.load(fs.request.metadata)
-        res = res_cls.load(fs.result.metadata)
+        req = self.load_request()
+        res = self.load_result()
         pid = _utils.PIDFile(fs.pidfile).read()
 
         staged = _get_staged_request(fs.jobs)
@@ -986,7 +961,7 @@ class Job:
             yield f'  {"is staged:":22} {isstaged}'
             yield ''
             yield 'Details:'
-            for field in req_cls.FIELDS:
+            for field in self._kind.Request.FIELDS:
                 if field in ('id', 'reqid', 'kind', 'user', 'date', 'datadir'):
                     continue
                 value = getattr(req, field)
@@ -1029,6 +1004,7 @@ class Jobs:
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
+        self._store = _pyperformance.FasterCPythonResults()
 
     def __str__(self):
         return self._fs.root
@@ -1067,6 +1043,7 @@ class Jobs:
             self._fs.resolve_request(reqid),
             self._worker.resolve(reqid),
             self._cfg,
+            self._store,
         )
 
     def get_current(self):
@@ -1078,7 +1055,39 @@ class Jobs:
     def get(self, reqid=None):
         if not reqid:
             return self.get_current()
+        orig = reqid
+        reqid = RequestID.from_raw(orig)
+        if not reqid:
+            if isinstance(orig, str):
+                reqid = self._parse_reqdir(orig)
+            if not reqid:
+                return None
         return self._get(reqid)
+
+    def _parse_reqdir(self, filename):
+        dirname, basename = os.path.split(filename)
+        reqid = RequestID.parse(basename)
+        if not reqid:
+            # It must be a file in the request dir.
+            reqid = RequestID.parse(os.path.basename(dirname))
+        return reqid
+
+    def match_results(self, specifier, suites=None):
+        matched = list(self._store.match(specifier, suites=suites))
+        if matched:
+            yield from matched
+        else:
+            yield from self._match_job_results(specifier, suites)
+
+    def _match_job_results(self, specifier, suites):
+        if isinstance(specifier, str):
+            job = self.get(specifier)
+            if job:
+                filename = job.fs.result.pyperformance_results
+                if suites:
+                    # XXX Handle this?
+                    pass
+                yield _pyperformance.PyperfResultsFile(filename)
 
     def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:
@@ -1113,9 +1122,10 @@ class Jobs:
                     timeout = 0
                 else:
                     try:
-                        expected = Job.TYPICAL_DURATION_SECS[reqid.kind]
+                        jobkind = resolve_job_kind(reqid.kind)
                     except KeyError:
                         raise NotImplementedError(reqid)
+                    expected = jobkind.TYPICAL_DURATION_SECS
                     # We could subtract the elapsed time, but it isn't worth it.
                     timeout = expected
             if timeout:
@@ -1128,9 +1138,10 @@ class Jobs:
                         timeout *= 2
                         break
                     try:
-                        expected = Job.TYPICAL_DURATION_SECS[queued.kind]
+                        jobkind = resolve_job_kind(queued.kind)
                     except KeyError:
                         raise NotImplementedError(queued)
+                    expected = jobkind.TYPICAL_DURATION_SECS
                     timeout += expected
                 else:
                     # Either it hasn't been queued or it already finished.
