@@ -842,29 +842,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             split=True,
             push=True,
             ):
-        if not branch:
-            branch = self.BRANCH
-
-        if self.remote:
-            self.remote.ensure_local(self.root)
-
-        #authorargs = ()
-        cfg = {}
-        if not author:
-            pass
-        elif isinstance(author, str):
-            parsed = _utils.parse_email_address(author)
-            if not parsed:
-                raise ValueError(f'invalid author {author!r}')
-            name, email = parsed
-            if not name:
-                name = '???'
-                author = f'??? <{author}>'
-            cfg['user.name'] = name
-            cfg['user.email'] = email
-            #authorargs = ('--author', author)
-        else:
-            raise NotImplementedError(author)
+        branch, gitcfg = self._prep_for_commit(branch, author)
 
         if not isinstance(results, PyperfResults):
             raise NotImplementedError(results)
@@ -883,10 +861,34 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         for suite in sorted(by_suite):
             suite_results = by_suite[suite]
-            self._add_locally(suite_results, source, branch, cfg, compressed)
+            self._add_locally(suite_results, source, branch, gitcfg, compressed)
 
         if push:
             self._upload(reltarget)
+
+    def _prep_for_commit(self, branch, author):
+        if not branch:
+            branch = self.BRANCH
+
+        # We already ran self.remote.ensure_local() in __init__().
+
+        cfg = {}
+        if not author:
+            pass
+        elif isinstance(author, str):
+            parsed = _utils.parse_email_address(author)
+            if not parsed:
+                raise ValueError(f'invalid author {author!r}')
+            name, email = parsed
+            if not name:
+                name = '???'
+                author = f'??? <{author}>'
+            cfg['user.name'] = name
+            cfg['user.email'] = email
+        else:
+            raise NotImplementedError(author)
+
+        return branch, cfg
 
     def _add_locally(self, results, source, branch, gitcfg, compressed=False):
         if results.suite:
@@ -901,7 +903,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
         self._save(results.data, reltarget, source, compressed)
         self.git('add', reltarget)
         msg = f'Add Benchmark Results ({results.uploadid})'
-        #self.git('commit', *authorargs, '-m', msg, cfg=gitcfg)
         self.git('commit', '-m', msg, cfg=gitcfg)
 
         logger.info('...done adding')
