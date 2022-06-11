@@ -835,7 +835,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             if version == uploadid.version.full:
                 yield uploadid
 
-    def add(self, results, *,
+    def add(self, results,
             branch=None,
             author=None,
             compressed=False,
@@ -845,23 +845,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
         if not branch:
             branch = self.BRANCH
 
-        if not isinstance(results, PyperfResults):
-            raise NotImplementedError(results)
-        source = results.filename
-        if source and not os.path.exists(source):
-            logger.error(f'results not found at {source}')
-            return
-        if split:
-            by_suite = results.split_benchmarks()
-            if 'other' in by_suite:
-                raise NotImplementedError(sorted(by_suite))
-        else:
-            by_suite = {None: results}
-
         if self.remote:
             self.remote.ensure_local(self.root)
 
-        authorargs = ()
+        #authorargs = ()
         cfg = {}
         if not author:
             pass
@@ -879,27 +866,45 @@ class PyperfResultsRepo(PyperfResultsStorage):
         else:
             raise NotImplementedError(author)
 
-        dirname = self.root
-        reldir = ''
-        if self.datadir:
-            dirname = os.path.join(self.root, self.datadir)
-            reldir = self.datadir
+        if not isinstance(results, PyperfResults):
+            raise NotImplementedError(results)
 
-        logger.info(f'adding results {source or "???"}...')
-        for suite in by_suite:
+        source = results.filename
+        if source and not os.path.exists(source):
+            logger.error(f'results not found at {source}')
+            return False
+
+        if split:
+            by_suite = results.split_benchmarks()
+            if 'other' in by_suite:
+                raise NotImplementedError(sorted(by_suite))
+        else:
+            by_suite = {None: results}
+
+        for suite in sorted(by_suite):
             suite_results = by_suite[suite]
-            reltarget = self._resolve_reltarget(suite_results, compressed)
-
-            logger.info(f'...as {reltarget}...')
-            self.git('checkout', '-B', branch)
-            self._save(suite_results.data, reltarget, source, compressed)
-            self.git('add', reltarget)
-            msg = f'Add Benchmark Results ({suite_results.uploadid})'
-            self.git('commit', *authorargs, '-m', msg, cfg=cfg)
-        logger.info('...done adding')
+            self._add_locally(suite_results, source, branch, cfg, compressed)
 
         if push:
             self._upload(reltarget)
+
+    def _add_locally(self, results, source, branch, gitcfg, compressed=False):
+        if results.suite:
+            logger.info(f'adding results {source or "???"} ({results.suite})...')
+        else:
+            logger.info(f'adding results {source or "???"}...')
+
+        reltarget = self._resolve_reltarget(results, compressed)
+        logger.info(f'...as {reltarget}...')
+
+        self.git('checkout', '-B', branch)
+        self._save(results.data, reltarget, source, compressed)
+        self.git('add', reltarget)
+        msg = f'Add Benchmark Results ({results.uploadid})'
+        #self.git('commit', *authorargs, '-m', msg, cfg=gitcfg)
+        self.git('commit', '-m', msg, cfg=gitcfg)
+
+        logger.info('...done adding')
 
     def _resolve_reltarget(self, results, compressed=False):
         reltarget, = results.uploadid.resolve_filenames(
