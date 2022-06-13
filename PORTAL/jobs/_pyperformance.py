@@ -730,12 +730,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise NotImplementedError((ec, text))
         return text
 
-    def iter_all(self):
-        for name in os.listdir(self._dataroot):
-            res = PyperfUploadID.parse(name, allowsuffix=True)
-            if res:
-                yield res
-
     @property
     def _suffixes(self):
         return [self.SUFFIX, self.COMPRESSED_SUFFIX]
@@ -747,12 +741,11 @@ class PyperfResultsRepo(PyperfResultsStorage):
         else:
             return self.root
 
-    def _resolve_filenames(self, uploadid, suffix=None):
-        return uploadid.resolve_filenames(
-            dirname=self._dataroot,
-            prefix=None,
-            suffix=self._suffixes if suffix is None else suffix,
-        )
+    def iter_all(self):
+        for name in os.listdir(self._dataroot):
+            res = PyperfUploadID.parse(name, allowsuffix=True)
+            if res:
+                yield res
 
     def get(self, uploadid):
         if not uploadid:
@@ -778,6 +771,13 @@ class PyperfResultsRepo(PyperfResultsStorage):
                 if not os.path.exists(filename):
                     continue
                 yield PyperfResultsFile(filename, uploadid)
+
+    def _resolve_filenames(self, uploadid, suffix=None):
+        return uploadid.resolve_filenames(
+            dirname=self._dataroot,
+            prefix=None,
+            suffix=self._suffixes if suffix is None else suffix,
+        )
 
     def _match(self, specifier, suites):
         # specifier: uploadID, version, filename
