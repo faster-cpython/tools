@@ -261,6 +261,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             return filename
 
     def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
+        dirnames = []
         if dirname is True:
             if hasattr(self, '_dirname') and self._dirname:
                 dirnames = [self._dirname]
@@ -271,9 +272,8 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
                 dirnames = list(dirname)
             if any(not d for d in dirnames):
                 raise ValueError(f'blank dirname in {dirname}')
-        else:
-            dirnames = []
 
+        prefixes = [None]
         if prefix is True:
             if hasattr(self, '_prefix') and self._prefix:
                 prefixes = [self._prefix]
@@ -284,9 +284,8 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
                 prefixes = list(prefix)
             if any(not p for p in prefixes):
                 raise ValueError(f'blank prefix in {prefix}')
-        else:
-            prefixes = [None]
 
+        suffixes = [None]
         if suffix is True:
             if hasattr(self, '_suffix') and self._suffix:
                 suffixes = [self._suffix]
@@ -297,8 +296,6 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
                 suffixes = list(suffix)
             if any(not s for s in suffixes):
                 raise ValueError(f'blank suffix in {suffix}')
-        else:
-            suffixes = [None]
 
         name = self.name
         # XXX Ignore duplicates?
@@ -505,7 +502,7 @@ class PyperfResults:
         cls = type(self)
         for suite, data in by_suite.items():
             host = getattr(self, '_host', None)
-            results = cls(None, self.filename, self.version, host, suite)
+            results = cls(None, self.filename, self.version, host, suite=suite)
             results._data = data
             if hasattr(self, '_uploadid') and self._uploadid:
                 results._uploadid = self._uploadid.copy(suite=suite)
@@ -897,7 +894,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             self.git('checkout', '-B', branch)
             self._save(suite_results.data, reltarget, source, compressed)
             self.git('add', reltarget)
-            msg = f'Add Benchmark Results ({name})'
+            msg = f'Add Benchmark Results ({suite_results.uploadid})'
             self.git('commit', *authorargs, '-m', msg, cfg=cfg)
         logger.info('...done adding')
 
