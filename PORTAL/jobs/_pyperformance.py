@@ -1010,7 +1010,7 @@ class PyperfResultsIndex:
 
 
 ##################################
-# faster-cpythohn
+# faster-cpython
 
 class FasterCPythonResults(PyperfResultsRepo):
 
