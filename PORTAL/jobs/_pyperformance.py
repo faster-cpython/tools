@@ -724,7 +724,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
         self.remote = remote
         self.datadir = datadir or None
 
-    def git(self, *args, cfg=None):
+    def _git(self, *args, cfg=None):
         ec, text = _utils.git(*args, cwd=self.root, cfg=cfg)
         if ec:
             raise NotImplementedError((ec, text))
@@ -899,11 +899,11 @@ class PyperfResultsRepo(PyperfResultsStorage):
         reltarget = self._resolve_reltarget(results, compressed)
         logger.info(f'...as {reltarget}...')
 
-        self.git('checkout', '-B', branch)
+        self._git('checkout', '-B', branch)
         self._save(results.data, reltarget, source, compressed)
-        self.git('add', reltarget)
+        self._git('add', reltarget)
         msg = f'Add Benchmark Results ({results.uploadid})'
-        self.git('commit', '-m', msg, cfg=gitcfg)
+        self._git('commit', '-m', msg, cfg=gitcfg)
 
         logger.info('...done adding')
 
@@ -932,7 +932,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise Exception('missing remote')
         url = f'{self.remote.url}/tree/main/{reltarget}'
         logger.info(f'uploading results to {url}...')
-        self.git('push', self.remote.push_url)
+        self._git('push', self.remote.push_url)
         logger.info('...done uploading')
 
 
