@@ -936,6 +936,9 @@ class PyperfResultsRepo(PyperfResultsStorage):
         logger.info('...done uploading')
 
 
+##################################
+# faster-cpythohn
+
 class FasterCPythonResults(PyperfResultsRepo):
 
     REMOTE = _utils.GitHubTarget.from_origin('faster-cpython', 'ideas', ssh=True)
