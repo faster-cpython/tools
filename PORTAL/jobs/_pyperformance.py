@@ -703,6 +703,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
     COMPRESSED_SUFFIX = '.json.gz'
     COMPRESSOR = gzip
 
+    INDEX = 'index.json'
+
     def __init__(self, root, remote=None, datadir=None):
         if root:
             root = os.path.abspath(root)
@@ -740,6 +742,22 @@ class PyperfResultsRepo(PyperfResultsStorage):
             return os.path.join(self.root, self.datadir)
         else:
             return self.root
+
+    @property
+    def _indexfile(self):
+        return os.path.join(self._dataroot, self.INDEX)
+
+    def _get_index(self):
+        filename = self._indexfile
+        try:
+            return PyperfResultsIndex.load(filename)
+        except FileNotFoundError:
+            index = PyperfResultsIndex.from_results_dir(
+                self._dataroot,
+                filename,
+            )
+            index.save()
+            return index
 
     def iter_all(self):
         for name in os.listdir(self._dataroot):
@@ -900,8 +918,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
         logger.info(f'...as {reltarget}...')
 
         self._git('checkout', '-B', branch)
-        self._save(results.data, reltarget, source, compressed)
-        self._git('add', reltarget)
+        self._save(results, reltarget, source, compressed)
+        self._git('add', reltarget, self._indexfile)
         msg = f'Add Benchmark Results ({results.uploadid})'
         self._git('commit', '-m', msg, cfg=gitcfg)
 
@@ -914,7 +932,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
         )
         return  reltarget
 
-    def _save(self, data, reltarget, source=None, compressed=False):
+    def _save(self, results, reltarget, source=None, compressed=False):
+        data = results.data
         #if compressed: assert reltarget.endswith(self.COMPRESSED_SUFFIX)
         #else: assert reltarget.endswith(self.SUFFIX)
         target = os.path.join(self.root, reltarget)
@@ -927,6 +946,11 @@ class PyperfResultsRepo(PyperfResultsStorage):
         with _open(target, 'w') as outfile:
             json.dump(data, outfile, indent=2)
 
+        # Update the index file.
+        index = self._get_index()
+        index.add(results, reltarget)
+        index.save()
+
     def _upload(self, reltarget):
         if not self.remote:
             raise Exception('missing remote')
@@ -934,6 +958,55 @@ class PyperfResultsRepo(PyperfResultsStorage):
         logger.info(f'uploading results to {url}...')
         self._git('push', self.remote.push_url)
         logger.info('...done uploading')
+
+
+class PyperfResultsIndex:
+
+    @classmethod
+    def from_results_dir(cls, dirname, filename):
+        ...
+        return cls(data, filename)
+
+    @classmethod
+    def load(cls, filename):
+        with open(filename) as infile:
+            text = infile.read()
+        data = cls._parse(text)
+        return cls.from_jsonable(data, filename)
+
+    @classmethod
+    def from_jsonable(cls, data, filename=None):
+        ...
+        return cls(data, filename)
+
+    @classmethod
+    def _parse(cls, text):
+        return json.loads(text)
+
+    @classmethod
+    def _unparse(cls, data):
+        return json.dumps(data, indent=2)
+
+    def __init__(self, data, filename=None):
+        self._data = data
+        self._filename = filename
+
+    @property
+    def filename(self):
+        return self._filename
+
+    def save(self, filename=None):
+        if not filename:
+            filename = self._filename
+            if not filename:
+                raise ValueError('missing filename')
+        data = self.as_jsonable()
+        text = self._unparse(data)
+        with open(filename, 'w', encoding='utf-8') as outfile:
+            outfile.write(text)
+
+    def as_jsonable(self):
+        ...
 
 
 ##################################
