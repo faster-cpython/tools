@@ -340,14 +340,37 @@ class PyperfResultsFile:
         else:
             raise TypeError(raw)
 
-    def __init__(self, filename, uploadid=None):
+    @classmethod
+    def _normalize_filename(cls, filename, resultsroot=None):
+        if not resultsroot:
+            if os.path.isabs(filename):
+                resultsroot = os.path.dirname(filename)
+            else:
+                resultsroot = _utils.CWD
+        elif not os.path.isabs(resultsroot):
+            raise ValueError(f'expected absolute resultsroot, got {resultsroot!r}')
+        if os.path.isabs(filename):
+            relfile = os.path.relpath(filename, resultsroot)
+            if relfile.startswith('..' + os.path.sep):
+                raise ValueError(f'resultsroot mismatch ({resultsroot} -> {filename})')
+        else:
+            relfile = filename
+            filename = os.path.join(resultsroot, relfile)
+        return filename, relfile, resultsroot
+
+    def __init__(self, filename, uploadid=None, resultsroot=None):
         if not filename:
             raise ValueError('missing filename')
-        self._filename = os.path.abspath(filename)
+        (filename, relfile, resultsroot,
+         ) = self._normalize_filename(filename, resultsroot)
         if uploadid:
             uploadid = PyperfUploadID.from_raw(uploadid)
         else:
             uploadid = PyperfUploadID.from_filename(filename)
+
+        self._filename = filename
+        self._relfile = relfile
+        self._resultsroot = resultsroot
         self._uploadid = uploadid
 
     def __repr__(self):
@@ -359,6 +382,14 @@ class PyperfResultsFile:
     @property
     def filename(self):
         return self._filename
+
+    @property
+    def relfile(self):
+        return self._relfile
+
+    @property
+    def resultsroot(self):
+        return self._resultsroot
 
     def read(self, host=None, version=None):
         filename = self._filename
@@ -372,7 +403,7 @@ class PyperfResultsFile:
             data = json.load(infile)
         return PyperfResults(
             data,
-            filename,
+            self,
             version,
             host,
             uploadid=self._uploadid,
@@ -382,13 +413,15 @@ class PyperfResultsFile:
         optional = []
         if len(others) == 1:
             optional.append('--group-by-speed')
+        cwd = self._resultsroot
         proc = _utils.run_fg(
             sys.executable, '-m', 'pyperf', 'compare_to',
             *(optional),
             '--table',
-            os.path.relpath(self._filename),
-            *(os.path.relpath(o.filename)
+            self._relfile,
+            *(os.path.relpath(o.filename, cwd)
               for o in others),
+            cwd=cwd,
         )
         if proc.returncode:
             logger.warn(proc.stdout)
@@ -786,7 +819,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
                 raise RuntimeError('matched multiple, consider using match()')
             matched = filename
         if matched:
-            return PyperfResultsFile(filename, uploadid=found)
+            uploadid = found
+            return PyperfResultsFile(filename, uploadid, self.root)
         return None
 
     def match(self, specifier, suites=None):
@@ -794,7 +828,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             for filename in self._resolve_filenames(uploadid):
                 if not os.path.exists(filename):
                     continue
-                yield PyperfResultsFile(filename, uploadid)
+                yield PyperfResultsFile(filename, uploadid, self.root)
 
     def _resolve_filenames(self, uploadid, suffix=None):
         return uploadid.resolve_filenames(

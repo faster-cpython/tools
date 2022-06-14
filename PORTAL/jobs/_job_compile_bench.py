@@ -187,6 +187,7 @@ class CompileBenchResult(Result):
         except AttributeError:
             resfile = _pyperformance.PyperfResultsFile(
                 self.fs.pyperformance_results,
+                resultsroot=self.fs.resultsroot,
             )
             self._pyperf = resfile.read(self.host, self.request.release)
             return self._pyperf

@@ -109,10 +109,15 @@ class JobFS(types.SimpleNamespace):
 
     @classmethod
     def from_jobsfs(cls, jobsfs, reqid):
+        requestfs = _utils.FSTree(f'{jobsfs.requests}/{reqid}')
+        requestfs.requestsroot = jobsfs.requests.root
+        resultfs = _utils.FSTree(f'{jobsfs.results}/{reqid}')
+        resultfs.resultsroot = jobsfs.results.root
+        workfs = _utils.FSTree(f'{jobsfs.work}/{reqid}')
         self = cls(
-            request=f'{jobsfs.requests}/{reqid}',
-            result=f'{jobsfs.requests}/{reqid}',
-            work=f'{jobsfs.work}/{reqid}',
+            request=requestfs,
+            result=resultfs,
+            work=workfs,
             reqid=reqid,
             context=jobsfs.context,
         )
@@ -181,6 +186,22 @@ class JobFS(types.SimpleNamespace):
         if requests != 'REQUESTS':
             raise NotImplementedError
         return JobsFS(root)
+
+    @property
+    def requestsroot(self):
+        try:
+            return self.request.requestsroot
+        except AttributeError:
+            #return self.jobs.requests.root
+            return os.path.dirname(self.request.root)
+
+    @property
+    def resultsroot(self):
+        try:
+            return self.result.resultsroot
+        except AttributeError:
+            #return self.jobs.results.root
+            return os.path.dirname(self.result.root)
 
     @property
     def bench_script(self):
@@ -1087,7 +1108,10 @@ class Jobs:
                 if suites:
                     # XXX Handle this?
                     pass
-                yield _pyperformance.PyperfResultsFile(filename)
+                yield _pyperformance.PyperfResultsFile(
+                    filename,
+                    resultsroot=self._fs.results.root,
+                )
 
     def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:
