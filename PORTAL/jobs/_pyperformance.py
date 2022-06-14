@@ -88,37 +88,214 @@ class PyperfTable:
 
     @classmethod
     def parse(cls, text):
-        rows = (l.split('|')[1:-1]
-                for l in text.splitlines()
-                if not l.startswith('+'))
-        rows = [[v.strip() for v in r] for r in rows]
-        self = cls(rows[2:], rows[0])
+        lines = iter(text.splitlines())
+        for line in lines:
+            header = PyperfTableHeader.parse(line)
+            if header:
+                try:
+                    headerdiv = next(lines)
+                except StopIteration:
+                    continue
+                if not headerdiv.startswith('+='):
+                #if headerdiv != header.div:
+                    raise ValueError('bad table text')
+                break
+        else:
+            return None
+        row_cls = PyperfTableRow.subclass_from_header(header)
+        rows = []
+        for line in lines:
+            row = row_cls.parse(line)
+            if not row:
+                if not line.startswith('+'):
+                    break
+                continue
+            rows.append(row)
+        # XXX Parse the "Benchmark hidden because not significant" line.
+        self = cls(rows, header)
         self._text = text
         return self
 
     def __init__(self, rows, header=None):
-        self.header = tuple(header)
-        self.rows = [zip(self.header, r) for r in rows]
+        if not isinstance(rows, tuple):
+            rows = tuple(rows)
+        if not header:
+            header = rows[0].header
+        self.header = header
+        self.rows = rows
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self.rows}, {self.header})'
+
+    @property
+    def mean_row(self):
+        try:
+            return self._mean_row
+        except AttributeError:
+            for row in self.rows:
+                if row.name == 'Geometric mean':
+                    break
+            else:
+                row = None
+            self._mean_row = row
+            return self._mean_row
 
     def render(self, fmt=None):
         if not fmt:
             fmt = 'raw'
         if fmt == 'raw':
             text = getattr(self, '_text', None)
-            if not text:
-                raise NotImplementedError
-            yield from text.splitlines()
+            if text:
+                yield from text.splitlines()
+            else:
+                div = self.header.rowdiv
+                yield div
+                yield from self.header.render(fmt)
+                yield self.header.div
+                for row in self.rows:
+                    yield from row.render(fmt)
+                    yield div
         elif fmt == 'meanonly':
             text = getattr(self, '_text', None)
-            if not text:
-                raise NotImplementedError
-            for line in text.splitlines():
-                if 'Geometric mean' in line:
-                    break
+            if text:
+                lines = text.splitlines()
+                yield from lines[:3]
+                yield from lines[-2:]
             else:
-                raise NotImplementedError(text)
+                div = self.header.rowdiv
+                yield div
+                yield from self.header.render('raw')
+                yield self.header.div
+                yield from self.mean_row.render('raw')
+                yield div
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
+
+
+class _PyperfTableRowBase(tuple):
+
+    @classmethod
+    def parse(cls, line):
+        return cls._parse(line)
+
+    @classmethod
+    def _parse(cls, line):
+        line = line.rstrip()
+        if not line or line.startswith('+'):
+            return None
+        values = tuple(v.strip() for v in line.split('|')[1:-1])
+        self = tuple.__new__(cls, values)
+        self._raw = line
+        return self
+
+    def __new__(cls, name, ref, *others):
+        raise TypeError(f'not supported; use {cls.__name__}.parse() instead')
+
+    @property
+    def raw(self):
+        return self._raw
+
+    @property
+    def name(self):
+        try:
+            return self._name
+        except AttributeError:
+            self._name = self[0]
+            return self._name
+
+    @property
+    def values(self):
+        try:
+            return self._values
+        except AttributeError:
+            self._values = self[1:]
+            return self._values
+
+    @property
+    def ref(self):
+        try:
+            return self._ref
+        except AttributeError:
+            self._ref = self[1]
+            return self._ref
+
+    @property
+    def others(self):
+        try:
+            return self._others
+        except AttributeError:
+            self._others = self[2:]
+            return self._others
+
+    def render(self, fmt=None):
+        if not fmt:
+            fmt = 'raw'
+        if fmt == 'raw':
+            raw = getattr(self, '_raw', None)
+            if raw:
+                return raw
+            raise NotImplementedError
+        else:
+            raise ValueError(f'unsupported fmt {fmt!r}')
+
+
+class PyperfTableHeader(_PyperfTableRowBase):
+
+    label = _PyperfTableRowBase.name
+    sources = _PyperfTableRowBase.values
+
+    @property
+    def div(self):
+        return '+=' + '=+='.join('=' * len(v) for v in self) + '=+'
+
+    @property
+    def rowdiv(self):
+        return '+-' + '-+-'.join('-' * len(v) for v in self) + '-+'
+
+    @property
+    def indexpersource(self):
+        return dict(zip(self.sources, range(len(self.sources))))
+
+
+class PyperfTableRow(_PyperfTableRowBase):
+
+    @classmethod
+    def subclass_from_header(cls, header):
+        if cls is not PyperfTableRow:
+            raise TypeError('not supported for subclasses')
+        if not header:
+            raise ValueError('missing header')
+        class _PyperfTableRow(PyperfTableRow):
+            _header = header
+            @classmethod
+            def parse(cls, line):
+                self = cls._parse(line)
+                if not self:
+                    return None
+                if len(self) != len(header):
+                    raise ValueError(f'expected {len(header)} values, got {tuple(self)}')
+                return self
+        return _PyperfTableRow
+
+    @classmethod
+    def parse(cls, line, header):
+        self = super().parse(line)
+        if not self:
+            return None
+        assert len(self) == len(header)
+        self._header = header
+        return self
+
+    @property
+    def header(self):
+        return self._header
+
+    @property
+    def valuesdict(self):
+        return dict(zip(self.header.sources, self.values))
+
+    def look_up(self, source):
+        return self.valuesdict[source]
 
 
 class PyperfUploadID(namedtuple('PyperfUploadName',
