@@ -411,8 +411,12 @@ def is_proc_running(pid):
 
 
 def run_fg(cmd, *args, cwd=None, env=None):
+    if not cwd:
+        cwd = os.getcwd()
     argv = [cmd, *args]
-    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
+    logger.debug('# running: %s  (CWD: %s)',
+                 ' '.join(shlex.quote(a) for a in argv),
+                 cwd)
     return subprocess.run(
         argv,
         stdout=subprocess.PIPE,
@@ -424,6 +428,9 @@ def run_fg(cmd, *args, cwd=None, env=None):
 
 
 def run_bg(argv, logfile=None, *, cwd=None, env=None):
+    if not cwd:
+        cwd = os.getcwd()
+
     if not argv:
         raise ValueError('missing argv')
     elif isinstance(argv, str):
@@ -438,7 +445,7 @@ def run_bg(argv, logfile=None, *, cwd=None, env=None):
         cmd = f'{cmd} >> {logfile}'
     cmd = f'{cmd} 2>&1'
 
-    logger.debug('# running (background): %s', cmd)
+    logger.debug('# running (background): %s  (CWD: %s)', cmd, cwd)
     #subprocess.run(cmd, shell=True)
     subprocess.Popen(
         cmd,
