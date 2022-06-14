@@ -920,6 +920,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
     COMPRESSOR = gzip
 
     INDEX = 'index.json'
+    BASELINE = '3.10.4'
 
     def __init__(self, root, remote=None, datadir=None):
         if root:
@@ -1167,6 +1168,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
         # Update the index file.
         index = self._get_index()
         index.add(target, results)
+        index.ensure_comparisons(self.BASELINE)
         index.save()
 
     def _upload(self, reltarget):
@@ -1179,6 +1181,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
 
 class PyperfResultsIndex:
+
+    BASELINE_MEAN = '(ref)'
 
     @classmethod
     def from_results_dir(cls, dirname, filename):
@@ -1234,6 +1238,18 @@ class PyperfResultsIndex:
             self._resultsdir = os.path.dirname(self._filename)
             return self._resultsdir
 
+    @property
+    def baseline(self):
+        return self.get_baseline()
+
+    def get_baseline(self, suite=None):
+        for entry in self._entries:
+            if entry.uploadid.suite != suite:
+                continue
+            if entry.mean == self.BASELINE_MEAN:
+                return entry
+        return None
+
     def add(self, filename, results=None):
         if results:
             entry = PyperfResultsIndexEntry.from_results(results)
@@ -1262,6 +1278,72 @@ class PyperfResultsIndex:
         self._entries.append(entry)
         self._relfiles[entry] = relfile
         return relfile
+
+    def _collate_by_suite(self):
+        by_suite = {}
+        suite_baselines = {}
+        for i, entry in enumerate(self._entries):
+            suite = entry.uploadid.suite or 'pyperformance'
+            try:
+                indices = by_suite[suite]
+            except KeyError:
+                indices = by_suite[suite] = []
+            indices.append(i)
+            if entry.mean == self.BASELINE_MEAN:
+                assert suite not in suite_baselines, suite
+                suite_baselines[suite] = entry
+            elif suite not in suite_baselines:
+                suite_baselines[suite] = None
+        return by_suite, suite_baselines
+
+    def ensure_comparisons(self, baseline=None):
+        requested = _utils.Version.from_raw(baseline).full if baseline else None
+        requested_by_suite = {}
+        outdated_by_suite = {}
+        by_suite, suite_baselines = self._collate_by_suite()
+        for suite in sorted(by_suite):
+            indices = by_suite[suite]
+            suite_base = suite_baselines[suite]
+            if requested:
+                for index in indices:
+                    entry = self._entries[index]
+                    if entry.uploadid.version.full == requested:
+                        requested_entry = entry
+                        break
+                else:
+                    raise ValueError(f'unknown baseline {baseline}')
+                if not suite_base or suite_base != requested_entry:
+                    outdated_by_suite[suite] = indices
+                    suite_baselines[suite] = requested_entry
+                    continue
+            elif not suite_base:
+                raise ValueError('missing baseline')
+            # Fall back to checking each one.
+            for index in indices:
+                entry = self._entries[index]
+                if not entry.mean and entry is not suite_base:
+                    if suite not in outdated_by_suite:
+                        outdated_by_suite[suite] = []
+                    outedated_by_suite[suite].append(index)
+        for suite, indices in outdated_by_suite.items():
+            baseline = suite_baselines[suite]
+            basefile = PyperfResultsFile(
+                self._relfiles[baseline],
+                baseline.uploadid,
+                self.resultsdir,
+            )
+            for i in indices:
+                entry = self._entries[i]
+                if entry is baseline:
+                    continue
+                resfile = PyperfResultsFile(
+                    self._relfiles[entry],
+                    entry.uploadid,
+                    self.resultsdir,
+                )
+                table = basefile.compare([resfile])
+                mean = table.mean_row[-1]
+                self._entries[i] = entry._replace(mean=mean)
 
     def save(self):
         data = self.as_jsonable()
