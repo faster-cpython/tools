@@ -1106,6 +1106,12 @@ class PyperfResultsIndexEntry(
             mean or None,
         )
 
+    def __repr__(self):
+        reprstr = super().__repr__()
+        prefix, _, remainder = reprstr.partition('uploadid=')
+        _, _, remainder = remainder.partition(', build=')
+        return f'{prefix}uploadid={str(self.uploadid)!r}, build={remainder})'
+
     def as_jsonable(self):
         return {
             'uploadid': str(self.uploadid),
