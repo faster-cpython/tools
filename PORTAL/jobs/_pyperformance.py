@@ -967,9 +967,9 @@ class PyperfResultsRepo(PyperfResultsStorage):
     def _get_index(self):
         filename = self._indexfile
         try:
-            return PyperfResultsIndex.load(filename)
+            return PyperfResultsIndexFile.load(filename)
         except FileNotFoundError:
-            index = PyperfResultsIndex.from_results_dir(
+            index = PyperfResultsIndexFile.from_results_dir(
                 self._dataroot,
                 filename,
             )
@@ -1167,8 +1167,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         # Update the index file.
         index = self._get_index()
-        index.add(target, results)
-        index.ensure_comparisons(self.BASELINE)
+        index.add_from_file(target, results)
+        index.ensure_means(self.BASELINE)
         index.save()
 
     def _upload(self, reltarget):
@@ -1184,100 +1184,8 @@ class PyperfResultsIndex:
 
     BASELINE_MEAN = '(ref)'
 
-    @classmethod
-    def from_results_dir(cls, dirname, filename):
-        self = cls(filename)
-        self._resultsdir = dirname
-        for name in os.listdir(dirname):
-            self.add(os.path.join(dirname, name))
-        return self
-
-    @classmethod
-    def load(cls, filename):
-        with open(filename) as infile:
-            text = infile.read()
-        data = cls._parse(text)
-        return cls.from_jsonable(data, filename)
-
-    @classmethod
-    def from_jsonable(cls, data, filename=None):
-        self = cls(filename)
-        if sorted(data) != ['entries']:
-            raise ValueError(f'unsupported index data {data!r}')
-        for entry in data['entries']:
-            entry = PyperfResultsIndexEntry.from_jsonable(entry)
-            # XXX The suffix might not be right.
-            filename = f'{entry.uploadid}.json'
-            self._add(entry, filename)
-        return self
-
-    @classmethod
-    def _parse(cls, text):
-        return json.loads(text)
-
-    @classmethod
-    def _unparse(cls, data):
-        return json.dumps(data, indent=2)
-
-    def __init__(self, filename):
-        if not filename:
-            raise ValueError('missing filename')
-        self._filename = filename
+    def __init__(self):
         self._entries = []
-        self._relfiles = {}
-
-    @property
-    def filename(self):
-        return self._filename
-
-    @property
-    def resultsdir(self):
-        try:
-            return self._resultsdir
-        except AttributeError:
-            self._resultsdir = os.path.dirname(self._filename)
-            return self._resultsdir
-
-    @property
-    def baseline(self):
-        return self.get_baseline()
-
-    def get_baseline(self, suite=None):
-        for entry in self._entries:
-            if entry.uploadid.suite != suite:
-                continue
-            if entry.mean == self.BASELINE_MEAN:
-                return entry
-        return None
-
-    def add(self, filename, results=None):
-        if results:
-            entry = PyperfResultsIndexEntry.from_results(results)
-            if not filename:
-                raise NotImplementedError
-                #filename = f'{results.uploadid}.json'
-        elif not filename:
-            return ValueError('missing filename')
-        else:
-            entry = PyperfResultsIndexEntry.from_file(filename)
-        if not entry:
-            return None
-        self._add(entry, filename)
-        return entry
-
-    def _add(self, entry, filename):
-        assert filename, entry
-        if os.path.isabs(filename):
-            relfile = os.path.relpath(filename, self.resultsdir)
-        elif os.path.basename(filename) == filename:
-            relfile = filename
-        else:
-            raise NotImplementedError(repr(filename))
-        if relfile in self._relfiles:
-            raise KeyError(f'{relfile} already added ({self._relfiles[relfile]})')
-        self._entries.append(entry)
-        self._relfiles[entry] = relfile
-        return relfile
 
     def _collate_by_suite(self):
         by_suite = {}
@@ -1296,7 +1204,42 @@ class PyperfResultsIndex:
                 suite_baselines[suite] = None
         return by_suite, suite_baselines
 
-    def ensure_comparisons(self, baseline=None):
+    @property
+    def baseline(self):
+        return self.get_baseline()
+
+    def get_baseline(self, suite=None):
+        for entry in self._entries:
+            if entry.uploadid.suite != suite:
+                continue
+            if entry.mean == self.BASELINE_MEAN:
+                return entry
+        return None
+
+    def add(self, entry):
+        if not entry:
+            raise ValueError('missing entry')
+        elif isinstance(entry, str):
+            raise NotImplementedError(entry)
+        elif not isinstance(entry, PyperfResultsIndexEntry):
+            raise TypeError(entry)
+        self._add(entry)
+
+    def _add(self, entry):
+        #assert entry
+        self._entries.append(entry)
+
+    def add_from_results(self, results):
+        entry = self._entry_from_results(results)
+        self._add(entry)
+        return entry
+
+    def _entry_from_results(self, results):
+        if not results:
+            raise ValueError('missing results')
+        return PyperfResultsIndexEntry.from_results(results)
+
+    def ensure_means(self, baseline=None):
         requested = _utils.Version.from_raw(baseline).full if baseline else None
         requested_by_suite = {}
         outdated_by_suite = {}
@@ -1327,34 +1270,165 @@ class PyperfResultsIndex:
                     outedated_by_suite[suite].append(index)
         for suite, indices in outdated_by_suite.items():
             baseline = suite_baselines[suite]
-            basefile = PyperfResultsFile(
-                self._relfiles[baseline],
-                baseline.uploadid,
-                self.resultsdir,
-            )
+            baselineforcomparison = self._entry_for_comparison(baseline)
             for i in indices:
                 entry = self._entries[i]
                 if entry is baseline:
                     continue
-                resfile = PyperfResultsFile(
-                    self._relfiles[entry],
-                    entry.uploadid,
-                    self.resultsdir,
-                )
-                table = basefile.compare([resfile])
-                mean = table.mean_row[-1]
+                mean = self._get_mean(entry, baselineforcomparison)
                 self._entries[i] = entry._replace(mean=mean)
 
+    def _entry_for_comparison(self, entry):
+        raise NotImplementedError(entry)
+
+    def _get_mean(self, entry, baseline):
+        _entry = self._entry_for_comparison(entry)
+        table = baseline.compare([_entry])
+        return table.mean_row[-1]
+
+
+class PyperfResultsIndexFile(PyperfResultsIndex):
+
+    @classmethod
+    def from_results_dir(cls, dirname, filename):
+        self = cls(filename)
+        self._resultsdir = dirname
+        for name in os.listdir(dirname):
+            self.add(os.path.join(dirname, name))
+        return self
+
+    @classmethod
+    def load(cls, filename):
+        with open(filename) as infile:
+            text = infile.read()
+        data = cls._parse(text)
+        return cls.from_jsonable(data, filename)
+
+    @classmethod
+    def from_jsonable(cls, data, filename=None):
+        self = cls(filename)
+        if sorted(data) != ['entries']:
+            raise ValueError(f'unsupported index data {data!r}')
+        def entry_from_jsonable(data):
+            if sorted(data) != ['build', 'geometric mean', 'uploadid']:
+                raise ValueError(f'unsupported index entry data {data!r}')
+            uploadid = PyperfUploadID.parse(data['uploadid'])
+            if not uploadid:
+                raise ValueError(f'bad uploadid in {data}')
+            return PyperfResultsIndexEntry(
+                uploadid,
+                data['build'],
+                data['geometric mean'],
+            )
+        for entrydata in data['entries']:
+            entry = entry_from_jsonable(entrydata)
+            # XXX The suffix might not be right.
+            filename = f'{entry.uploadid}.json'
+            self._add(entry, filename)
+        return self
+
+    @classmethod
+    def _parse(cls, text):
+        return json.loads(text)
+
+    @classmethod
+    def _unparse(cls, data):
+        return json.dumps(data, indent=2)
+
+    def __init__(self, filename):
+        super().__init__()
+        if not filename:
+            raise ValueError('missing filename')
+        self._filename = filename
+        self._relfiles = {}
+
+    @property
+    def filename(self):
+        return self._filename
+
+    @property
+    def resultsdir(self):
+        try:
+            return self._resultsdir
+        except AttributeError:
+            self._resultsdir = os.path.dirname(self._filename)
+            return self._resultsdir
+
+    def add(self, entry):
+        if isinstance(entry, str) and entry:
+            filename = entry
+            return self.add_from_file(filename)
+        return super().add(entry)
+
+    def add_from_results(self, results):
+        filename = None  # Handled in self._add()
+        return self.add_from_file(filename, results)
+
+    def add_from_file(self, filename, results=None):
+        if not filename:
+            return ValueError('missing filename')
+        if results:
+            entry = self._entry_from_results(results)
+            # XXX Save to the file?
+        else:
+            entry = self._entry_from_file(filename)
+        if not entry:
+            return None
+        self._add(entry, filename)
+        return entry
+
+    def _entry_from_file(self, filename):
+        dirname, name = os.path.split(filename)
+        if os.path.abspath(dirname) != self.resultsdir:
+            raise ValueError(f'not in results dir ({filename})')
+        uploadid = PyperfUploadID.parse(name, allowsuffix=True)
+        if not uploadid:
+            return None
+        resfile = PyperfResultsFile(filename, uploadid)
+        results = resfile.read()
+        return PyperfResultsIndexEntry.from_results(results)
+
+    def _add(self, entry, filename=None):
+        if not filename:
+            # XXX What is the right filename to use?
+            raise NotImplementedError(entry)
+            filename = f'{results.uploadid}.json'
+        if os.path.isabs(filename):
+            relfile = os.path.relpath(filename, self.resultsdir)
+        elif os.path.basename(filename) == filename:
+            relfile = filename
+        else:
+            raise NotImplementedError(repr(filename))
+        if relfile in self._relfiles:
+            raise KeyError(f'{relfile} already added ({self._relfiles[relfile]})')
+        super()._add(entry)
+        self._relfiles[entry] = relfile
+        return relfile
+
+    def _entry_for_comparison(self, entry):
+        return PyperfResultsFile(
+            self._relfiles[entry],
+            entry.uploadid,
+            self.resultsdir,
+        )
+
     def save(self):
-        data = self.as_jsonable()
+        data = self._as_jsonable()
         text = self._unparse(data)
         with open(self._filename, 'w', encoding='utf-8') as outfile:
             outfile.write(text)
             print(file=outfile)  # Add a blank line at the end.
 
-    def as_jsonable(self):
+    def _as_jsonable(self):
+        def as_jsonable(entry):
+            uploadid, build, mean = entry
+            return {
+                'uploadid': str(uploadid),
+                'build': build,
+                'geometric mean': str(mean) if mean else None,
+            }
         return {
-            'entries': [e.as_jsonable() for e in self._entries],
+            'entries': [as_jsonable(e) for e in self._entries],
         }
 
 
@@ -1362,34 +1436,11 @@ class PyperfResultsIndexEntry(
         namedtuple('PyperfResultsIndexEntry', 'uploadid build mean')):
 
     @classmethod
-    def from_file(cls, filename):
-        name = os.path.basename(filename)
-        uploadid = PyperfUploadID.parse(name, allowsuffix=True)
-        if not uploadid:
-            return None
-        resfile = PyperfResultsFile(filename, uploadid)
-        results = resfile.read()
-        return cls.from_results(results)
-
-    @classmethod
     def from_results(cls, results):
         uploadid = results.uploadid
         build = results.build
         mean = None
         return cls(uploadid, build, mean)
-
-    @classmethod
-    def from_jsonable(cls, data, filename=None):
-        if sorted(data) != ['build', 'geometric mean', 'uploadid']:
-            raise ValueError(f'unsupported index entry data {data!r}')
-        uploadid = PyperfUploadID.parse(data['uploadid'])
-        if not uploadid:
-            raise ValueError(f'bad uploadid in {data}')
-        return cls(
-            uploadid,
-            data['build'],
-            data['geometric mean'],
-        )
 
     def __new__(cls, uploadid, build, mean):
         return super().__new__(
@@ -1404,13 +1455,6 @@ class PyperfResultsIndexEntry(
         prefix, _, remainder = reprstr.partition('uploadid=')
         _, _, remainder = remainder.partition(', build=')
         return f'{prefix}uploadid={str(self.uploadid)!r}, build={remainder})'
-
-    def as_jsonable(self):
-        return {
-            'uploadid': str(self.uploadid),
-            'build': self.build,
-            'geometric mean': str(self.mean) if self.mean else None,
-        }
 
 
 ##################################
