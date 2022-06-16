@@ -16,7 +16,7 @@ from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
 )
-from ._pyperformance import PyperfTable, FasterCPythonResults
+#from ._pyperformance import PyperfTable
 from ._utils import (
     LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
 )
