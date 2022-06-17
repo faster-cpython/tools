@@ -262,7 +262,8 @@ def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
             sys.exit(1)
         others.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    table = res1.compare(others)
+    compared = res1.compare(others)
+    table = compared.table
     fmt = 'meanonly' if meanonly else 'raw'
     for line in table.render(fmt):
         print(line)

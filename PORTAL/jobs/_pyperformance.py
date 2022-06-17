@@ -962,7 +962,8 @@ class PyperfResultsFile:
         if proc.returncode:
             logger.warn(proc.stdout)
             return None
-        return PyperfTable.parse(proc.stdout)
+        return PyperfComparisons.parse_table(proc.stdout)
+#        return PyperfTable.parse(proc.stdout)
 
 
 class PyperfResults:
@@ -1642,8 +1643,8 @@ class PyperfResultsIndex:
 
     def _get_mean(self, entry, baseline):
         _entry = self._entry_for_comparison(entry)
-        table = baseline.compare([_entry])
-        return table.mean_row[-1]
+        compared = baseline.compare([_entry])
+        return compared.table.mean_row[-1]
 
 
 class PyperfResultsIndexFile(PyperfResultsIndex):
