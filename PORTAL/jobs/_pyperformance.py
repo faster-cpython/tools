@@ -82,6 +82,265 @@ class Benchmarks:
                     yield name[3:]
 
 
+##################################
+# results comparisons
+
+class PyperfComparisonValue:
+    """A single value reported by pyperf when comparing to sets of results."""
+
+    IGNORED = 'not significant'
+    BASELINE = '(ref)'
+
+    REGEX = re.compile(rf'''
+        ^
+        (?:
+            (?:
+                {_utils.ElapsedTimeWithUnits.PAT}
+             )  # <elapsed1> <units1>
+            |
+            (?:
+                (?:
+                    {_utils.ElapsedTimeWithUnits.PAT}
+                    : \s+
+                 )?  # <elapsed2> <units2>
+                (?:
+                    {_utils.ElapsedTimeComparison.PAT}
+                 )  # <value> <direction>
+             )
+            |
+            ( {re.escape(IGNORED)} )  # <ignored>
+            |
+            ( {re.escape(BASELINE)} )  # <baseline>
+         )
+        $
+    ''', re.VERBOSE)
+
+    @classmethod
+    def parse(cls, valuestr, *, fail=False):
+        m = cls.REGEX.match(valuestr)
+        if not m:
+            if fail:
+                print(cls.REGEX.pattern)
+                raise ValueError(f'could not parse {valuestr!r}')
+            return None
+        (elapsed1, units1,
+         elapsed2, units2, value, direction,
+         ignored,
+         baseline,
+         ) = m.groups()
+        get_elapsed = _utils.ElapsedTimeWithUnits.from_values
+        get_comparison = _utils.ElapsedTimeComparison.from_parsed_values
+        if elapsed1:
+            elapsed = get_elapsed(elapsed1, units1)
+            comparison = None
+        elif value:
+            if elapsed2:
+                elapsed = get_elapsed(elapsed2, units2)
+            comparison = get_comparison(value, direction)
+        elif ignored:
+            elapsed = None
+            comparison = None
+        elif baseline:
+            elapsed = None
+            comparison = cls.BASELINE
+        else:
+            raise NotImplementedError(valuestr)
+        return cls(elapsed, comparison)
+
+    def __init__(self, elapsed, comparison):
+        self._elapsed = elapsed
+        self._comparison = comparison
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._elapsed!r}, {self._comparison!r})'
+
+    def __str__(self):
+        if self._elapsed:
+            if self._comparison:
+                return f'{self._elapsed}: {self._comparison}'
+            else:
+                return str(self._elapsed)
+        else:
+            if self._comparison:
+                return str(self._comparison)
+            else:
+                return self.IGNORED
+
+    @property
+    def elapsed(self):
+        return self._elapsed
+
+    @property
+    def comparison(self):
+        return self._comparison
+
+    @property
+    def isbaseline(self):
+        if self._elapsed and not self._comparison:
+            return True
+        return self._comparison == self.BASELINE
+
+
+class PyperfComparisonBaseline:
+    """The filename and set of result values for baseline results."""
+
+    def __init__(self, source, byname):
+        if not source:
+            raise ValueError('missing source')
+        # XXX Validate source as a filename.
+        #elif not os.path.isabs(source):
+        #    raise ValueError(f'expected an absolute source, got {source!r}')
+        _byname = {}
+        for name, value in byname.items():
+            assert name and isinstance(name, str), (name, value, byname)
+            assert value and isinstance(value, str), (name, value, byname)
+            _byname[name] = _utils.ElapsedTimeWithUnits.parse(value, fail=True)
+        self._source = source or None
+        self._byname = byname
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._source!r}, {self._byname!r})'
+
+    def __str__(self):
+        return f'<baseline {self._source!r}>'
+
+    @property
+    def source(self):
+        return self._source
+
+    @property
+    def byname(self):
+        return dict(self._byname)
+
+
+class PyperfComparison:
+    """The per-benchmark differences between one results set and a baseline.
+
+    The comparison values are a mapping from benchmark name to the
+    relative differences (e.g. "1.04x faster").  The geometric mean
+    is also provided.
+    """
+
+    _fields = 'baseline source byname mean'.split()
+
+    Summary = namedtuple('Summary',
+                         'bench baseline baseresult source result comparison')
+
+    def __init__(self, baseline, source, byname, mean):
+        if not baseline:
+            raise ValueError('missing baseline')
+        elif not isinstance(baseline, PyperfComparisonBaseline):
+            raise TypeError(baseline)
+        if not source:
+            raise ValueError('missing source')
+        # XXX Validate source as a filename.
+        #elif not os.path.isabs(source):
+        #    raise ValueError(f'expected an absolute source, got {source!r}')
+
+        _byname = {}
+        for name, value in byname.items():
+            assert name and isinstance(name, str), (name, value, byname)
+            assert value and isinstance(value, str), (name, value, byname)
+            _byname[name] = PyperfComparisonValue.parse(value, fail=True)
+        if sorted(_byname) != sorted(baseline.byname):
+            raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
+        self._baseline = baseline
+        self._source = source
+        self._byname = _byname
+        self._mean = _utils.ElapsedTimeComparison.parse(mean)
+
+    def __repr__(self):
+        values = [f'{a}={getattr(self, "_"+a)!r}' for a in self._fields]
+        return f'{type(self).__name__}({", ".join(values)})'
+
+    def __str__(self):
+        return f'<{self._mean} ({self._source})>'
+
+    @property
+    def baseline(self):
+        return self._baseline
+
+    @property
+    def source(self):
+        return self._source
+
+    @property
+    def byname(self):
+        return dict(self._byname)
+
+    @property
+    def mean(self):
+        return self._mean
+
+    def look_up(self, name):
+        return self.Summary(
+            name,
+            self._baseline.source,
+            self._baseline.byname[name],
+            self._source,
+            self._byname[name].elapsed,
+            self._byname[name].comparison,
+        )
+
+
+class PyperfComparisons:
+    """The baseline and comparisons for a set of results."""
+
+    @classmethod
+    def parse_table(cls, text):
+        table = PyperfTable.parse(text)
+        return cls.from_table(table)
+
+    @classmethod
+    def from_table(cls, table):
+        base_byname = {}
+        bysource = {s: {} for s in table.header.others}
+        means = {s: None for s in table.header.others}
+        for row in table.rows:
+            values = row.valuesdict
+            if row.name == 'Geometric mean':
+                for source in means:
+                    means[source] = values[source]
+            else:
+                base_byname[row.name] = row.baseline
+                for source, byname in bysource.items():
+                    byname[row.name] = values[source]
+        for source, byname in bysource.items():
+            bysource[source] = (byname, means[source])
+        self = cls(
+            PyperfComparisonBaseline(table.header.baseline, base_byname),
+            bysource,
+        )
+        self._table = table
+        return self
+
+    def __init__(self, baseline, bysource):
+        # baseline is checked in PyperfComparison.__init__().
+        if not bysource:
+            raise ValueError('missing bysource')
+        _bysource = {}
+        for source, data in bysource.items():
+            byname, mean = data
+            _bysource[source] = PyperfComparison(baseline, source, byname, mean)
+        self._baseline = baseline
+        self._bysource = _bysource
+
+    @property
+    def baseline(self):
+        return self._baseline
+
+    @property
+    def bysource(self):
+        return dict(self._bysource)
+
+    @property
+    def table(self):
+        try:
+            return self._table
+        except AttributeError:
+            raise NotImplementedError
+
+
 class PyperfTable:
 
     FORMATS = ['raw', 'meanonly']
@@ -121,6 +380,8 @@ class PyperfTable:
             rows = tuple(rows)
         if not header:
             header = rows[0].header
+        if header[0] != 'Benchmark':
+            raise ValueError(f'unsupported header {header}')
         self.header = header
         self.rows = rows
 
@@ -176,19 +437,28 @@ class _PyperfTableRowBase(tuple):
 
     @classmethod
     def parse(cls, line):
-        return cls._parse(line)
+        values = cls._parse(line)
+        if not values:
+            return None
+        self = tuple.__new__(cls, values)
+        self._raw = line
+        return self
 
     @classmethod
     def _parse(cls, line):
         line = line.rstrip()
         if not line or line.startswith('+'):
             return None
-        values = tuple(v.strip() for v in line.split('|')[1:-1])
-        self = tuple.__new__(cls, values)
-        self._raw = line
-        return self
+        if not line.startswith('|') or not line.endswith('|'):
+            raise ValueError(f'unsupported table row line {line!r}')
+        values = tuple(v.strip() for v in line[1:-1].split('|'))
+        if not values:
+            raise ValueError(f'missing name column in {line!r}')
+        elif len(values) < 3:
+            raise ValueError(f'expected 2+ sources in {line!r}')
+        return values
 
-    def __new__(cls, name, ref, *others):
+    def __new__(cls, name, baseline, *others):
         raise TypeError(f'not supported; use {cls.__name__}.parse() instead')
 
     @property
@@ -212,12 +482,12 @@ class _PyperfTableRowBase(tuple):
             return self._values
 
     @property
-    def ref(self):
+    def baseline(self):
         try:
-            return self._ref
+            return self._baseline
         except AttributeError:
-            self._ref = self[1]
-            return self._ref
+            self._baseline = self[1]
+            return self._baseline
 
     @property
     def others(self):
@@ -266,15 +536,9 @@ class PyperfTableRow(_PyperfTableRowBase):
         if not header:
             raise ValueError('missing header')
         class _PyperfTableRow(PyperfTableRow):
-            _header = header
             @classmethod
-            def parse(cls, line):
-                self = cls._parse(line)
-                if not self:
-                    return None
-                if len(self) != len(header):
-                    raise ValueError(f'expected {len(header)} values, got {tuple(self)}')
-                return self
+            def parse(cls, line, *, _header=header):
+                return super().parse(line, _header)
         return _PyperfTableRow
 
     @classmethod
@@ -282,7 +546,8 @@ class PyperfTableRow(_PyperfTableRowBase):
         self = super().parse(line)
         if not self:
             return None
-        assert len(self) == len(header)
+        if len(self) != len(header):
+            raise ValueError(f'expected {len(header)} values, got {tuple(self)}')
         self._header = header
         return self
 
@@ -297,6 +562,9 @@ class PyperfTableRow(_PyperfTableRowBase):
     def look_up(self, source):
         return self.valuesdict[source]
 
+
+##################################
+# results
 
 class PyperfUploadID(namedtuple('PyperfUploadName',
                                 'impl version commit host compatid suite')):
