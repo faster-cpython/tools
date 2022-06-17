@@ -82,6 +82,212 @@ class Benchmarks:
                     yield name[3:]
 
 
+class PyperfUploadID(namedtuple('PyperfUploadName',
+                                'impl version commit host compatid suite')):
+    # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
+    # for details on this filename format.
+
+    REGEX = re.compile(r'''
+        # We do no strip leading/trailing whitespace in this regex.
+        ^
+        ( .*? )  # <prefix>
+        ( \w+ )  # <impl>
+        -
+        ( main | \d\.\d+\. (?: 0a\d+ | 0b\d+ | 0rc\d+ | [1-9]\d* ) )  # <version>
+        -
+        ( [0-9a-f]{10} )  # <commit>
+        -
+        ( [^-\s]+ )  # <host>
+        -
+        ( [0-9a-f]{12} )  # <compatid>
+        (?:
+            -
+            ( pyston )  # <suite>
+        )?
+        #( \.json (?: \.gz )? )?  # <suffix>
+        ( \. .*? )?  # <suffix>
+        $
+    ''', re.VERBOSE)
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            self = cls.parse(raw)
+            if not self:
+                return cls.from_filename(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def from_filename(cls, filename):
+        # XXX Add a "checkexists" option?
+        basename = os.path.basename(filename)
+        self = cls._parse(basename)
+        if self is None:
+            return None
+        if self.name != basename:
+            filename = os.path.abspath(filename)
+        self._filename = filename
+        return self
+
+    @classmethod
+    def parse(cls, name, *, allowprefix=False, allowsuffix=False):
+        self = cls._parse(name)
+        if self:
+            if not allowprefix and self._prefix:
+                return None
+            if not allowsuffix and self._suffix:
+                return None
+        return self
+
+    @classmethod
+    def _parse(cls, uploadid):
+        m = cls.REGEX.match(uploadid)
+        if not m:
+            return None
+        (prefix, impl, verstr, commit, host, compatid, suite, suffix,
+         ) = m.groups()
+        name = uploadid
+        if prefix:
+            name = name[len(prefix):]
+        if suffix:
+            name = name[:-len(suffix)]
+        impl = _utils.resolve_python_implementation(impl)
+        if verstr == 'main':
+            version = impl.VERSION.resolve_main()
+            name = name.replace('-main-', f'-{version}-')
+        else:
+            version = impl.parse_version(verstr)
+        self = cls(impl, version, commit, host, compatid, suite)
+        self._name = name
+        self._prefix = prefix or None
+        self._suffix = suffix or None
+        return self
+
+    @classmethod
+    def from_metadata(cls, metadata, version=None,
+                      commit=None,
+                      host=None,
+                      impl=None,
+                      suite=None,
+                      ):
+        metadata = PyperfResultsMetadata.from_raw(metadata)
+        impl = _utils.resolve_python_implementation(
+            impl or metadata.python_implementation or 'cpython',
+        )
+        if not version or version == 'main':
+            # We assume "main".
+            version = impl.VERSION.resolve_main()
+        else:
+            version = impl.parse_version(version, requirestr=False)
+        self = cls(
+            impl=impl,
+            version=version,
+            commit=metadata.commit,
+            host=host or metadata.host,
+            compatid=metadata.compatid,
+            suite=suite,
+        )
+        return self
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def name(self):
+        try:
+            return self._name
+        except AttributeError:
+            impl, version, commit, host, compatid, suite = self
+            name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid[:12]}'
+            if suite and suite != 'pyperformance':
+                name = f'{name}-{suite}'
+            self._name = name
+            return name
+
+    @property
+    def implementation(self):
+        return self.impl
+
+    @property
+    def filename(self):
+        try:
+            return self._filename
+        except AttributeError:
+            filename, *_ = self.resolve_filenames()
+            return filename
+
+    def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
+        dirnames = []
+        if dirname is True:
+            if hasattr(self, '_dirname') and self._dirname:
+                dirnames = [self._dirname]
+        elif dirname:
+            if isinstance(dirname, str):
+                dirnames = [dirname]
+            else:
+                dirnames = list(dirname)
+            if any(not d for d in dirnames):
+                raise ValueError(f'blank dirname in {dirname}')
+
+        prefixes = [None]
+        if prefix is True:
+            if hasattr(self, '_prefix') and self._prefix:
+                prefixes = [self._prefix]
+        elif prefix:
+            if isinstance(prefix, str):
+                prefixes = [prefix]
+            else:
+                prefixes = list(prefix)
+            if any(not p for p in prefixes):
+                raise ValueError(f'blank prefix in {prefix}')
+
+        suffixes = [None]
+        if suffix is True:
+            if hasattr(self, '_suffix') and self._suffix:
+                suffixes = [self._suffix]
+        elif suffix:
+            if isinstance(suffix, str):
+                suffixes = [suffix]
+            else:
+                suffixes = list(suffix)
+            if any(not s for s in suffixes):
+                raise ValueError(f'blank suffix in {suffix}')
+
+        name = self.name
+        # XXX Ignore duplicates?
+        for suffix in suffixes:
+            for prefix in prefixes:
+                filename = f'{prefix or ""}{name}{suffix or ""}'
+                if dirnames:
+                    for dirname in dirnames:
+                        yield os.path.join(dirname, filename)
+                else:
+                    yield filename
+
+    def copy(self, **replacements):
+        if not replacements:
+            return self
+        kwargs = dict(self._asdict(), **replacements)
+        # XXX Validate the replacements.
+        cls = type(self)
+        copied = cls(**kwargs)
+        # We do not copy self._name.
+        suffix = getattr(self, '_suffix', None)
+        if suffix:
+            copied._suffix = suffix
+        dirname = getattr(self, '_dirname', None)
+        if dirname:
+            copied._dirname = dirname
+        elif hasattr(self, '_filename') and self._filename:
+            copied._dirname = os.path.dirname(filename)
+        return copied
+
+
 ##################################
 # results comparisons
 
@@ -656,212 +862,6 @@ class PyperfTableRow(_PyperfTableRowBase):
 
 ##################################
 # results
-
-class PyperfUploadID(namedtuple('PyperfUploadName',
-                                'impl version commit host compatid suite')):
-    # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
-    # for details on this filename format.
-
-    REGEX = re.compile(r'''
-        # We do no strip leading/trailing whitespace in this regex.
-        ^
-        ( .*? )  # <prefix>
-        ( \w+ )  # <impl>
-        -
-        ( main | \d\.\d+\. (?: 0a\d+ | 0b\d+ | 0rc\d+ | [1-9]\d* ) )  # <version>
-        -
-        ( [0-9a-f]{10} )  # <commit>
-        -
-        ( [^-\s]+ )  # <host>
-        -
-        ( [0-9a-f]{12} )  # <compatid>
-        (?:
-            -
-            ( pyston )  # <suite>
-        )?
-        #( \.json (?: \.gz )? )?  # <suffix>
-        ( \. .*? )?  # <suffix>
-        $
-    ''', re.VERBOSE)
-
-    @classmethod
-    def from_raw(cls, raw):
-        if not raw:
-            return None
-        elif isinstance(raw, cls):
-            return raw
-        elif isinstance(raw, str):
-            self = cls.parse(raw)
-            if not self:
-                return cls.from_filename(raw)
-        else:
-            raise TypeError(raw)
-
-    @classmethod
-    def from_filename(cls, filename):
-        # XXX Add a "checkexists" option?
-        basename = os.path.basename(filename)
-        self = cls._parse(basename)
-        if self is None:
-            return None
-        if self.name != basename:
-            filename = os.path.abspath(filename)
-        self._filename = filename
-        return self
-
-    @classmethod
-    def parse(cls, name, *, allowprefix=False, allowsuffix=False):
-        self = cls._parse(name)
-        if self:
-            if not allowprefix and self._prefix:
-                return None
-            if not allowsuffix and self._suffix:
-                return None
-        return self
-
-    @classmethod
-    def _parse(cls, uploadid):
-        m = cls.REGEX.match(uploadid)
-        if not m:
-            return None
-        (prefix, impl, verstr, commit, host, compatid, suite, suffix,
-         ) = m.groups()
-        name = uploadid
-        if prefix:
-            name = name[len(prefix):]
-        if suffix:
-            name = name[:-len(suffix)]
-        impl = _utils.resolve_python_implementation(impl)
-        if verstr == 'main':
-            version = impl.VERSION.resolve_main()
-            name = name.replace('-main-', f'-{version}-')
-        else:
-            version = impl.parse_version(verstr)
-        self = cls(impl, version, commit, host, compatid, suite)
-        self._name = name
-        self._prefix = prefix or None
-        self._suffix = suffix or None
-        return self
-
-    @classmethod
-    def from_metadata(cls, metadata, version=None,
-                      commit=None,
-                      host=None,
-                      impl=None,
-                      suite=None,
-                      ):
-        metadata = PyperfResultsMetadata.from_raw(metadata)
-        impl = _utils.resolve_python_implementation(
-            impl or metadata.python_implementation or 'cpython',
-        )
-        if not version or version == 'main':
-            # We assume "main".
-            version = impl.VERSION.resolve_main()
-        else:
-            version = impl.parse_version(version, requirestr=False)
-        self = cls(
-            impl=impl,
-            version=version,
-            commit=metadata.commit,
-            host=host or metadata.host,
-            compatid=metadata.compatid,
-            suite=suite,
-        )
-        return self
-
-    def __str__(self):
-        return self.name
-
-    @property
-    def name(self):
-        try:
-            return self._name
-        except AttributeError:
-            impl, version, commit, host, compatid, suite = self
-            name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid[:12]}'
-            if suite and suite != 'pyperformance':
-                name = f'{name}-{suite}'
-            self._name = name
-            return name
-
-    @property
-    def implementation(self):
-        return self.impl
-
-    @property
-    def filename(self):
-        try:
-            return self._filename
-        except AttributeError:
-            filename, *_ = self.resolve_filenames()
-            return filename
-
-    def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
-        dirnames = []
-        if dirname is True:
-            if hasattr(self, '_dirname') and self._dirname:
-                dirnames = [self._dirname]
-        elif dirname:
-            if isinstance(dirname, str):
-                dirnames = [dirname]
-            else:
-                dirnames = list(dirname)
-            if any(not d for d in dirnames):
-                raise ValueError(f'blank dirname in {dirname}')
-
-        prefixes = [None]
-        if prefix is True:
-            if hasattr(self, '_prefix') and self._prefix:
-                prefixes = [self._prefix]
-        elif prefix:
-            if isinstance(prefix, str):
-                prefixes = [prefix]
-            else:
-                prefixes = list(prefix)
-            if any(not p for p in prefixes):
-                raise ValueError(f'blank prefix in {prefix}')
-
-        suffixes = [None]
-        if suffix is True:
-            if hasattr(self, '_suffix') and self._suffix:
-                suffixes = [self._suffix]
-        elif suffix:
-            if isinstance(suffix, str):
-                suffixes = [suffix]
-            else:
-                suffixes = list(suffix)
-            if any(not s for s in suffixes):
-                raise ValueError(f'blank suffix in {suffix}')
-
-        name = self.name
-        # XXX Ignore duplicates?
-        for suffix in suffixes:
-            for prefix in prefixes:
-                filename = f'{prefix or ""}{name}{suffix or ""}'
-                if dirnames:
-                    for dirname in dirnames:
-                        yield os.path.join(dirname, filename)
-                else:
-                    yield filename
-
-    def copy(self, **replacements):
-        if not replacements:
-            return self
-        kwargs = dict(self._asdict(), **replacements)
-        # XXX Validate the replacements.
-        cls = type(self)
-        copied = cls(**kwargs)
-        # We do not copy self._name.
-        suffix = getattr(self, '_suffix', None)
-        if suffix:
-            copied._suffix = suffix
-        dirname = getattr(self, '_dirname', None)
-        if dirname:
-            copied._dirname = dirname
-        elif hasattr(self, '_filename') and self._filename:
-            copied._dirname = os.path.dirname(filename)
-        return copied
-
 
 class PyperfResultsFile:
 
