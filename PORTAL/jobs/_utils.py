@@ -737,6 +737,14 @@ def quote_shell_str(value, *, required=True):
     return value
 
 
+def get_next_line(lines, notfound=None, *, skipempty=False):
+    for line in lines:
+        if not skipempty or line.rstrip():
+            return line
+    else:
+        return notfound
+
+
 def write_json(data, outfile):
     json.dump(data, outfile, indent=4)
     print(file=outfile)

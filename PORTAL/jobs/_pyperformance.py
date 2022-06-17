@@ -341,6 +341,41 @@ class PyperfComparisons:
             raise NotImplementedError
 
 
+class PyperfTableParserError(ValueError):
+    MSG = 'failed parsing results table'
+    FIELDS = 'text reason'.split()
+    def __init__(self, text, reason=None, msg=None):
+        self.text = text
+        self.reason = reason
+        if not msg:
+            msg = self.MSG
+            if reason:
+                msg = f'{msg} ({{reason}})'
+        msgkwargs = {name: getattr(self, name) for name in self.FIELDS or ()}
+        super().__init__(msg.format(**msgkwargs))
+
+
+class PyperfTableRowParserError(PyperfTableParserError):
+    MSG = 'failed parsing table row line {line!r}'
+    FIELDS = 'line'.split()
+    FIELDS = PyperfTableParserError.FIELDS + FIELDS
+    def __init__(self, line, reason=None, msg=None):
+        self.line = line
+        super().__init__(line, reason, msg)
+
+
+class PyperfTableRowUnsupportedLineError(PyperfTableRowParserError):
+    MSG = 'unsupported table row line {line!r}'
+    def __init__(self, line, msg=None):
+        super().__init__(line, 'unsupported', msg)
+
+
+class PyperfTableRowInvalidLineError(PyperfTableRowParserError):
+    MSG = 'invalid table row line {line!r}'
+    def __init__(self, line, msg=None):
+        super().__init__(line, 'invalid', msg)
+
+
 class PyperfTable:
 
     FORMATS = ['raw', 'meanonly']
@@ -348,6 +383,7 @@ class PyperfTable:
     @classmethod
     def parse(cls, text):
         lines = iter(text.splitlines())
+        # First parse the header.
         for line in lines:
             header = PyperfTableHeader.parse(line)
             if header:
@@ -361,19 +397,72 @@ class PyperfTable:
                 break
         else:
             return None
+        # Then parse the rows.
         row_cls = PyperfTableRow.subclass_from_header(header)
         rows = []
         for line in lines:
-            row = row_cls.parse(line)
-            if not row:
-                if not line.startswith('+'):
+            try:
+                row = row_cls.parse(line, fail=True)
+            except PyperfTableRowUnsupportedLineError as exc:
+                if not line:
+                    # end-of-table
                     break
-                continue
-            rows.append(row)
-        # XXX Parse the "Benchmark hidden because not significant" line.
+                elif line.startswith('Ignored benchmarks '):
+                    # end-of-table
+                    ignored, _ = cls._parse_ignored(line, lines)
+                    # XXX Add the names to the table.
+                    line = _utils.get_next_line(lines, skipempty=True)
+                    break
+                elif not line.startswith('#'):
+                    raise  # re-raise
+            else:
+                if row:
+                    rows.append(row)
+        hidden, _ = cls._parse_hidden(None, lines, required=False)
+        if hidden:
+            # XXX Add the names to the table.
+            pass
+        # Finally, create and return the table object.
         self = cls(rows, header)
         self._text = text
         return self
+
+    @classmethod
+    def _parse_names_list(cls, line, lines, prefix=None):
+        while not line:
+            try:
+                line = next(lines)
+            except StopIteration:
+                return None, None
+        pat = r'(\w+(?:[^:]*\w)?)'
+        if prefix:
+            pat = f'{prefix}: {pat}'
+        m = re.match(f'^{pat}$', line)
+        if not m:
+            return None, line
+        count, names = m.groups()
+        names = names.replace(',', ' ').split()
+        if names and len(names) != int(count):
+            raise PyperfTableParserError(line, f'expected {count} names, got {names}')
+        return names, line
+
+    @classmethod
+    def _parse_ignored(cls, line, lines, required=True):
+        # Ignored benchmarks (2) of benchmark-results/cpython-3.10.4-9d38120e33-fc_linux-42d6dd4409cb.json: genshi_text, genshi_xml
+        prefix = r'Ignored benchmarks \((\d+)\) of \w+.*\w'
+        names, line = cls._parse_names_list(line, lines, prefix)
+        if not names and required:
+            raise PyperfTableParserError(line, 'expected "Ignored benchmarks..."')
+        return names, line
+
+    @classmethod
+    def _parse_hidden(cls, line, lines, required=True):
+        # Benchmark hidden because not significant (6): unpickle, scimark_sor, sqlalchemy_imperative, sqlite_synth, json_loads, xml_etree_parse
+        prefix = r'Benchmark hidden because not significant \((\d+)\)'
+        names, line = cls._parse_names_list(line, lines, prefix)
+        if not names and required:
+            raise PyperfTableParserError(line, 'expected "Benchmarks hidden..."')
+        return names, line
 
     def __init__(self, rows, header=None):
         if not isinstance(rows, tuple):
@@ -436,8 +525,8 @@ class PyperfTable:
 class _PyperfTableRowBase(tuple):
 
     @classmethod
-    def parse(cls, line):
-        values = cls._parse(line)
+    def parse(cls, line, *, fail=False):
+        values = cls._parse(line, fail)
         if not values:
             return None
         self = tuple.__new__(cls, values)
@@ -445,17 +534,19 @@ class _PyperfTableRowBase(tuple):
         return self
 
     @classmethod
-    def _parse(cls, line):
+    def _parse(cls, line, fail=False):
         line = line.rstrip()
-        if not line or line.startswith('+'):
+        if line.startswith('+'):
             return None
-        if not line.startswith('|') or not line.endswith('|'):
-            raise ValueError(f'unsupported table row line {line!r}')
+        elif not line.startswith('|') or not line.endswith('|'):
+            if fail:
+                raise PyperfTableRowUnsupportedLineError(line)
+            return None
         values = tuple(v.strip() for v in line[1:-1].split('|'))
         if not values:
-            raise ValueError(f'missing name column in {line!r}')
+            raise PyperfTableRowInvalidLineError(line, 'missing name column')
         elif len(values) < 3:
-            raise ValueError(f'expected 2+ sources in {line!r}')
+            raise PyperfTableRowInvalidLineError(line, 'expected 2+ sources')
         return values
 
     def __new__(cls, name, baseline, *others):
@@ -537,13 +628,13 @@ class PyperfTableRow(_PyperfTableRowBase):
             raise ValueError('missing header')
         class _PyperfTableRow(PyperfTableRow):
             @classmethod
-            def parse(cls, line, *, _header=header):
-                return super().parse(line, _header)
+            def parse(cls, line, *, _header=header, fail=False):
+                return super().parse(line, _header, fail=fail)
         return _PyperfTableRow
 
     @classmethod
-    def parse(cls, line, header):
-        self = super().parse(line)
+    def parse(cls, line, header, fail=False):
+        self = super().parse(line, fail=fail)
         if not self:
             return None
         if len(self) != len(header):
