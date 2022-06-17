@@ -1,5 +1,6 @@
 from collections import namedtuple
 import datetime
+import decimal
 import glob
 import json
 import logging
@@ -322,6 +323,260 @@ def get_utc_datetime(timestamp=None, *, fail=True):
         #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
         hastime = False
     return timestamp, hastime
+
+
+class ElapsedTimeWithUnits:
+    """A quanitity of elapsed time in specific units."""
+    # We'd subclass decimal.Decimal or datetime.timedelta,
+    # but neither is friendly to subclassing (methods drop
+    # the subclass).  Plus, timedelta doesn't go smaller
+    # than microseconds.
+
+    __slots__ = ['_elapsed', '_units']
+
+    UNITS = ['s', 'ms', 'us', 'ns']  # us == microseconds
+    _UNITS = {s: 1000**i for i, s in enumerate(UNITS)}
+    PAT = rf'''
+        (?:
+            \b
+            (
+                (?: 0 | 0* [1-9] \d* )
+                (?: \. \d+ )?
+             )  # <elapsed>
+            (?:
+                \s+
+                ( sec | {'|'.join(UNITS)} )  # <units>
+             )?
+            \b
+         )
+        '''
+    REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+
+    @classmethod
+    def parse(cls, elapsedstr, *, fail=False):
+        m = cls.REGEX.match(elapsedstr)
+        if not m:
+            if fail:
+                raise ValueError(f'could not parse {elapsedstr!r}')
+            return None
+        elapsedstr, units = m.groups()
+        if units == 'sec':
+            units = 's'
+        #elapsed = decimal.Decimal(elapsedstr).normalize()
+        elapsed = decimal.Decimal(elapsedstr)
+        return cls._from_values(elapsed, units)
+
+    @classmethod
+    def from_seconds(cls, elapsed, *, normalize=True):
+        elapsed = decimal.Decimal(elapsed)
+        cls._validate_elapsed(elapsed)
+        return cls._from_values(elapsed, None if normalize else 's')
+
+    @classmethod
+    def from_timedelta(cls, elapsed):
+        if not isinstance(elapsed, datetime.timedelta):
+            raise TypeError(elapsed)
+        micro = elapsed.microseconds
+        elapsed = decimal.Decimal(elapsed.total_seconds())
+        if micro:
+            elapsed = (elapsed * 1_000_000 + micro) / 1_000_000
+        cls._validate_elapsed(elapsed)
+        return cls._from_values(elapsed, units=None)
+
+    @classmethod
+    def from_values(cls, elapsed, units=None):
+        if isinstance(elapsed, datetime.timedelta):
+            if units:
+                raise TypeError('datetime.timedelta has fixed units; use cls.from_timedelta()')
+            return cls.from_timedelta(elapsed)
+        else:
+            elapsed = decimal.Decimal(elapsed)
+            cls._validate_elapsed(elapsed)
+            return cls._from_values(elapsed, units)
+
+    @classmethod
+    def _from_values(cls, elapsed, units):
+        assert units
+        if units:
+            self = cls.__new__(cls, elapsed, units)
+            self._check_for_abnormal(elapsed, units)
+        else:
+            self = cls.__new__(cls, elapsed, 's')
+            self = self.normalize()
+        return self
+
+    @classmethod
+    def _convert_to_seconds(cls, elapsed, units):
+        if units == 's':
+            return elapsed
+        return (elapsed / cls._resolve_units(units)).normalize()
+
+    @classmethod
+    def _convert_from_seconds(cls, elapsed, units):
+        if units == 's':
+            return elapsed
+        return (elapsed * cls._resolve_units(units)).normalize()
+
+    @classmethod
+    def _resolve_units(cls, units):
+        try:
+            return cls._UNITS[units]
+        except KeyError:
+            raise ValueError(f'unsupported units {units!r}')
+
+    @classmethod
+    def _validate_elapsed(cls, elapsed):
+        if elapsed < 0:
+            raise ValueError(f'expected non-negative value, got {elapsed}')
+
+    @classmethod
+    def _check_for_abnormal(cls, elapsed, units):
+        if elapsed < 1 or elapsed >= 1000:
+            logger.warn('abnormal elapsed value {elapsed} {units}, consider normalizing')
+
+    def __new__(cls, elapsed, units='s'):
+        self = super().__new__(cls)
+        self._elapsed = decimal.Decimal(elapsed)
+        self._units = units
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._elapsed = self._elapsed.normalize()
+        self._validate()
+
+    def _validate(self):
+        self._validate_elapsed(self._elapsed)
+        if not self._units:
+            raise ValueError('missing units')
+        elif self._units not in self._UNITS:
+            raise ValueError(f'unsupported units {self._units!r}')
+        self._check_for_abnormal(self._elapsed, self._units)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._elapsed}, {self._units})'
+
+    def __str__(self):
+        # XXX Limit to 2 decimal places?
+        return f'{self._elapsed} {self_units}'
+
+    @property
+    def value(self):
+        return self._elapsed
+
+    @property
+    def units(self):
+        return self._units
+
+    def normalize(self):
+        elapsed = self._elapsed
+        if elapsed >= 0 and elapsed < 1000:
+            return self
+        if elapsed >= 1000:
+            candidates = iter(reversed(self.UNITS))
+            for units in candidates:
+                if units == self._units:
+                    break
+            for units in candidates:
+                elapsed /= 1000
+                if elapsed < 1000:
+                    break
+            else:
+                # We leave it at the maximum units.
+                pass
+        else:
+            candidates = iter(self.UNITS)
+            for units in candidates:
+                if units == self._units:
+                    break
+            for units in candidates:
+                elapsed *= 1000
+                if elapsed >= 1:
+                    break
+            else:
+                # XXX Stick with the smallest units?
+                raise ValueError(f'{self} is smaller than the smallest units ({units})')
+        cls = type(self)
+        return cls.__new__(cls, elapsed.normalize(), units)
+
+    def convert_to(self, units='s'):
+        if not units:
+            raise ValueError('missing units')
+        if self._units == units:
+            return self
+        # We always convert to seconds (the largest unit) first.
+        converted = self._convert_to_seconds(self._elapsed, self._units)
+        # Now we convert to the target.
+        converted = self._convert_from_seconds(converted, units)
+        cls = type(self)
+        return cls.__new__(cls, converted, units)
+
+    def as_seconds(self):
+        return self.convert_to()._elapsed
+
+    def as_timedelta(self):
+        # XXX Fail if there are any digits smaller than microseconds?
+        return datetime.timedelta(seconds=float(self._elapsed))
+
+
+class ElapsedTimeComparison:
+    """The relative time difference between two elapsed time values."""
+    # We would subclass Decimal but it isn't subclass-friendly
+    # (methods drop the subclass).
+
+    __slots__ = ['_raw']
+
+    PAT = r'''
+        (?:
+            ( [1-9]\d*(?:\.\d+) )  # <value>
+            x
+            \s+
+            ( faster | slower )  # <direction>
+         )
+        '''
+    REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+
+    @classmethod
+    def parse(cls, comparisonstr, *, fail=False):
+        m = cls.REGEX.match(comparisonstr)
+        if not m:
+            if fail:
+                raise ValueError(f'could not parse {comparisonstr!r}')
+            return None
+        valuestr, direction = m.groups()
+        return cls.from_parsed_values(valuestr, direction, comparisonstr)
+
+    @classmethod
+    def from_parsed_values(cls, valuestr, direction, raw=None):
+        if direction == 'slower':
+            valuestr = f'-{valuestr}'
+        elif direction != 'faster':
+            raise NotImplementedError(raw or direction)
+        return cls.__new__(cls, valuestr)
+
+    def __new__(cls, value):
+        self = super().__new__(cls)
+        self._raw = decimal.Decimal(value)
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        if not (self._raw % 1):
+            raise ValueError(f'expected >= 1 or <= -1, got {self._raw}')
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._raw})'
+
+    def __str__(self):
+        if self._raw < 0:
+            return f'{-self._raw} slower'
+        else:
+            return f'{self._raw} faster'
+
+    @property
+    def raw(self):
+        return self._raw
 
 
 ##################################
@@ -2832,7 +3087,7 @@ class PythonImplementation:
     def __str__(self):
         return self.name
 
-    # XXX Support comparision with str.
+    # XXX Support comparison with str.
 
     @property
     def name(self):
