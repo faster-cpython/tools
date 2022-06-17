@@ -863,6 +863,26 @@ class PyperfTableRow(_PyperfTableRowBase):
 ##################################
 # results
 
+def normalize_results_filename(filename, resultsroot=None):
+    if not filename:
+        raise ValueError('missing filename')
+    resultsroot = os.path.abspath(resultsroot) if resultsroot else None
+    if os.path.isabs(filename):
+        if resultsroot:
+            relfile = os.path.relpath(filename, resultsroot)
+            if relfile.startswith('..' + os.path.sep):
+                raise ValueError(f'filename does not match resultsroot ({filename!r}, {resultsroot!r})')
+        else:
+            resultsroot, relfile = os.path.split(filename)
+    else:
+        if resultsroot:
+            relfile = filename
+            filename = os.path.join(resultsroot, relfile)
+        else:
+            raise ValueError('missing resultsroot')
+    return filename, relfile, resultsroot
+
+
 class PyperfResultsFile:
 
     @classmethod
@@ -876,29 +896,11 @@ class PyperfResultsFile:
         else:
             raise TypeError(raw)
 
-    @classmethod
-    def _normalize_filename(cls, filename, resultsroot=None):
-        if not resultsroot:
-            if os.path.isabs(filename):
-                resultsroot = os.path.dirname(filename)
-            else:
-                resultsroot = _utils.CWD
-        elif not os.path.isabs(resultsroot):
-            raise ValueError(f'expected absolute resultsroot, got {resultsroot!r}')
-        if os.path.isabs(filename):
-            relfile = os.path.relpath(filename, resultsroot)
-            if relfile.startswith('..' + os.path.sep):
-                raise ValueError(f'resultsroot mismatch ({resultsroot} -> {filename})')
-        else:
-            relfile = filename
-            filename = os.path.join(resultsroot, relfile)
-        return filename, relfile, resultsroot
-
     def __init__(self, filename, uploadid=None, resultsroot=None):
         if not filename:
             raise ValueError('missing filename')
         (filename, relfile, resultsroot,
-         ) = self._normalize_filename(filename, resultsroot)
+         ) = normalize_results_filename(filename, resultsroot)
         if uploadid:
             uploadid = PyperfUploadID.from_raw(uploadid)
         else:
