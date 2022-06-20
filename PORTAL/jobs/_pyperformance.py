@@ -432,6 +432,15 @@ class PyperfComparison:
     Summary = namedtuple('Summary',
                          'bench baseline baseresult source result comparison')
 
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing comparison')
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            raise TypeError(raw)
+
     def __init__(self, baseline, source, byname, mean):
         if not baseline:
             raise ValueError('missing baseline')
