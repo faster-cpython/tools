@@ -936,176 +936,7 @@ class PyperfTableRow(_PyperfTableRowBase):
 
 
 ##################################
-# results
-
-def normalize_results_filename(filename, resultsroot=None):
-    if not filename:
-        raise ValueError('missing filename')
-    resultsroot = os.path.abspath(resultsroot) if resultsroot else None
-    if os.path.isabs(filename):
-        if resultsroot:
-            relfile = os.path.relpath(filename, resultsroot)
-            if relfile.startswith('..' + os.path.sep):
-                raise ValueError(f'filename does not match resultsroot ({filename!r}, {resultsroot!r})')
-        else:
-            resultsroot, relfile = os.path.split(filename)
-    else:
-        if resultsroot:
-            relfile = filename
-            filename = os.path.join(resultsroot, relfile)
-        else:
-            raise ValueError('missing resultsroot')
-    return filename, relfile, resultsroot
-
-
-class PyperfResultsFile:
-
-    SUFFIX = '.json'
-    COMPRESSED_SUFFIX = '.json.gz'
-    COMPRESSOR = gzip
-
-    @classmethod
-    def from_raw(cls, raw):
-        if not raw:
-            return None
-        elif isinstance(raw, cls):
-            return raw
-        elif isinstance(raw, str):
-            return cls(raw)
-        else:
-            raise TypeError(raw)
-
-    @classmethod
-    def _resolve_filename(cls, filename, resultsroot, compressed):
-        if not filename:
-            raise ValueError('missing filename')
-        elif not filename.endswith((cls.SUFFIX, cls.COMPRESSED_SUFFIX)):
-            raise ValueError(f'unsupported file suffix ({filename})')
-        resolved = normalize_results_filename(filename, resultsroot)
-
-        if compressed is None:
-            pass
-        elif compressed != cls._is_compressed(filename):
-            filename, relfile, resultsroot = resolved
-            if compressed:
-                old, new = cls.COMPRESSED_SUFFIX, cls.SUFFIX
-            else:
-                old, new = cls.SUFFIX, cls.COMPRESSED_SUFFIX
-            relfile = relfile[:len(old)] + new
-            filename = os.path.join(resultsroot, relfile)
-            resolved = filename, relfile, resultsroot
-        return resolved
-
-    @classmethod
-    def _is_compressed(cls, filename):
-        return filename.endswith(cls.COMPRESSED_SUFFIX)
-
-    def __init__(self, filename, uploadid=None, resultsroot=None, *,
-                 compressed=None,
-                 ):
-        (filename, relfile, resultsroot,
-         ) = self._resolve_filename(filename, resultsroot, compressed)
-        if os.path.isdir(filename):
-            # XXX Use uploadid?
-            raise NotImplementedError(filename)
-        if uploadid:
-            uploadid = PyperfUploadID.from_raw(uploadid)
-        else:
-            uploadid = PyperfUploadID.from_filename(filename)
-
-        self._filename = filename
-        self._relfile = relfile
-        self._resultsroot = resultsroot
-        self._uploadid = uploadid
-
-    def __repr__(self):
-        return f'{type(self).__name__}({self.filename!r})'
-
-    def __str__(self):
-        return self._filename
-
-    @property
-    def filename(self):
-        return self._filename
-
-    @property
-    def relfile(self):
-        return self._relfile
-
-    @property
-    def resultsroot(self):
-        return self._resultsroot
-
-    @property
-    def iscompressed(self):
-        return self._is_compressed(self._filename)
-
-    def read(self, host=None, pyversion=None):
-        _open = self.COMPRESSOR.open if self.iscompressed else open
-        with _open(self._filename) as infile:
-            data = json.load(infile)
-        return PyperfResults(
-            data,
-            self,
-            pyversion,
-            host,
-            uploadid=self._uploadid,
-        )
-
-    def write(self, results):
-        data = results.data
-        _open = self.COMPRESSOR.open if self.iscompressed else open
-        with _open(self._filename, 'w') as outfile:
-            json.dump(data, outfile, indent=2)
-
-    def copy_to(self, filename, resultsroot=None, *, compressed=None):
-        if not filename:
-            filename = self._filename
-        elif os.path.isdir(filename):
-            # XXX Use uploadid?
-            raise NotImplementedError(filename)
-        elif not resultsroot and (not os.path.isabs(filename) or
-                                  filename.startswith(self._resultsroot)):
-            resultsroot = self._resultsroot
-        (filename, relfile, resultsroot,
-         ) = self._resolve_filename(filename, resultsroot, compressed)
-        if filename == self._filename:
-            raise ValueError(f'copying to self ({filename})')
-
-        cls = type(self)
-        copied = cls.__new__(cls)
-        copied._filename = filename
-        copied._relfile = relfile
-        copied._resultsroot = resultsroot
-        copied._uploadid = self._uploadid
-
-        if copied.iscompressed == self.iscompressed:
-            shutil.copyfile(self._filename, copied._filename)
-        else:
-            results = self.read()
-            copied.write(results)
-        return copied
-
-    def compare(self, others):
-        optional = []
-        if len(others) == 1:
-            optional.append('--group-by-speed')
-        cwd = self._resultsroot
-        proc = _utils.run_fg(
-            sys.executable, '-m', 'pyperf', 'compare_to',
-            *(optional),
-            '--table',
-            self._relfile,
-            *(os.path.relpath(o.filename, cwd)
-              for o in others),
-            cwd=cwd,
-        )
-        if proc.returncode:
-            logger.warn(proc.stdout)
-            return None
-        return PyperfComparisons.parse_table(proc.stdout)
-#        return PyperfTable.parse(proc.stdout)
-
+# results data
 
 class PyperfResults:
 
@@ -1486,6 +1317,186 @@ class PyperfResultsMetadata:
                 continue
             h.update(value.encode('utf-8'))
         return h.hexdigest()
+
+
+##################################
+# results files
+
+def normalize_results_filename(filename, resultsroot=None):
+    if not filename:
+        raise ValueError('missing filename')
+    resultsroot = os.path.abspath(resultsroot) if resultsroot else None
+    if os.path.isabs(filename):
+        if resultsroot:
+            relfile = os.path.relpath(filename, resultsroot)
+            if relfile.startswith('..' + os.path.sep):
+                raise ValueError(f'filename does not match resultsroot ({filename!r}, {resultsroot!r})')
+        else:
+            resultsroot, relfile = os.path.split(filename)
+    else:
+        if resultsroot:
+            relfile = filename
+            filename = os.path.join(resultsroot, relfile)
+        else:
+            raise ValueError('missing resultsroot')
+    return filename, relfile, resultsroot
+
+
+class PyperfResultsFile:
+
+    SUFFIX = '.json'
+    COMPRESSED_SUFFIX = '.json.gz'
+    COMPRESSOR = gzip
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def _resolve_filename(cls, filename, resultsroot, compressed):
+        if not filename:
+            raise ValueError('missing filename')
+        elif not filename.endswith((cls.SUFFIX, cls.COMPRESSED_SUFFIX)):
+            raise ValueError(f'unsupported file suffix ({filename})')
+        resolved = normalize_results_filename(filename, resultsroot)
+
+        if compressed is None:
+            pass
+        elif compressed != cls._is_compressed(filename):
+            filename, relfile, resultsroot = resolved
+            if compressed:
+                old, new = cls.COMPRESSED_SUFFIX, cls.SUFFIX
+            else:
+                old, new = cls.SUFFIX, cls.COMPRESSED_SUFFIX
+            relfile = relfile[:len(old)] + new
+            filename = os.path.join(resultsroot, relfile)
+            resolved = filename, relfile, resultsroot
+        return resolved
+
+    @classmethod
+    def _filename_from_uploadid(cls, uploadid, resultsroot, compressed):
+        filename, = uploadid.resolve_filenames(
+            dirname=resultsroot,
+            suffix=cls.SUFFIX,
+        )
+        return cls._resolve_filename(filename, resultsroot, compressed)
+
+    @classmethod
+    def _is_compressed(cls, filename):
+        return filename.endswith(cls.COMPRESSED_SUFFIX)
+
+    def __init__(self, filename, uploadid=None, resultsroot=None, *,
+                 compressed=None,
+                 ):
+        (filename, relfile, resultsroot,
+         ) = self._resolve_filename(filename, resultsroot, compressed)
+        if os.path.isdir(filename):
+            # XXX Use uploadid?
+            raise NotImplementedError(filename)
+        if uploadid:
+            uploadid = PyperfUploadID.from_raw(uploadid)
+        else:
+            uploadid = PyperfUploadID.from_filename(filename)
+
+        self._filename = filename
+        self._relfile = relfile
+        self._resultsroot = resultsroot
+        self._uploadid = uploadid
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self.filename!r})'
+
+    def __str__(self):
+        return self._filename
+
+    @property
+    def filename(self):
+        return self._filename
+
+    @property
+    def relfile(self):
+        return self._relfile
+
+    @property
+    def resultsroot(self):
+        return self._resultsroot
+
+    @property
+    def iscompressed(self):
+        return self._is_compressed(self._filename)
+
+    def read(self, host=None, pyversion=None):
+        _open = self.COMPRESSOR.open if self.iscompressed else open
+        with _open(self._filename) as infile:
+            data = json.load(infile)
+        return PyperfResults(
+            data,
+            self,
+            pyversion,
+            host,
+            uploadid=self._uploadid,
+        )
+
+    def write(self, results):
+        data = results.data
+        _open = self.COMPRESSOR.open if self.iscompressed else open
+        with _open(self._filename, 'w') as outfile:
+            json.dump(data, outfile, indent=2)
+
+    def copy_to(self, filename, resultsroot=None, *, compressed=None):
+        if not filename:
+            filename = self._filename
+        elif os.path.isdir(filename):
+            # XXX Use uploadid?
+            raise NotImplementedError(filename)
+        elif not resultsroot and (not os.path.isabs(filename) or
+                                  filename.startswith(self._resultsroot)):
+            resultsroot = self._resultsroot
+        (filename, relfile, resultsroot,
+         ) = self._resolve_filename(filename, resultsroot, compressed)
+        if filename == self._filename:
+            raise ValueError(f'copying to self ({filename})')
+
+        cls = type(self)
+        copied = cls.__new__(cls)
+        copied._filename = filename
+        copied._relfile = relfile
+        copied._resultsroot = resultsroot
+        copied._uploadid = self._uploadid
+
+        if copied.iscompressed == self.iscompressed:
+            shutil.copyfile(self._filename, copied._filename)
+        else:
+            results = self.read()
+            copied.write(results)
+        return copied
+
+    def compare(self, others):
+        optional = []
+        if len(others) == 1:
+            optional.append('--group-by-speed')
+        cwd = self._resultsroot
+        proc = _utils.run_fg(
+            sys.executable, '-m', 'pyperf', 'compare_to',
+            *(optional),
+            '--table',
+            self._relfile,
+            *(os.path.relpath(o.filename, cwd)
+              for o in others),
+            cwd=cwd,
+        )
+        if proc.returncode:
+            logger.warn(proc.stdout)
+            return None
+        return PyperfComparisons.parse_table(proc.stdout)
+#        return PyperfTable.parse(proc.stdout)
 
 
 ##################################
