@@ -86,6 +86,12 @@ class Benchmarks:
     def __init__(self):
         self._cache = {}
 
+    #def __repr__(self):
+    #    raise NotImplementedError
+
+    def __eq__(self, other):
+        raise NotImplementedError
+
     def get_suites(self, benchmarks, default=None):
         mapped = {}
         by_bench = self.load('name')
@@ -474,6 +480,9 @@ class PyperfComparisonValue:
             else:
                 return self.IGNORED
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def elapsed(self):
         return self._elapsed
@@ -511,6 +520,9 @@ class PyperfComparisonBaseline:
 
     def __str__(self):
         return f'<baseline {self._source!r}>'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def source(self):
@@ -572,6 +584,9 @@ class PyperfComparison:
 
     def __str__(self):
         return f'<{self._mean} ({self._source})>'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def baseline(self):
@@ -641,6 +656,9 @@ class PyperfComparisons:
             _bysource[source] = PyperfComparison(baseline, source, byname, mean)
         self._baseline = baseline
         self._bysource = _bysource
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def baseline(self):
@@ -793,6 +811,9 @@ class PyperfTable:
 
     def __repr__(self):
         return f'{type(self).__name__}({self.rows}, {self.header})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def mean_row(self):
@@ -1040,6 +1061,9 @@ class PyperfResults:
                      )
         return copied
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def data(self):
         return self._data
@@ -1268,11 +1292,14 @@ class PyperfResultsMetadata:
         self._data = data
         self._version = version
 
-    def __iter__(self):
-        yield from self._data
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def __len__(self):
         return len(self._data)
+
+    def __iter__(self):
+        yield from self._data
 
     @property
     def version(self):
@@ -1494,6 +1521,9 @@ class PyperfResultsFile:
     def __str__(self):
         return self._filename
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def filename(self):
         return self._filename
@@ -1585,6 +1615,9 @@ class PyperfResultsFile:
 # results storage
 
 class PyperfResultsStorage:
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def iter_all(self):
         raise NotImplementedError

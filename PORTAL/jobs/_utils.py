@@ -214,6 +214,9 @@ class RenderingRows:
         self.count = 0
         self.pending = []
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     def __iter__(self):
         return self
 
@@ -249,6 +252,9 @@ class TableRow:
 
     def __repr__(self):
         return f'{type(self).__name__}({self.data!r})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def render_values(self, colnames=None):
         if not colnames:
@@ -459,6 +465,9 @@ class ElapsedTimeWithUnits:
         # XXX Limit to 2 decimal places?
         return f'{self._elapsed} {self_units}'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def value(self):
         return self._elapsed
@@ -573,6 +582,9 @@ class ElapsedTimeComparison:
             return f'{-self._raw} slower'
         else:
             return f'{self._raw} faster'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def raw(self):
@@ -855,6 +867,9 @@ class PIDFile:
     def __repr__(self):
         return f'{type(self).__name__}({self._filename!r})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def filename(self):
         return self._filename
@@ -941,6 +956,9 @@ class LockFile:
     def __init__(self, filename):
         self._pidfile = PIDFile(filename)
         self._count = 0
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def __enter__(self):
         self.acquire()
@@ -1662,6 +1680,9 @@ class GitRefCandidates:
 
     def __repr__(self):
         return f'{type(self).__name__}({self._reqs})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def __len__(self):
         return len(self._reqs)
@@ -2458,6 +2479,9 @@ class SSHCommands:
                 for n in 'host port user'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     def run(self, cmd, *args, agent=None):
         conn = f'{self.user}@{self.host}'
         if not os.path.isabs(cmd):
@@ -2767,6 +2791,9 @@ class ReleasePlan:
             raise ValueError('missing data')
         self._schedule, self._bylevel = self._normalize_data(data)
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def nalphas(self):
         return len(self._bylevel['alpha'])
@@ -2800,6 +2827,9 @@ class ReleasePlans:
         if not plans:
             raise ValueError('missing plans')
         self._plans = self._normalize_data(plans)
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def get(self, version):
         return self._plans.get(version.plain)
@@ -3094,6 +3124,11 @@ class PythonImplementation:
 
     def __str__(self):
         return self.name
+
+    def __eq__(self, other):
+        if not isinstance(other, PythonImplementation):
+            return NotImplemented
+        return self._name == other._name
 
     # XXX Support comparison with str.
 

@@ -41,6 +41,9 @@ class JobKind:
     Request = Request
     Result = Result
 
+    #def __new__(cls, *args, **kwargs):
+    #    raise TypeError(f'{cls.__name__} instances not supported')
+
     def set_request_fs(self, fs, context):
         raise NotImplementedError
 
@@ -333,6 +336,9 @@ class Worker:
                 for n in 'fs ssh'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def fs(self):
         return self._fs
@@ -356,6 +362,9 @@ class JobWorker:
         args = (f'{n}={getattr(self, "_"+n)!r}'
                 for n in 'worker fs'.split())
         return f'{type(self).__name__}({"".join(args)})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def worker(self):
@@ -441,6 +450,9 @@ class Job:
 
     def __str__(self):
         return str(self._reqid)
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def reqid(self):
@@ -1029,6 +1041,9 @@ class Jobs:
 
     def __str__(self):
         return self._fs.root
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def cfg(self):
