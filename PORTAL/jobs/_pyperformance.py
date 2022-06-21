@@ -392,7 +392,6 @@ class PyperfComparisonValue:
         m = cls.REGEX.match(valuestr)
         if not m:
             if fail:
-                print(cls.REGEX.pattern)
                 raise ValueError(f'could not parse {valuestr!r}')
             return None
         (elapsed1, units1,
@@ -1013,8 +1012,8 @@ class PyperfResults:
         return self._resfile
 
     @property
-    def version(self):
-        return self._version
+    def pyversion(self):
+        return self._pyversion
 
     @property
     def host(self):
@@ -1045,6 +1044,10 @@ class PyperfResults:
     @property
     def metadata(self):
         return PyperfResultsMetadata.from_full_results(self._data)
+
+    @property
+    def version(self):
+        return self._data['version']
 
     @property
     def filename(self):
@@ -1372,10 +1375,10 @@ class PyperfResultsFile:
         elif compressed != cls._is_compressed(filename):
             filename, relfile, resultsroot = resolved
             if compressed:
-                old, new = cls.COMPRESSED_SUFFIX, cls.SUFFIX
-            else:
                 old, new = cls.SUFFIX, cls.COMPRESSED_SUFFIX
-            relfile = relfile[:len(old)] + new
+            else:
+                old, new = cls.COMPRESSED_SUFFIX, cls.SUFFIX
+            relfile = relfile[:-len(old)] + new
             filename = os.path.join(resultsroot, relfile)
             resolved = filename, relfile, resultsroot
         return resolved
@@ -1427,6 +1430,10 @@ class PyperfResultsFile:
     @property
     def resultsroot(self):
         return self._resultsroot
+
+    @property
+    def uploadid(self):
+        return self._uploadid
 
     @property
     def iscompressed(self):
