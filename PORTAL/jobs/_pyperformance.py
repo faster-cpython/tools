@@ -1400,6 +1400,44 @@ class PyperfResultsFile:
             raise TypeError(raw)
 
     @classmethod
+    def split_suffix(cls, filename):
+        for suffix in [cls.COMPRESSED_SUFFIX, cls.SUFFIX]:
+            if filename.endswith(suffix):
+                base = filename[:len(suffix)]
+                return base, suffix
+                break
+        else:
+            return filename, None
+
+    @classmethod
+    def resolve_relfile(cls, source, *, needuploadid=False):
+        if not source:
+            raise ValueError('missing source')
+        elif isinstance(source, str):
+            if os.path.isabs(source):
+                raise NotImplementedError(source)
+            relfile = source
+        elif isinstance(source, PyperfUploadID):
+            relfile = f'{source}{cls.SUFFIX}'
+        else:
+            if isinstance(source, PyperfResultsFile):
+                relfile = source._relfile
+            elif isinstance(source, PyperfResults):
+                if not source.resfile:
+                    raise NotImplementedError(source)
+                relfile = source.resfile._relfile
+            else:
+                raise TypeError(source)
+        if needuploadid and not PyperfUploadID.from_filename(relfile):
+            uploadid = getattr(source, 'uploadid', None)
+            if not uploadid:
+                raise NotImplementedError(source)
+            reldir, basename = os.path.split(relfile)
+            _, suffix = cls.split_suffix(basename)
+            relfile = os.path.join(reldir, f'{uploadid}{suffix}')
+        return relfile
+
+    @classmethod
     def _resolve_filename(cls, filename, resultsroot, compressed):
         if not filename:
             raise ValueError('missing filename')
@@ -1421,12 +1459,12 @@ class PyperfResultsFile:
         return resolved
 
     @classmethod
-    def _filename_from_uploadid(cls, uploadid, resultsroot, compressed):
-        filename, = uploadid.resolve_filenames(
-            dirname=resultsroot,
-            suffix=cls.SUFFIX,
-        )
-        return cls._resolve_filename(filename, resultsroot, compressed)
+    def from_uploadid(cls, uploadid, resultsroot=None, *, compressed=False):
+        uploadid = PyperfUploadID.from_raw(uploadid)
+        if not uploadid:
+            raise ValueError('missing uploadid')
+        return cls(f'{uploadid}{cls.SUFFIX}', uploadid, resultsroot,
+                   compressed=compressed)
 
     @classmethod
     def _is_compressed(cls, filename):
