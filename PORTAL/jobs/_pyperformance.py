@@ -357,10 +357,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     def _match(self, specifier, checksuite):
         requested = self.from_raw(specifier, fail=False)
         if requested:
-            if checksuite:
+            if not checksuite:
                 requested = requested.copy(suite=self.suite)
             if requested == self:
                 return True
+            assert str(requested) != str(self), (requested, self)
         if self._match_version(specifier):
             return True
         #if self._match_pattern(specifier, checksuite):
