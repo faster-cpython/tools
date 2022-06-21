@@ -183,20 +183,22 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
     @classmethod
     def from_raw(cls, raw, *, fail=None):
+        self = None
         if not raw:
             if fail:
                 raise ValueError('missing uploadid')
-            return None
         elif isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
             self = cls.parse(raw)
             if not self:
-                return cls.from_filename(raw)
+                self = cls.from_filename(raw)
         else:
             if fail or fail is None:
                 raise TypeError(raw)
-            return None
+        if fail:
+            raise ValueError(f'no match for {raw!r}')
+        return self
 
     @classmethod
     def from_filename(cls, filename):
