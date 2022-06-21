@@ -159,6 +159,12 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
     # for details on this filename format.
 
+    # XXX Be explicit for pyperformance.
+    NO_SUITE = object()
+    PYPERFORMANCE = None
+    #NO_SUITE = None
+    #PYPERFORMANCE = 'pyperformance'
+
     REGEX = re.compile(r'''
         # We do no strip leading/trailing whitespace in this regex.
         ^
@@ -271,6 +277,34 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             suite=suite,
         )
         return self
+
+    @classmethod
+    def normalize_suite(cls, suite):
+        if suite == cls.PYPERFORMANCE:
+            return cls.PYPERFORMANCE
+        elif suite is None:  # For now, this means "pyperformance".
+            return cls.PYPERFORMANCE
+        elif not suite:
+            return cls.NO_SUITE
+        elif not isinstance(suite, str):
+            raise NotImplementedError(suite)
+        else:
+            return suite
+
+    def __new__(cls, impl, version, commit, host, compatid, suite=NO_SUITE):
+        suite = cls.normalize_suite(suite)
+        # For now, we treat NO_SUITE and PYPERFORMANCE as equivalent.
+        if suite is cls.NO_SUITE:
+            suite = None
+        return super().__new__(
+            cls,
+            impl,
+            version,
+            commit,
+            host,
+            compatid,
+            suite,
+        )
 
     def __str__(self):
         return self.name
@@ -388,6 +422,9 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         # XXX Validate the replacements.
         cls = type(self)
         copied = cls(**kwargs)
+        if copied == self:
+            return self
+        # Copy the internal attrs.
         # We do not copy self._name.
         suffix = getattr(self, '_suffix', None)
         if suffix:
@@ -397,6 +434,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             copied._dirname = dirname
         elif hasattr(self, '_filename') and self._filename:
             copied._dirname = os.path.dirname(filename)
+        # We do not copy self._filename.
         return copied
 
 
@@ -1175,12 +1213,18 @@ class PyperfResults:
         for suite, data in by_suite.items():
             results = self._copy()
             results._data = data
-            if hasattr(results, '_uploadid'):
-                results._uploadid = results._uploadid.copy(suite=suite)
+            uploadid = getattr(results, '_uploadid', None)
+            if uploadid
+                uploadid = results._uploadid = uploadid.copy(suite=suite)
             if results._resfile:
-                results._resfile = PyperfResultsFile(
+                filename = PyperfResultsFile.ensure_filename(
                     results._resfile.filename,
-                    getattr(results, '_uploadid', None),
+                    uploadid,
+                    suite,
+                )
+                results._resfile = PyperfResultsFile(
+                    filename,
+                    uploadid or None,
                     results._resfile.resultsroot,
                 )
             results._suite = suite
