@@ -176,8 +176,10 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     ''', re.VERBOSE)
 
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw, *, fail=None):
         if not raw:
+            if fail:
+                raise ValueError('missing uploadid')
             return None
         elif isinstance(raw, cls):
             return raw
@@ -186,7 +188,9 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             if not self:
                 return cls.from_filename(raw)
         else:
-            raise TypeError(raw)
+            if fail or fail is None:
+                raise TypeError(raw)
+            return None
 
     @classmethod
     def from_filename(cls, filename):
@@ -334,6 +338,39 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
                         yield os.path.join(dirname, filename)
                 else:
                     yield filename
+
+    def match(self, specifier, suites=None):
+        # specifier: uploadID, version, filename
+        matched = self._match(specifier, checksuite=(not suites))
+        if matched and suites and self.suite not in suites:
+            return False
+        return matched
+
+    def _match(self, specifier, checksuite):
+        requested = self.from_raw(specifier, fail=False)
+        if requested:
+            if checksuite:
+                requested = requested.copy(suite=self.suite)
+            if requested == self:
+                return True
+        if self._match_version(specifier):
+            return True
+        #if self._match_pattern(specifier, checksuite):
+        #    return True
+        return False
+
+    def _match_version(self, version):
+        if isinstance(version, str):
+            version = _utils.Version.parse(version)
+            if not version:
+                return False
+        elif not isinstance(version, _utils.Version):
+            return False
+        # XXX Treat missing micro/release as wildcard?
+        return version.full == self.version.full
+
+    def _match_pattern(self, pat, checksuite):
+        raise NotImplementedError
 
     def copy(self, **replacements):
         if not replacements:
