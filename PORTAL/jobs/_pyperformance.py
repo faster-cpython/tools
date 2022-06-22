@@ -1214,7 +1214,7 @@ class PyperfResults:
             results = self._copy()
             results._data = data
             uploadid = getattr(results, '_uploadid', None)
-            if uploadid
+            if uploadid:
                 uploadid = results._uploadid = uploadid.copy(suite=suite)
             if results._resfile:
                 filename = PyperfResultsFile.ensure_filename(
