@@ -45,14 +45,97 @@ def check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
-def validate_string(value, argname=None, *, required=True):
+def validate_str(value, argname=None, *, required=True):
+    validate_arg(value, str, argname, required=required)
+
+
+##################################
+# int utils
+
+def ensure_int(raw, min=None):
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        value = int(raw)
+    else:
+        raise TypeError(raw)
+    if value < min:
+        raise ValueError(raw)
+    return value
+
+
+def coerce_int(value, *, fail=None):
+    if isinstance(value, int):
+        return value
+    elif not value:
+        if fail:
+            raise ValueError('missing')
+    elif isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            if fail or fail is None:
+                raise  # re-raise
+    else:
+        if fail:
+            raise TypeError(f'unsupported value {value!r}')
+    return None
+
+
+def validate_int(value, name=None, *, range=None, required=True):
+    def fail(value=value, name=name, range=range):
+        qualifier = 'an'
+        if isinstance(value, int):
+            if range:
+                qualifier = f'a {range}'
+            Error = ValueError
+        else:
+            Error = TypeError
+        namepart = f' for {name}' if name else ''
+        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+
+    if isinstance(value, int) and value is not False:
+        if not range:
+            return value
+        elif range == 'non-negative':
+            if value < 0:
+                fail()
+        elif range == 'positive':
+            if value <= 0:
+                fail()
+        else:
+            raise NotImplementedError(f'unsupported range {range!r}')
+    elif not value:
+        if not required:
+            return None
+        raise ValueError(f'missing {name}' if name else 'missing')
+    else:
+        fail()
+
+
+def normalize_int(value, name=None, *,
+                  range=None,
+                  coerce=False,
+                  required=True,
+                  ):
+    if coerce:
+        value = coerce_int(value)
+    return validate_int(value, name, range=range, required=required)
+
+
+##################################
+# validation utils
+
+def validate_arg(value, expected, argname=None, *, required=True):
+    if not isinstance(expected, type):
+        raise NotImplementedError(expected)
     if not value:
         if not required:
             return
         raise ValueError(f'missing {argname or "required value"}')
-    if not isinstance(value, str):
+    if not isinstance(value, expected):
         label = f' for {argname}' if argname else ''
-        raise TypeError(f'expected str{label}, got {value!r}')
+        raise TypeError(f'expected {expected.__name__}{label}, got {value!r}')
 
 
 ##################################
@@ -734,7 +817,7 @@ def run_bg(argv, logfile=None, *, cwd=None, env=None):
 # file utils
 
 def check_shell_str(value, *, required=True, allowspaces=False):
-    validate_string(value, required=required)
+    validate_str(value, required=required)
     if not value:
         return None
     if not allowspaces and ' ' in value:
@@ -3166,75 +3249,42 @@ def resolve_python_implementation(impl):
 ##################################
 # other utils
 
-def ensure_int(raw, min=None):
-    if isinstance(raw, int):
-        value = raw
-    elif isinstance(raw, str):
-        value = int(raw)
+def hashable(value):
+    try:
+        hash(value)
+    except TypeError as exc:
+        if 'unhashable type' not in str(exc):
+            raise  # re-raise
+        return False
     else:
-        raise TypeError(raw)
-    if value < min:
-        raise ValueError(raw)
-    return value
+        return True
 
 
-def coerce_int(value, *, fail=True):
-    if isinstance(value, int):
-        return value
-    elif not value:
-        if fail:
-            raise ValueError('missing')
-    elif isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            if fail:
-                raise  # re-raise
+def iterable(value):
+    try:
+        iter(value)
+    except TypeError as exc:
+        if 'is not iterable' not in str(exc):
+            raise  # re-raise
+        return False
     else:
-        if fail:
-            raise TypeError(f'unsupported value {value!r}')
-    return None
+        return True
 
 
-def validate_int(value, name=None, *, range=None, required=True):
-    def fail(value=value, name=name, range=range):
-        qualifier = 'an'
-        if isinstance(value, int):
-            if range:
-                qualifier = f'a {range}'
-            Error = ValueError
-        else:
-            Error = TypeError
-        namepart = f' for {name}' if name else ''
-        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+class Sentinel:
 
-    if isinstance(value, int) and value is not False:
-        if not range:
-            return value
-        elif range == 'non-negative':
-            if value < 0:
-                fail()
-        elif range == 'positive':
-            if value <= 0:
-                fail()
-        else:
-            raise NotImplementedError(f'unsupported range {range!r}')
-    elif not value:
-        if not required:
-            return None
-        raise ValueError(f'missing {name}' if name else 'missing')
-    else:
-        fail()
+    def __init__(self, label):
+        if not label:
+            raise ValueError('missing label')
+        elif not isinstance(label, str):
+            raise TypeError(label)
+        self._label = label
 
+    def __repr__(self):
+        return f'{type(self).__name__}({self._label!r})'
 
-def normalize_int(value, name=None, *,
-                  range=None,
-                  coerce=False,
-                  required=True,
-                  ):
-    if coerce:
-        value = coerce_int(value)
-    return validate_int(value, name, range=range, required=required)
+    def __str__(self):
+        return self._label
 
 
 def get_slice(raw):

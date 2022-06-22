@@ -104,9 +104,9 @@ class JobQueue:
         return self
 
     def __init__(self, datafile, lockfile, logfile):
-        _utils.validate_string(datafile, 'datafile')
-        _utils.validate_string(lockfile, 'lockfile')
-        _utils.validate_string(logfile, 'logfile')
+        _utils.validate_str(datafile, 'datafile')
+        _utils.validate_str(lockfile, 'lockfile')
+        _utils.validate_str(logfile, 'logfile')
 
         self._datafile = datafile
         self._lock = _utils.LockFile(lockfile)
