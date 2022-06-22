@@ -2350,6 +2350,560 @@ class TopConfig(Config):
 
 
 ##################################
+# host info
+
+class HostInfo(namedtuple('HostInfo', 'id name dnsname cpu platform')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing host info')
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def from_metadata(cls, hostid, hostname, dnsname, platform,
+                      cpu_model_name, cpu_config,
+                      cpu_frequency=None, cpu_count=None, cpu_affinity=False):
+        platform = PlatformInfo.parse(platform)
+        cpu = CPUInfo.from_metadata(cpu_model_name, platform, cpu_config,
+                                    cpu_frequency, cpu_count, cpu_affinity)
+        (hostid, hostname, dnsname,
+         ) = cls._normalize_ids(hostid, hostname, dnsname, platform, cpu)
+        return cls.__new__(cls, hostid, hostname, dnsname, cpu, platform)
+
+    @classmethod
+    def _normalize_ids(cls, hostid, hostname, dnsname, platform, cpu):
+        validate_str(hostname, 'hostname')
+
+        if hostid:
+            validate_str(hostid, 'hostid')
+        else:
+            for hostid in [hostname, dnsname]:
+                if hostid and cls._is_good_hostid(hostid):
+                    break
+            else:
+                # We fall back to a single unique-enough ID.
+                # We could use additional identifying information,
+                # but it doesn't buy us much (and makes the ID longer).
+                hostid = platform.os_name
+                if not hostid:
+                    raise NotImplementedError
+                if cpu.arch in ('arm32', 'arm64'):
+                    hostid += '-arm'
+                # XXX
+                #if not cls._is_good_hostid(hostid):
+                #    raise ValueError('missing hostid')
+
+        if dnsname:
+            validate_str(dnsname, 'dnsname')
+        elif re.match(rf'^{DOMAIN_NAME}$', hostname):
+            dnsname = hostname
+
+        return hostid, hostname, dnsname
+
+    @classmethod
+    def _is_good_hostid(cls, hostid):
+        # XXX What makes a good one?
+        return False
+
+    def __new__(cls, id, name, dnsname, cpu, platform):
+        self = super().__new__(
+            cls,
+            id=id or None,
+            name=name or None,
+            dnsname=dnsname or None,
+            cpu=cpu or None,
+            platform=platform or None,
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate(self)
+
+    def _validate(self):
+        validate_str(self.id, 'id')
+        validate_str(self.name, 'name')
+        validate_str(self.dnsname, 'dnsname', required=False)
+        if self.dnsname and not re.match(rf'^{DOMAIN_NAME}$', self.dnsname):
+            raise ValueError(f'invalid dnsname {self.dnsname!r}')
+        validate_arg(self.cpu, CPUInfo, 'cpu')
+        validate_arg(self.platform, PlatformInfo, 'platform')
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def os_name(self):
+        try:
+            return self._os_name
+        except AttributeError:
+            os_name = self.platform.os_name
+            if not os_name:
+                raise NotImplementedError
+            self._os_name = name
+            return name
+
+    def as_metadata(self):
+        metadata = {
+            'hostid': self.id,
+            'hostname': self.name,
+            'platform': str(self.platform),
+            **self.cpu.as_metadata(),
+        }
+        if self.dnsname:
+            metadata['dnsname'] = self.dnsname
+        return metadata
+
+
+class PlatformInfo(namedtuple('PlatformInfo', 'kernel')):
+
+    # "Linux-5.4.0-91-generic-x86_64-with-glibc2.31"
+    KERNEL = r'''
+        (?:
+            (?:
+                ( Linux )  # <name>
+                -
+                ( \d+\.\d+\.\d+ )  # <version>
+                -
+                ( \d+ -
+                    (?:
+                        generic
+                     )
+                    -
+                    (
+                        # 64-bit
+                        x86_64 | amd64 | aarch64 | arm64
+                        |
+                        # 32-bit
+                        x86 | arm32
+                     )  # <arch>
+                    -
+                    (?:
+                        .*
+                     )  # opts
+                 )  # <build>
+             )
+         )
+        '''
+    REGEX = re.compile(rf'^({KERNEL})$', re.VERBOSE)
+
+    @classmethod
+    def from_raw(cls, raw, *, fail=None):
+        if not raw:
+            if fail:
+                raise ValueError('missing platform info')
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        else:
+            if fail or fail is None:
+                raise TypeError(raw)
+        return None
+
+    @classmethod
+    def parse(cls, platstr):
+        m = cls.REGEX.match(platstr)
+        if not m:
+            return None
+        (kernel,
+         *kernel_parts
+         ) = m.groups()
+        self = cls.__new__(cls, kernel)
+        self._handle_parsed_kernel(
+            ((p.lower() if p else p) for p in kernel_parts)
+        )
+        self._raw = platstr
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._parse_kernel()
+        self._validate()
+
+    def _validate(self):
+        pass
+
+    def __str__(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = f'{self.kernel}'
+            return self._raw
+
+    def _parse_kernel(self):
+        kernelstr = self.kernel.lower()
+        m = re.match(rf'^({KERNEL})$', kernelstr, re.VERBOSE)
+        if not m:
+            raise ValueError(f'unsupported kernel str{self.kernel!r}')
+        self._handle_parsed_kernel(m.groups())
+
+    def _handle_parsed_kernel(self, parts):
+        (linux_name, linux_version, linux_build, linux_arch,
+         ) = parts
+        if linux_name:
+            (name, version, build, arch,
+             ) = linux_name, linux_version, linux_build, linux_arch,
+        else:
+            raise NotImplementedError(self.kernel)
+        version = Version.parse(version)
+        self._kernel_name = name
+        self._kernel_version = version
+        self._kernel_build = build
+        self._kernel_arch = arch
+
+    @property
+    def kernel_name(self):
+        try:
+            return self._kernel_name
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_name
+
+    @property
+    def kernel_version(self):
+        try:
+            return self._kernel_version
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_version
+
+    @property
+    def kernel_build(self):
+        try:
+            return self._kernel_build
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_build
+
+    @property
+    def kernel_arch(self):
+        try:
+            return self._kernel_arch
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_arch
+
+    @property
+    def os_name(self):
+        platform = str(self).lower()
+        if 'linux' in platform:
+            return 'linux'
+        elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
+            return 'mac'
+        elif 'win' in platform:
+            return 'windows'
+        else:
+            return None
+
+
+class CPUInfo(namedtuple('CPUInfo', 'model arch cores')):
+    # model: "Intel(R) Xeon(R) W-2255 CPU @ 3.70GHz"
+
+    @classmethod
+    def from_metadata(cls, model, platform, config,
+                      frequency=None, count=None, affinity=None):
+        validate_str(model, 'model')
+        arch = cls._arch_from_metadata(platform, model)
+        cores = cls._cores_from_metadata(count, config, frequency, affinity)
+        return cls.__new__(cls, model, arch, cores)
+
+    @classmethod
+    def _arch_from_metadata(cls, platform, model):
+        platform = PlatformInfo.from_raw(platform)
+        arch = platform.kernel_arch if platform else None
+        if not arch:
+            model = model.lower()
+            if 'aarch64' in model:
+                arch = 'arm64'
+            elif 'arm' in model:
+                if '64' in model:
+                    arch = 'arm64'
+                else:
+                    arch = 'arm32'
+            elif 'intel' in model:
+                arch = 'x86_64'
+            else:
+                raise NotImplementedError((platform, model))
+        return arch
+
+    @classmethod
+    def _cores_from_metadata(cls, count, configs, frequencies, affinities):
+        count = max(0, int(count)) if count else 0
+
+        cores_by_id = {}
+        def add_core(coreid):
+            core = cores_by_id[coreid] = {
+                'id': coreid,
+                'config': [],
+                'frequency': None,
+                'affinity': None,
+            }
+            return core
+        if count:
+            for i in range(count):
+                add_core(i)
+            def ensure_core(coreid):
+                if coreid >= count:
+                    raise ValueError(f'expected {count} cores, got {coreid+1}')
+                return cores_by_id[coreid]
+        else:
+            def ensure_core(coreid):
+                if coreid < count:
+                    return cores_by_id[coreid]
+                count = coreid + 1
+                for i in range(count, coreid):
+                    add_core(i)
+                return add_core(coreid)
+
+        parsed = cls._parse_grouped_core_data(configs)
+        for coreid, configstr in parsed.items():
+            core = ensure_core(coreid)
+            core['config'] = CPUConfig.parse(configstr)
+
+        if frequencies:
+            parsed = cls._parse_grouped_core_data(frequencies)
+            for coreid, freq in parsed.items():
+                core = ensure_core(coreid)
+                core['frequency'] = cls._normalize_frequency(freq)
+
+        if affinities:
+            for coreid in cls._parse_core_ids(affinities):
+                core = ensure_core(coreid)
+                core['affinity'] = True
+
+        if not count:
+            raise ValueError('missing count')
+        return (CPUCoreInfo(**cores_by_id[i]) for i in range(count))
+
+    @classmethod
+    def _parse_grouped_core_data(cls, datastr):
+        # "0=...; 1,11,14=..."
+        data_per_core = {}
+        for corepart in datastr.split(';'):
+            m = re.match(r'^\s*(?:(\d+(?:,\d+(?:-\d+)?)*)=)?(.*?)\s*$', corepart)
+            if not m:
+                raise ValueError(f'invalid core part {corepart!r} ({datastr})')
+            coreids, coredatastr = m.groups()
+            if not coreids:
+                continue  # XXX
+            for coreid in cls._parse_core_ids(coreids):
+                if coreid in data_per_core:
+                    raise ValueError(f'duplicate core ID {coreid}')
+                data_per_core[coreid] = coredatastr
+        return data_per_core
+
+    @classmethod
+    def _render_core_data_grouped(cls, data_per_core):
+        coreparts = {}
+        for core, data in sorted(data_per_core.items(),
+                                 key=lambda v: (v[1], v[0])):
+            if isinstance(core, int):
+                coreid = core
+            else:
+                assert isinstance(core, CPUCoreInfo), core
+                coreid = core.id
+            if data not in coreparts:
+                coreparts[data] = [coreid]
+            else:
+                coreparts[data].append(coreid)
+        for data in list(coreparts):
+            coreids = cls._render_core_ids(coreparts.pop(data))
+            coreparts[coreids] = data
+        return '; '.join(f'{i}={c}' for i, c in sorted(coreparts.items()))
+
+    @classmethod
+    def _parse_core_ids(cls, rawstr):
+        # "0-1,11,14"
+        parsed = []
+        for coreid in rawstr.split(','):
+            if '-' in coreid:
+                start, stop = coreid.split('-')
+                parsed.extend(range(int(start), int(stop) + 1))
+            else:
+                parsed.append(int(coreid))
+        return parsed
+
+    @classmethod
+    def _render_core_ids(cls, coreids):
+        ranges = []
+        start = end = None
+        for coreid in sorted(coreids):
+            if start is None:
+                start = coreid
+                end = coreid
+            else:
+                if coreid == start + 1:
+                    end += 1
+                elif coreid == end:
+                    raise ValueError(f'duplicate CPU ID {coreid}')
+                else:
+                    ranges.append(
+                        str(start) if start is end else f'{start}-{end}'
+                    )
+        return ','.join(ranges)
+
+    @classmethod
+    def _normalize_frequency(cls, freq):
+        raise NotImplementedError  # XXX
+
+    def __new__(cls, model, arch, cores):
+        self = super().__new__(
+            cls,
+            model=model,
+            arch = arch or None,
+            cores=tuple(CPUCoreInfo.from_raw(c) for c in cores or ()),
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        validate_str(self.model, 'model')
+        validate_str(self.arch, 'arch')
+        validate_arg(self.cores, tuple, 'cores')
+        for i, core in enumerate(self.cores):
+            validate_arg(core, CPUCoreInfo, f'core {i}')
+            if core.id != i:
+                raise ValueError(f'cores[{i}].id is {core.id}')
+
+    @property
+    def num_cores(self):
+        return len(self.cores)
+
+    def as_metadata(self):
+        metadata = {
+            'cpu_model_name': self.model,
+            'cpu_count': self.num_cores,
+            'cpu_arch': self.arch,
+        }
+
+        frequencies = {}
+        configs = {}
+        affinity = []
+        for core in self.cores:
+            core_meta = core.as_metadata()
+            configs[core] = core_meta['cpu_config']
+            freq = core_meta.get('cpu_freq')
+            if freq:
+                frequencies[core] = self._normalize_frequency(freq)
+            if core_meta.get('cpu_affinity'):
+                affinity.append(core.id)
+        if configs:
+            metadata['cpu_config'] = self._render_core_data_grouped(configs)
+        if frequencies:
+            metadata['cpu_freq'] = self._render_core_data_grouped(frequencies)
+        if affinity:
+            metadata['cpu_affinity'] = self._render_core_ids(frequencies)
+
+        return metadata
+
+
+class CPUCoreInfo(namedtuple('CPUCoreInfo', 'id config frequency affinity')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing CPU core info')
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            raise TypeError(raw)
+
+    def __new__(cls, id, config, frequency=None, affinity=False):
+        self = super().__new__(
+            cls,
+            id=coerce_int(id),
+            config=CPUConfig.from_raw(config),
+            frequency=frequency or None,
+            affinity=True if affinity else False,
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        #validate_arg(self.config, CPUConfig, 'config')
+        validate_int(self.frequency, 'frequency', required=False)
+        #if not isinstance(self.affinity, bool):
+        #    raise TypeError(f'expected True/False for affinity, got {self.affinity!r}')
+
+    def as_metadata(self):
+        metadata = {
+           'cpu_config': self.config,
+        }
+        if self.frequency:
+           metadata['cpu_freq'] = self.frequency
+        if self.affinity:
+           metadata['cpu_affinity'] = True
+        return metadata
+
+
+class CPUConfig:
+
+    @classmethod
+    def from_raw(cls, raw):
+        if raw == []:
+            return cls([])
+        elif not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def parse(cls, configstr):
+        # "driver:intel_pstate, intel_pstate:no turbo, governor:performance, isolated"
+        if not configstr:
+            raise ValueError('missing configstr')
+        configs = configstr.replace(',', ' ').split()
+        self = cls(configs)
+        self._raw = configstr
+        return self
+
+    def __init__(self, data):
+        if not all(data):
+            raise ValueError(f'empty value(s) in {data!r}')
+        self._data = tuple(data)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._data!r})'
+
+    def __str__(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = ', '.join(self._data)
+            return self._raw
+
+    def __hash__(self):
+        return hash(self._data)
+
+    def __eq__(self, other):
+        try:
+            return self._data == other._data
+        except AttributeError:
+            return NotImplemented
+
+    def __lt__(self, other):
+        try:
+            return self._data < other._data
+        except AttributeError:
+            return NotImplemented
+
+    @property
+    def values(self):
+        return self._data
+
+
+##################################
 # network utils
 
 # We don't bother going full RFC 5322.
