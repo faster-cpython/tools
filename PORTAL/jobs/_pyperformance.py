@@ -1840,11 +1840,14 @@ class PyperfResultsRepo(PyperfResultsStorage):
                 resultsroot=self._dataroot,
                 compressed=compressed,
             )
-            logger.info(f'...as {resfile.relfile}...')
+            reltarget = resfile.relfile
+            if self.datadir:
+                reltarget = os.path.join(self.datadir, reltarget)
+            logger.info(f'...as {reltarget}...')
             #copied = suite_results.copy_to(resfile, self._dataroot)
             suite_results.copy_to(resfile, self._dataroot)
-            self._git('add', resfile.relfile)
-        self._git('add', self._indexfile)
+            self._git('add', reltarget)
+        #self._git('add', self._indexfile)
         msg = f'Add Benchmark Results ({results.uploadid})'
         self._git('commit', '-m', msg, cfg=gitcfg)
 
