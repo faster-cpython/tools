@@ -22,12 +22,15 @@ logger = logging.getLogger(__name__)
 class Benchmarks:
 
     REPOS = os.path.join(_utils.HOME, 'repos')
+
+    PYPERFORMANCE = 'pyperformance'
+    PYSTON = 'pyston'
     SUITES = {
-        'pyperformance': {
+        PYPERFORMANCE: {
             'url': 'https://github.com/python/pyperformance',
             'reldir': 'pyperformance/data-files/benchmarks',
         },
-        'pyston': {
+        PYSTON: {
             'url': 'https://github.com/pyston/python-macrobenchmarks',
             'reldir': 'benchmarks',
         },
@@ -159,13 +162,16 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     # See https://github.com/faster-cpython/ideas/tree/main/benchmark-results/README.md
     # for details on this filename format.
 
-    # XXX Be explicit for pyperformance.
-    NO_SUITE = object()
-    PYPERFORMANCE = None
-    #NO_SUITE = None
-    #PYPERFORMANCE = 'pyperformance'
+    SUITE_NOT_KNOWN = None
+    EMPTY = _utils.Sentinel('empty')
+    MULTI_SUITE = _utils.Sentinel('multi-suite')
+    SUITES = set(Benchmarks.SUITES)
+    _SUITES = {s: s for s in SUITES}
+    _SUITES[SUITE_NOT_KNOWN] = SUITE_NOT_KNOWN
+    _SUITES[EMPTY] = EMPTY
+    _SUITES[MULTI_SUITE] = MULTI_SUITE
 
-    REGEX = re.compile(r'''
+    REGEX = re.compile(rf'''
         # We do no strip leading/trailing whitespace in this regex.
         ^
         ( .*? )  # <prefix>
@@ -173,14 +179,14 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         -
         ( main | \d\.\d+\. (?: 0a\d+ | 0b\d+ | 0rc\d+ | [1-9]\d* ) )  # <version>
         -
-        ( [0-9a-f]{10} )  # <commit>
+        ( [0-9a-f]{{10}} )  # <commit>
         -
         ( [^-\s]+ )  # <host>
         -
-        ( [0-9a-f]{12} )  # <compatid>
+        ( [0-9a-f]{{12}} )  # <compatid>
         (?:
             -
-            ( pyston )  # <suite>
+            ( {'|'.join(SUITES)} )  # <suite>
         )?
         #( \.json (?: \.gz )? )?  # <suffix>
         ( \. .*? )?  # <suffix>
@@ -253,7 +259,8 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         return self
 
     @classmethod
-    def from_metadata(cls, metadata, version=None,
+    def from_metadata(cls, metadata, *,
+                      version=None,
                       commit=None,
                       host=None,
                       impl=None,
@@ -268,10 +275,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             version = impl.VERSION.resolve_main()
         else:
             version = impl.parse_version(version, requirestr=False)
+
         self = cls(
             impl=impl,
             version=version,
-            commit=metadata.commit,
+            commit=commit or metadata.commit,
             host=host or metadata.host,
             compatid=metadata.compatid,
             suite=suite,
@@ -279,31 +287,62 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         return self
 
     @classmethod
-    def normalize_suite(cls, suite):
-        if suite == cls.PYPERFORMANCE:
-            return cls.PYPERFORMANCE
-        elif suite is None:  # For now, this means "pyperformance".
-            return cls.PYPERFORMANCE
-        elif not suite:
-            return cls.NO_SUITE
-        elif not isinstance(suite, str):
-            raise NotImplementedError(suite)
-        else:
-            return suite
+    def build_compatid(cls, host, pyperformance_version, pyperf_version=None):
+        if not host:
+            raise ValueError('missing host')
+        host = _utils.HostInfo.from_raw(host)
+        if not pyperformance_version:
+            raise ValueError('missing pyperformance_version')
+        raw = host.as_metadata()
+        data = [
+            host.id,
+            raw['platform'],
+            str(pyperf_version),
+            str(pyperformance_version),
+            raw['cpu_model_name'],
+            raw.get('cpu_freq'),
+            raw['cpu_config'],
+            raw.get('cpu_affinity'),
+        ]
+        h = hashlib.sha256()
+        for value in data:
+            if not value:
+                continue
+            h.update(value.encode('utf-8'))
+        return h.hexdigest()
 
-    def __new__(cls, impl, version, commit, host, compatid, suite=NO_SUITE):
-        suite = cls.normalize_suite(suite)
-        # For now, we treat NO_SUITE and PYPERFORMANCE as equivalent.
-        if suite is cls.NO_SUITE:
-            suite = None
+    @classmethod
+    def normalize_suite(cls, suite):
+        if not suite:
+            return cls.SUITE_NOT_KNOWN
+
+        if not isinstance(suite, str) and _utils.iterable(suite):
+            suites = list(suite)
+            if len(suites) == 1:
+                suite, = suites
+            else:
+                for suite in suites:
+                    suite = cls.normalize_suite(suite)
+                    if suite not in cls.SUITES:
+                        raise ValueError(f'unsupported suite in multisuite ({suite})')
+                return cls.MULTI_SUITE
+
+        try:
+            return cls._SUITES[suite]
+        except KeyError:
+            raise ValueError(f'unsupported suite {suite!r}')
+
+    def __new__(cls, impl, version, commit, host, compatid,
+                suite=SUITE_NOT_KNOWN,
+                ):
         return super().__new__(
             cls,
-            impl,
-            version,
-            commit,
-            host,
-            compatid,
-            suite,
+            impl=impl,
+            version=version,
+            commit=commit,
+            host=host,
+            compatid=compatid,
+            suite=cls.normalize_suite(suite),
         )
 
     def __str__(self):
@@ -316,7 +355,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         except AttributeError:
             impl, version, commit, host, compatid, suite = self
             name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid[:12]}'
-            if suite and suite != 'pyperformance':
+            if suite in self.SUITES:
                 name = f'{name}-{suite}'
             self._name = name
             return name
@@ -384,8 +423,17 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     def match(self, specifier, suites=None):
         # specifier: uploadID, version, filename
         matched = self._match(specifier, checksuite=(not suites))
-        if matched and suites and self.suite not in suites:
-            return False
+        if matched and suites:
+            assert suites is not self.SUITE_NOT_KNOWN  # ...since that is None.
+            if suites is True:
+                suites = (s for s in self._SUITES
+                          if s is not self.SUITE_NOT_KNOWN)
+            else:
+                if isinstance(suites, str) or not _utils.iterable(suites):
+                    suites = [suites]
+                suites = {self.normalize_suite(s) for s in suites}
+            if self.suite not in suites:
+                return False
         return matched
 
     def _match(self, specifier, checksuite):
@@ -412,14 +460,14 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         # XXX Treat missing micro/release as wildcard?
         return version.full == self.version.full
 
-    def _match_pattern(self, pat, checksuite):
-        raise NotImplementedError
+    #def _match_pattern(self, pat, checksuite):
+    #    raise NotImplementedError
 
     def copy(self, **replacements):
         if not replacements:
             return self
-        kwargs = dict(self._asdict(), **replacements)
         # XXX Validate the replacements.
+        kwargs = dict(self._asdict(), **replacements)
         cls = type(self)
         copied = cls(**kwargs)
         if copied == self:
@@ -1046,60 +1094,24 @@ class PyperfResults:
             for key in ('metadata', 'benchmarks', 'version'):
                 if key not in data:
                     raise ValueError(f'invalid results data (missing {key})')
-            # XXX Other checks.
+            # XXX Add other checks.
         else:
             raise NotImplementedError(data['version'])
 
-    @classmethod
-    def _normalize_uploadid(cls, uploadid, pyversion, host, suite):
-        uploadid = PyperfUploadID.from_raw(uploadid)
-        if not pyversion:
-            pyversion = uploadid.version
-        elif pyversion.full != uploadid.version.full:
-            raise ValueError(f'Python version mismatch ({pyversion!r} != {uploadid.version!r})')
-        if not host:
-            host = uploadid.host
-        elif host != uploadid.host:
-            raise ValueError(f'host mismatch ({host!r} != {uploadid.host!r})')
-        if not suite:
-            suite = uploadid.suite
-        elif suite != uploadid.suite:
-            raise ValueError(f'suite mismatch ({suite!r} != {uploadid.suite!r})')
-        return uploadid, pyversion, host, suite
-
-    def __init__(self, data, resfile=None, pyversion=None, host=None, *,
-                 suite=None,
-                 uploadid=None,
-                 ):
+    def __init__(self, data, resfile):
         if not data:
             raise ValueError('missing data')
+        if not resfile:
+            raise ValueError('missing refile')
         self._validate_data(data)
-        if resfile:
-            resfile = PyperfResultsFile.from_raw(resfile)
-        if pyversion:
-            pyversion = _utils.Version.from_raw(pyversion)
-        if uploadid:
-            (uploadid, pyversion, host, suite,
-             ) = self._normalize_uploadid(uploadid, pyversion, host, suite)
-        self._init(data, resfile, pyversion, suite, host, uploadid)
-
-    def _init(self, data, resfile, pyversion, suite, host, uploadid):
         self._data = data
-        self._resfile = resfile or None
-        self._pyversion = pyversion or None
-        self._suite = suite or None
-        if host:
-            self._host = host
-        if uploadid:
-            self._uploadid = uploadid
+        self._resfile = PyperfResultsFile.from_raw(resfile)
 
     def _copy(self):
         cls = type(self)
         copied = cls.__new__(cls)
-        copied._init(self._data, self._resfile, self._pyversion, self._suite,
-                     getattr(self, '_host', None),
-                     getattr(self, '_uploadid', None),
-                     )
+        copied._data = self._data
+        copied._resfile = self._resfile
         return copied
 
     def __eq__(self, other):
@@ -1110,58 +1122,43 @@ class PyperfResults:
         return self._data
 
     @property
-    def resfile(self):
-        return self._resfile
-
-    @property
-    def pyversion(self):
-        return self._pyversion
-
-    @property
-    def host(self):
-        try:
-            return self._host
-        except AttributeError:
-            self._host = self.uploadid.host
-            return self._host
-
-    @property
-    def suite(self):
-        return self._suite
-
-    @property
-    def uploadid(self):
-        try:
-            return self._uploadid
-        except AttributeError:
-            by_suite = self.BENCHMARKS.load('suite')
-            self._uploadid = PyperfUploadID.from_metadata(
-                self.metadata,
-                version=self._pyversion,
-                host=getattr(self, '_host', None) or None,
-                suite=self._suite,
-            )
-            return self._uploadid
-
-    @property
     def metadata(self):
-        return PyperfResultsMetadata.from_full_results(self._data)
+        try:
+            return self._metadata
+        except AttributeError:
+            self._metadata = PyperfResultsMetadata.from_full_results(self._data)
+            return self._metadata
 
     @property
     def version(self):
         return self._data['version']
 
     @property
-    def filename(self):
-        if not self.resfile:
-            return None
-        return self.resfile.filename
+    def resfile(self):
+        return self._resfile
 
     @property
-    def build(self):
-        # XXX Add to PyperfUploadID?
-        # XXX Extract from metadata?
-        return ['PGO', 'LTO']
+    def filename(self):
+        return self._resfile.filename
+
+    @property
+    def uploadid(self):
+        try:
+            return self._uploadid
+        except AttributeError:
+            self._uploadid = PyperfUploadID.from_metadata(
+                self.metadata,
+                suite=self.suites,
+            )
+            return self._uploadid
+
+    @property
+    def suite(self):
+        return self.uploadid.suite
+
+    @property
+    def suites(self):
+        return sorted(self.by_suite)
 
     @property
     def by_bench(self):
@@ -1172,24 +1169,28 @@ class PyperfResults:
             return self._by_bench
 
     @property
-    def suites(self):
-        return list(self.by_suite)
-
-    @property
     def by_suite(self):
         try:
             return self._by_suite
         except AttributeError:
-            by_suite = {}
-            names = (n for n, _ in self._iter_benchmarks())
+            self._by_suite = self._collate_suites()
+            return self._by_suite
+
+    def _collate_suites(self):
+        by_suite = {}
+        names = [n for n, _ in self._iter_benchmarks()]
+        if names:
             bench_suites = self.BENCHMARKS.get_suites(names, 'unknown')
             for name, suite in bench_suites.items():
+                suite = PyperfUploadID.normalize_suite(suite)
                 if suite not in by_suite:
                     by_suite[suite] = []
                 data = self.by_bench[name]
+#                by_suite[suite][name] = data
                 by_suite[suite].append(data)
-            self._by_suite = by_suite
-            return self._by_suite
+        else:
+            logger.warn(f'empty results {self}')
+        return by_suite
 
     def _get_bench_name(self, benchdata):
         return benchdata['metadata']['name']
@@ -1201,7 +1202,8 @@ class PyperfResults:
 
     def split_benchmarks(self):
         """Return results collated by suite."""
-        if self.suite:
+        if self.suite is not PyperfUploadID.MULTI_SUITE:
+            assert self.suite is not PyperfUploadID.SUITE_NOT_KNOWN
             raise Exception(f'already split ({self.suite})')
         by_suite = {}
         for suite, benchmarks in self.by_suite.items():
@@ -1213,21 +1215,7 @@ class PyperfResults:
         for suite, data in by_suite.items():
             results = self._copy()
             results._data = data
-            uploadid = getattr(results, '_uploadid', None)
-            if uploadid:
-                uploadid = results._uploadid = uploadid.copy(suite=suite)
-            if results._resfile:
-                filename = PyperfResultsFile.ensure_filename(
-                    results._resfile.filename,
-                    uploadid,
-                    suite,
-                )
-                results._resfile = PyperfResultsFile(
-                    filename,
-                    uploadid or None,
-                    results._resfile.resultsroot,
-                )
-            results._suite = suite
+            results._by_suite = {suite: data['benchmarks'][0]}
             by_suite[suite] = results
         return by_suite
 
@@ -1235,35 +1223,16 @@ class PyperfResults:
     #    raise NotImplementedError
 
     def copy_to(self, filename, resultsroot=None, *, compressed=None):
-        if self._resfile and os.path.exists(self._resfile.filename):
+        if os.path.exists(self._resfile.filename):
             resfile = self._resfile.copy_to(filename, resultsroot,
                                             compressed=compressed)
         else:
-            resfile = PyperfResultsFile(
-                filename,
-                getattr(self, '_uploadid', None),
-                resultsroot,
-                compressed=compressed,
-            )
+            resfile = PyperfResultsFile(filename, resultsroot,
+                                        compressed=compressed)
             resfile.write(self)
         copied = self._copy()
         copied._resfile = resfile
         return copied
-
-    def copy_by_suite_to(self, filename, resultsroot=None, *, compressed=None):
-        by_suite = self.by_suite
-        if self.suite:
-            yield self.copy_to(filename, resultsroot, compressed=compressed)
-        elif len(by_suite) <= 1 and list(by_suite)[0] is None:
-            yield self.copy_to(filename, resultsroot, compressed=compressed)
-        else:
-            by_suite = self.split_benchmarks()
-            if 'other' in by_suite:
-                raise NotImplementedError(sorted(by_suite))
-            for suite, results in by_suite.items():
-                # XXX Fix filename.
-                yield results.copy_to(filename, resultsroot,
-                                      compressed=compressed)
 
 
 class PyperfResultsMetadata:
@@ -1276,21 +1245,26 @@ class PyperfResultsMetadata:
         "commit_date",
         "commit_id",
         "cpu_affinity",
+        #"cpu_arch",
         "cpu_config",
         "cpu_count",
+        #"cpu_freq",
         "cpu_model_name",
+        #"dnsname",
+        #"hostid",
         "hostname",
         "performance_version",
         "platform",
         "unit",
         # per-benchmark
+        #"cpu_freq",
         "perf_version",
         "python_cflags",
         "python_compiler",
         "python_implementation",
         "python_version",
-        "timer",
         "runnable_threads",
+        "timer",
     }
 
     @classmethod
@@ -1349,6 +1323,10 @@ class PyperfResultsMetadata:
         yield from self._data
 
     @property
+    def data(self):
+        return self._data
+
+    @property
     def version(self):
         return self._version
 
@@ -1358,79 +1336,68 @@ class PyperfResultsMetadata:
 
     @property
     def python_implementation(self):
-        return self._data.get('python_implementation')
+        try:
+            return self._python_implementation
+        except AttributeError:
+            impl = _utils.resolve_python_implementation(
+                self._data.get('python_implementation'),
+            )
+            self._python_implementation = impl
+            return impl
+
+    @property
+    def pyversion(self):
+        try:
+            return self._pyversion
+        except AttributeError:
+            impl = self.python_implementation
+            self._pyversion = impl.parse_version(
+                self._data.get('python_version'),
+            )
+            return self._pyversion
+        raise NotImplementedError
+
+    @property
+    def build(self):
+        # XXX Add to PyperfUploadID?
+        # XXX Extract from self._data?
+        return ['PGO', 'LTO']
 
     @property
     def host(self):
-        # We could use metadata['hostname'] but that doesn't
-        # make a great label in the default case.
-        host = self.os_name
-        if self.arch in ('arm32', 'arm64'):
-            host += '-arm'
-        # Ignore everything else.
-        return host
-
-    @property
-    def os_name(self):
         try:
-            return self._os_name
+            return self._host
         except AttributeError:
-            platform = self._data['platform'].lower()
-            if 'linux' in platform:
-                name = 'linux'
-            elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
-                name = 'mac'
-            elif 'win' in platform:
-                name = 'windows'
-            else:
-                raise NotImplementedError(platform)
-            self._os_name = name
-            return name
-
-    @property
-    def arch(self):
-        try:
-            return self._arch
-        except AttributeError:
-            platform = metadata['platform'].lower()
-            if 'x86_64' in platform:
-                arch = 'x86_64'
-            elif 'amd64' in platform:
-                arch = 'amd64'
-
-            procinfo = metadata['cpu_model_name'].lower()
-            if 'aarch64' in procinfo:
-                arch = 'arm64'
-            elif 'arm' in procinfo:
-                if '64' in procinfo:
-                    arch = 'arm64'
-                else:
-                    arch = 'arm32'
-            elif 'intel' in procinfo:
-                arch = 'x86_64'
-            else:
-                raise NotImplementedError((platform, procinfo))
-            self._arch = arch
-            return arch
+            self._host = _utils.HostInfo.from_metadata(
+                self._data.get('hostid'),
+                self._data['hostname'],
+                self._data.get('dnsname'),
+                self._data['platform'],
+                self._data['cpu_model_name'],
+                self._data['cpu_config'],
+                self._data.get('cpu_freq'),
+                self._data.get('cpu_count'),
+                self._data.get('cpu_affinity'),
+            )
+            return self._host
 
     @property
     def compatid(self):
-        data = [
-           self._data['hostname'],
-           self._data['platform'],
-           self._data.get('perf_version'),
-           self._data['performance_version'],
-           self._data['cpu_model_name'],
-           self._data.get('cpu_freq'),
-           self._data['cpu_config'],
-           self._data.get('cpu_affinity'),
-        ]
-        h = hashlib.sha256()
-        for value in data:
-            if not value:
-                continue
-            h.update(value.encode('utf-8'))
-        return h.hexdigest()
+        raw = self.host.as_metadata()
+        return PyperfUploadID.build_compatid(
+            self.host,
+            self._data['performance_version'],
+            self._data.get('perf_version'),
+        )
+
+    def overwrite(self, field, value):
+        old = self._data.get(field)
+        if not old:
+            self._data[field] = value
+        elif old != value:
+            logger.warn(f'replacing {field} in results metadata ({old} -> {value})')
+            self._data[field] = value
+        return old
 
 
 ##################################
@@ -1472,6 +1439,14 @@ class PyperfResultsFile:
             return cls(raw)
         else:
             raise TypeError(raw)
+
+    @classmethod
+    def from_uploadid(cls, uploadid, resultsroot=None, *, compressed=False):
+        uploadid = PyperfUploadID.from_raw(uploadid)
+        if not uploadid:
+            raise ValueError('missing uploadid')
+        return cls(f'{uploadid}{cls.SUFFIX}', resultsroot,
+                   compressed=compressed)
 
     @classmethod
     def split_suffix(cls, filename):
@@ -1533,34 +1508,18 @@ class PyperfResultsFile:
         return resolved
 
     @classmethod
-    def from_uploadid(cls, uploadid, resultsroot=None, *, compressed=False):
-        uploadid = PyperfUploadID.from_raw(uploadid)
-        if not uploadid:
-            raise ValueError('missing uploadid')
-        return cls(f'{uploadid}{cls.SUFFIX}', uploadid, resultsroot,
-                   compressed=compressed)
-
-    @classmethod
     def _is_compressed(cls, filename):
         return filename.endswith(cls.COMPRESSED_SUFFIX)
 
-    def __init__(self, filename, uploadid=None, resultsroot=None, *,
-                 compressed=None,
-                 ):
+    def __init__(self, filename, resultsroot=None, *, compressed=None):
         (filename, relfile, resultsroot,
          ) = self._resolve_filename(filename, resultsroot, compressed)
         if os.path.isdir(filename):
-            # XXX Use uploadid?
             raise NotImplementedError(filename)
-        if uploadid:
-            uploadid = PyperfUploadID.from_raw(uploadid)
-        else:
-            uploadid = PyperfUploadID.from_filename(filename)
 
         self._filename = filename
         self._relfile = relfile
         self._resultsroot = resultsroot
-        self._uploadid = uploadid
 
     def __repr__(self):
         return f'{type(self).__name__}({self.filename!r})'
@@ -1585,39 +1544,49 @@ class PyperfResultsFile:
 
     @property
     def uploadid(self):
-        return self._uploadid
+        return PyperfUploadID.from_filename(self.filename)
 
     @property
     def iscompressed(self):
         return self._is_compressed(self._filename)
 
-    def read(self, host=None, pyversion=None):
+    def read(self):
         _open = self.COMPRESSOR.open if self.iscompressed else open
         with _open(self._filename) as infile:
-            data = json.load(infile)
-        return PyperfResults(
-            data,
-            self,
-            pyversion,
-            host,
-            uploadid=self._uploadid,
-        )
+            text = infile.read()
+        if not text:
+            raise RuntimeError(f'{self.filename} is empty')
+        data = json.loads(text)
+        return PyperfResults(data, self)
 
     def write(self, results):
         data = results.data
         _open = self.COMPRESSOR.open if self.iscompressed else open
-        with _open(self._filename, 'w') as outfile:
-            json.dump(data, outfile, indent=2)
+        if self.iscompressed:
+            text = json.dumps(data, indent=2)
+            with _open(self._filename, 'w') as outfile:
+                outfile.write(text.encode('utf-8'))
+        else:
+            with _open(self._filename, 'w') as outfile:
+                json.dump(data, outfile, indent=2)
 
     def copy_to(self, filename, resultsroot=None, *, compressed=None):
         if not filename:
             filename = self._filename
-        elif os.path.isdir(filename):
-            # XXX Use uploadid?
-            raise NotImplementedError(filename)
-        elif not resultsroot and (not os.path.isabs(filename) or
-                                  filename.startswith(self._resultsroot)):
-            resultsroot = self._resultsroot
+        else:
+            if isinstance(filename, PyperfResultsFile):
+                other = filename
+                filename = other.filename
+                if other._resultsroot:
+                    if not resultsroot:
+                        resultsroot = other._resultsroot
+                    elif resultsroot != other._resultsroot:
+                        raise ValueError(f'resultsroot mismatch ({resultsroot} != {other._resultsroot})')
+            elif os.path.isdir(filename):
+                raise NotImplementedError(filename)
+            elif not resultsroot and (not os.path.isabs(filename) or
+                                      filename.startswith(self._resultsroot)):
+                resultsroot = self._resultsroot
         (filename, relfile, resultsroot,
          ) = self._resolve_filename(filename, resultsroot, compressed)
         if filename == self._filename:
@@ -1628,7 +1597,6 @@ class PyperfResultsFile:
         copied._filename = filename
         copied._relfile = relfile
         copied._resultsroot = resultsroot
-        copied._uploadid = self._uploadid
 
         if copied.iscompressed == self.iscompressed:
             shutil.copyfile(self._filename, copied._filename)
@@ -1685,7 +1653,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
     SUFFIX = '.json'
     COMPRESSED_SUFFIX = '.json.gz'
-    COMPRESSOR = gzip
 
     INDEX = 'index.json'
     BASELINE = '3.10.4'
@@ -1766,7 +1733,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             matched = filename
         if matched:
             uploadid = found
-            return PyperfResultsFile(filename, uploadid, self.root)
+            return PyperfResultsFile(filename, self.root)
         return None
 
     def match(self, specifier, suites=None):
@@ -1774,7 +1741,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             for filename in self._resolve_filenames(uploadid):
                 if not os.path.exists(filename):
                     continue
-                yield PyperfResultsFile(filename, uploadid, self.root)
+                yield PyperfResultsFile(filename, self.root)
 
     def _resolve_filenames(self, uploadid, suffix=None):
         return uploadid.resolve_filenames(
@@ -1823,8 +1790,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
             return None
         return uploadid
 
-    def _match_uploadid_pattern(self, pat):
-        raise NotImplementedError
+    #def _match_uploadid_pattern(self, pat):
+    #    raise NotImplementedError
 
     def _match_versions(self, version):
         if isinstance(version, str):
@@ -1857,16 +1824,31 @@ class PyperfResultsRepo(PyperfResultsStorage):
             logger.error(f'results not found at {source}')
             return False
 
-        if split:
+        if split and results.suite is PyperfUploadID.MULTI_SUITE:
             by_suite = results.split_benchmarks()
-            if 'other' in by_suite:
-                raise NotImplementedError(sorted(by_suite))
         else:
-            by_suite = {None: results}
+            by_suite = {results.suite: results}
 
-        for suite in sorted(by_suite):
-            suite_results = by_suite[suite]
-            self._add_locally(suite_results, source, branch, gitcfg, compressed)
+        self._git('checkout', '-B', branch)
+        for suite, suite_results in sorted(by_suite.items()):
+            if results.suite in PyperfUploadID.SUITES:
+                logger.info(f'adding results {source or "???"} ({suite})...')
+            else:
+                logger.info(f'adding results {source or "???"}...')
+            resfile = PyperfResultsFile.from_uploadid(
+                suite_results.uploadid,
+                resultsroot=self._dataroot,
+                compressed=compressed,
+            )
+            logger.info(f'...as {resfile.relfile}...')
+            #copied = suite_results.copy_to(resfile, self._dataroot)
+            suite_results.copy_to(resfile, self._dataroot)
+            self._git('add', resfile.relfile)
+        self._git('add', self._indexfile)
+        msg = f'Add Benchmark Results ({results.uploadid})'
+        self._git('commit', '-m', msg, cfg=gitcfg)
+
+        logger.info('...done adding')
 
         if push:
             self._upload(reltarget)
@@ -1894,50 +1876,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise NotImplementedError(author)
 
         return branch, cfg
-
-    def _add_locally(self, results, source, branch, gitcfg, compressed=False):
-        if results.suite:
-            logger.info(f'adding results {source or "???"} ({results.suite})...')
-        else:
-            logger.info(f'adding results {source or "???"}...')
-
-        reltarget = self._resolve_reltarget(results, compressed)
-        logger.info(f'...as {reltarget}...')
-
-        self._git('checkout', '-B', branch)
-        self._save(results, reltarget, source, compressed)
-        self._git('add', reltarget, self._indexfile)
-        msg = f'Add Benchmark Results ({results.uploadid})'
-        self._git('commit', '-m', msg, cfg=gitcfg)
-
-        logger.info('...done adding')
-
-    def _resolve_reltarget(self, results, compressed=False):
-        reltarget, = results.uploadid.resolve_filenames(
-            dirname=self.datadir if self.datadir else None,
-            suffix=self.COMPRESSED_SUFFIX if compressed else self.SUFFIX,
-        )
-        return  reltarget
-
-    def _save(self, results, reltarget, source=None, compressed=False):
-        data = results.data
-        #if compressed: assert reltarget.endswith(self.COMPRESSED_SUFFIX)
-        #else: assert reltarget.endswith(self.SUFFIX)
-        target = os.path.join(self.root, reltarget)
-#        if source:
-#            _, suffix = os.path.splitext(reltarget)
-#            if os.path.splitext(source)[1] == suffix:
-#                shutil.copyfile(source, target)
-#                return
-        _open = self.COMPRESSOR.open if compressed else open
-        with _open(target, 'w') as outfile:
-            json.dump(data, outfile, indent=2)
-
-        # Update the index file.
-        index = self._get_index()
-        index.add_from_file(target, results)
-        index.ensure_means(self.BASELINE)
-        index.save()
 
     def _upload(self, reltarget):
         if not self.remote:
@@ -2149,10 +2087,9 @@ class PyperfResultsIndexFile(PyperfResultsIndex):
         dirname, name = os.path.split(filename)
         if os.path.abspath(dirname) != self.resultsdir:
             raise ValueError(f'not in results dir ({filename})')
-        uploadid = PyperfUploadID.parse(name, allowsuffix=True)
-        if not uploadid:
+        resfile = PyperfResultsFile(filename, self.resultsdir)
+        if not resfile.uploadid:
             return None
-        resfile = PyperfResultsFile(filename, uploadid)
         results = resfile.read()
         return PyperfResultsIndexEntry.from_results(results)
 
@@ -2174,11 +2111,7 @@ class PyperfResultsIndexFile(PyperfResultsIndex):
         return relfile
 
     def _entry_for_comparison(self, entry):
-        return PyperfResultsFile(
-            self._relfiles[entry],
-            entry.uploadid,
-            self.resultsdir,
-        )
+        return PyperfResultsFile(self._relfiles[entry], self.resultsdir)
 
     def save(self):
         data = self._as_jsonable()

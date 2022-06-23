@@ -248,7 +248,7 @@ def cmd_upload(jobs, reqid, *, author=None, push=True):
 
 
 def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
-    suites = ['pyston'] if pyston else [None]
+    suites = ['pyston'] if pyston else ['pyperformance']
     matched = list(jobs.match_results(res1, suites=suites))
     if not matched:
         logger.error(f'no results matched {res1!r}')

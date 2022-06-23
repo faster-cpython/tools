@@ -3513,15 +3513,20 @@ class Version(namedtuple('Version', 'major minor micro release')):
         m = cls.REGEX.match(verstr)
         if not m:
             return None
+        self = cls._from_parsed(verstr, m.groups())
+        if match is not None and not self.match(match):
+            return None
+        return self
+
+    @classmethod
+    def _from_parsed(cls, verstr, parts):
         (major, minor, micro, release, extra,
-         ) = cls._handle_parsed(verstr, *m.groups())
+         ) = cls._handle_parsed(verstr, *parts)
         cls._validate_values(verstr, major, minor, micro, release)
         cls._validate_extra(verstr, extra, major, minor, micro, release)
         self = cls.__new__(cls, major, minor, micro, release)
         self._raw = verstr
         self._extra = extra
-        if match is not None and not self.match(match):
-            return None
         return self
 
     @classmethod
@@ -3705,6 +3710,31 @@ class Version(namedtuple('Version', 'major minor micro release')):
 
 
 class CPythonVersion(Version):
+
+    @classmethod
+    def parse_extended(cls, verstr):
+        # "3.11.0a7 (64-bit) revision 45772541f6"
+        m = re.match(
+            rf'^({Version.PAT}) \((\d+)-bit\) revision [a-fA-F0-9]{{4,40}})$',
+            verstr,
+            re.VERBOSE,
+        )
+        if not m:
+            return None
+        verstr, *verparts, bits, commit = m.groups()
+        version = cls._from_parsed(verstr, verparts)
+        return version, int(bits), commit
+
+    @classmethod
+    def render_extended(cls, version, bits, commit):
+        if isinstance(version, str):
+            assert CPythonVersion.parse(version), version
+        elif isinstance(version, Version):
+            pass
+#            version = version.full
+        else:
+            raise TypeError(version)
+        return f'{version} ({bits}-bit) revision {commit}'
 
     @classmethod
     def resolve_main(cls):
