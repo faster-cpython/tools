@@ -1571,34 +1571,34 @@ class PyperfResultsFile:
                 json.dump(data, outfile, indent=2)
 
     def copy_to(self, filename, resultsroot=None, *, compressed=None):
-        if not filename:
-            filename = self._filename
+        if isinstance(filename, PyperfResultsFile):
+            copied = filename
+            if (copied._resultsroot and resultsroot and
+                    resultsroot != copied._resultsroot):
+                raise ValueError(f'resultsroot mismatch ({resultsroot} != {copied._resultsroot})')
         else:
-            if isinstance(filename, PyperfResultsFile):
-                other = filename
-                filename = other.filename
-                if other._resultsroot:
-                    if not resultsroot:
-                        resultsroot = other._resultsroot
-                    elif resultsroot != other._resultsroot:
-                        raise ValueError(f'resultsroot mismatch ({resultsroot} != {other._resultsroot})')
+            if not filename:
+                filename = self._filename
             elif os.path.isdir(filename):
                 raise NotImplementedError(filename)
             elif not resultsroot and (not os.path.isabs(filename) or
                                       filename.startswith(self._resultsroot)):
                 resultsroot = self._resultsroot
-        (filename, relfile, resultsroot,
-         ) = self._resolve_filename(filename, resultsroot, compressed)
-        if filename == self._filename:
-            raise ValueError(f'copying to self ({filename})')
+            (filename, relfile, resultsroot,
+             ) = self._resolve_filename(filename, resultsroot, compressed)
+            if filename == self._filename:
+                raise ValueError(f'copying to self ({filename})')
 
-        cls = type(self)
-        copied = cls.__new__(cls)
-        copied._filename = filename
-        copied._relfile = relfile
-        copied._resultsroot = resultsroot
+            cls = type(self)
+            copied = cls.__new__(cls)
+            copied._filename = filename
+            copied._relfile = relfile
+            copied._resultsroot = resultsroot
 
         if copied.iscompressed == self.iscompressed:
+            if copied._filename == self._filename:
+                # XXX Fail?
+                pass
             shutil.copyfile(self._filename, copied._filename)
         else:
             results = self.read()
