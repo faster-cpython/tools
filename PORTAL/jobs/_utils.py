@@ -3796,8 +3796,10 @@ def resolve_python_implementation(impl):
             return CPython()
         else:
             return PythonImplementation(impl)
+    elif isinstance(impl, PythonImplementation):
+        return impl
     else:
-        raise NotImplementedError(impl)
+        raise NotImplementedError(repr(impl))
 
 
 ##################################
