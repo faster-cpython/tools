@@ -569,6 +569,9 @@ class PyperfComparisonValue:
             else:
                 return self.IGNORED
 
+    def __hash__(self):
+        return hash((self._elapsed, self._comparison))
+
     def __eq__(self, other):
         raise NotImplementedError
 
@@ -609,6 +612,16 @@ class PyperfComparisonBaseline:
 
     def __str__(self):
         return f'<baseline {self._source!r}>'
+
+    def __hash__(self):
+        try:
+            return self._hash
+        except AttributeError:
+            self._hash = hash((
+                self._source,
+                tuple(sorted(self._byname.items())),
+            ))
+            return self._hash
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -673,6 +686,18 @@ class PyperfComparison:
 
     def __str__(self):
         return f'<{self._mean} ({self._source})>'
+
+    def __hash__(self):
+        try:
+            return self._hash
+        except AttributeError:
+            self._hash = hash((
+                self._baseline,
+                self._source,
+                tuple(sorted(self._byname.items())),
+                self._mean,
+            ))
+            return self._hash
 
     def __eq__(self, other):
         raise NotImplementedError

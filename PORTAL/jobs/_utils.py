@@ -548,6 +548,9 @@ class ElapsedTimeWithUnits:
         # XXX Limit to 2 decimal places?
         return f'{self._elapsed} {self_units}'
 
+    def __hash__(self):
+        return hash((self._elapsed, self._units))
+
     def __eq__(self, other):
         raise NotImplementedError
 
@@ -653,6 +656,9 @@ class ElapsedTimeComparison:
     def __init__(self, *args, **kwargs):
         self._validate()
 
+    def __hash__(self):
+        return hash(self._raw)
+
     def _validate(self):
         if not (self._raw % 1):
             raise ValueError(f'expected >= 1 or <= -1, got {self._raw}')
@@ -667,7 +673,7 @@ class ElapsedTimeComparison:
             return f'{self._raw} faster'
 
     def __eq__(self, other):
-        raise NotImplementedError
+        return str(self) == str(other)
 
     @property
     def raw(self):
@@ -3791,6 +3797,9 @@ class PythonImplementation:
 
     def __str__(self):
         return self.name
+
+    def __hash__(self):
+        return hash(self._name)
 
     def __eq__(self, other):
         if not isinstance(other, PythonImplementation):
