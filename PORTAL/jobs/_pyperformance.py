@@ -481,7 +481,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         if dirname:
             copied._dirname = dirname
         elif hasattr(self, '_filename') and self._filename:
-            copied._dirname = os.path.dirname(filename)
+            copied._dirname = os.path.dirname(self._filename)
         # We do not copy self._filename.
         return copied
 
