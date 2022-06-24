@@ -195,22 +195,21 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
     @classmethod
     def from_raw(cls, raw, *, fail=None):
-        self = None
         if not raw:
             if fail:
                 raise ValueError('missing uploadid')
+            return None
         elif isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
             self = cls.parse(raw)
             if not self:
                 self = cls.from_filename(raw)
+            return self
         else:
             if fail or fail is None:
                 raise TypeError(raw)
-        if fail:
-            raise ValueError(f'no match for {raw!r}')
-        return self
+            return None
 
     @classmethod
     def from_filename(cls, filename):
@@ -1468,7 +1467,7 @@ class PyperfResultsInfo(
     @classmethod
     def from_values(cls, uploadid, build=None, filename=None, compared=None,
                     resultsroot=None):
-        uploadid = PyperfUploadID.from_raw(uploadid)
+        uploadid = PyperfUploadID.from_raw(uploadid, fail=True)
         build = cls._normalize_build(build)
         return cls._from_values(
             uploadid, build, filename, compared, resultsroot)
@@ -2015,9 +2014,7 @@ class PyperfResultsFile:
 
     @classmethod
     def from_uploadid(cls, uploadid, resultsroot=None, *, compressed=False):
-        uploadid = PyperfUploadID.from_raw(uploadid)
-        if not uploadid:
-            raise ValueError('missing uploadid')
+        uploadid = PyperfUploadID.from_raw(uploadid, fail=True)
         return cls(f'{uploadid}{cls.SUFFIX}', resultsroot,
                    compressed=compressed)
 
