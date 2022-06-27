@@ -1636,6 +1636,12 @@ class PyperfResultsInfo(
         )
         return filename == self.filename
 
+    def find_comparison(self, comparisons):
+        try:
+            return comparisons.bysource[self.filename]
+        except KeyError:
+            return None
+
     def load_results(self):
         resfile = self.resfile
         if not resfile:
