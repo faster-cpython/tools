@@ -732,8 +732,8 @@ class PyperfComparisons:
     """The baseline and comparisons for a set of results."""
 
     @classmethod
-    def parse_table(cls, text):
-        table = PyperfTable.parse(text)
+    def parse_table(cls, text, filenames=None):
+        table = PyperfTable.parse(text, filenames)
         return cls.from_table(table)
 
     @classmethod
@@ -751,6 +751,7 @@ class PyperfComparisons:
                 for source, byname in bysource.items():
                     byname[row.name] = values[source]
         for source, byname in bysource.items():
+            assert source.endswith('.json'), repr(source)
             bysource[source] = (byname, means[source])
         self = cls(
             PyperfComparisonBaseline(table.header.baseline, base_byname),
@@ -829,11 +830,11 @@ class PyperfTable:
     FORMATS = ['raw', 'meanonly']
 
     @classmethod
-    def parse(cls, text):
+    def parse(cls, text, filenames=None):
         lines = iter(text.splitlines())
         # First parse the header.
         for line in lines:
-            header = PyperfTableHeader.parse(line)
+            header = PyperfTableHeader.parse(line, filenames)
             if header:
                 try:
                     headerdiv = next(lines)
@@ -1055,6 +1056,20 @@ class PyperfTableHeader(_PyperfTableRowBase):
 
     label = _PyperfTableRowBase.name
     sources = _PyperfTableRowBase.values
+
+    @classmethod
+    def parse(cls, line, filenames=None, *, fail=False):
+        self = super().parse(line, fail=fail)
+        if not self:
+            return None
+        if filenames:
+            values = (self.name, *filenames)
+            if len(values) != len(self):
+                raise ValueError(f'filenames mismatch ({values[1:]} != {self[1:]})')
+            if values != self:
+                # XXX Make sure they mostly match?
+                self = tuple.__new__(cls, values)
+        return self
 
     @property
     def div(self):
@@ -2165,8 +2180,12 @@ class PyperfResultsFile:
         if proc.returncode:
             logger.warn(proc.stdout)
             return None
-        return PyperfComparisons.parse_table(proc.stdout)
-#        return PyperfTable.parse(proc.stdout)
+        filenames = [
+            self._filename,
+            *(os.path.join(cwd, o.filename) for o in others),
+        ]
+        return PyperfComparisons.parse_table(proc.stdout, filenames)
+#        return PyperfTable.parse(proc.stdout, filenames)
 
 
 ##################################
