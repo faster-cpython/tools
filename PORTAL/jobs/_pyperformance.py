@@ -572,7 +572,13 @@ class PyperfComparisonValue:
         return hash((self._elapsed, self._comparison))
 
     def __eq__(self, other):
-        raise NotImplementedError
+        if not isinstance(other, PyperfComparisonValue):
+            return NotImplemented
+        if self._elapsed != other._elapsed:
+            return False
+        if self._comparison != other._comparison:
+            return False
+        return True
 
     @property
     def elapsed(self):
@@ -623,7 +629,13 @@ class PyperfComparisonBaseline:
             return self._hash
 
     def __eq__(self, other):
-        raise NotImplementedError
+        if not isinstance(other, PyperfComparisonBaseline):
+            return NotImplemented
+        if self._source != other._source:
+            return False
+        if self._byname != other._byname:
+            return False
+        return True
 
     @property
     def source(self):
@@ -699,7 +711,13 @@ class PyperfComparison:
             return self._hash
 
     def __eq__(self, other):
-        raise NotImplementedError
+        if not isinstance(other, PyperfComparison):
+            return NotImplemented
+        for field in self._fields:
+            field = '_' + field
+            if getattr(self, field) != getattr(other, field):
+                return False
+        return True
 
     @property
     def baseline(self):
@@ -1758,7 +1776,7 @@ class PyperfResultsIndex:
         for i, info in enumerate(self._entries):
             suite = info.uploadid.suite
             if suite not in PyperfUploadID.SUITES:
-                raise NotImplementedError(info)
+                raise NotImplementedError((suite, info))
             if info.uploadid.version.full == requested:
                 assert suite not in baselines, info
                 baselines[suite] = info

@@ -552,7 +552,14 @@ class ElapsedTimeWithUnits:
         return hash((self._elapsed, self._units))
 
     def __eq__(self, other):
-        raise NotImplementedError
+        if not isinstance(other, ElapsedTimeWithUnits):
+            return NotImplemented
+        # XXX Normalize units first?
+        if self._units != other._units:
+            return False
+        if self._elapsed != other._elapsed:
+            return False
+        return True
 
     @property
     def value(self):
