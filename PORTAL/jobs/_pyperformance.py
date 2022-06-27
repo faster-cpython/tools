@@ -1750,7 +1750,39 @@ class PyperfResultsIndex:
         return self.add(info)
 
     def ensure_means(self, baseline=None):
-        return
+        requested = _utils.Version.from_raw(baseline).full if baseline else None
+
+        by_suite = {}
+        baselines = {}
+        entry_indices = {}
+        for i, info in enumerate(self._entries):
+            suite = info.uploadid.suite
+            if suite not in PyperfUploadID.SUITES:
+                raise NotImplementedError(info)
+            if info.uploadid.version.full == requested:
+                assert suite not in baselines, info
+                baselines[suite] = info
+            else:
+                if suite not in by_suite:
+                    by_suite[suite] = []
+                by_suite[suite].append(info)
+            entry_indices[info] = i
+        updated = []
+        for suite, infos in by_suite.items():
+            baseline = baselines[suite]
+            comparisons = baseline.resfile.compare([i.resfile for i in infos])
+#            means = comparisons.table.mean_row.others
+            for info in infos:
+                compared = info.find_comparison(comparisons)
+                if not compared:
+                    raise NotImplementedError(info)
+                if info.mean == compared.mean:
+                    continue
+                i = entry_indices[info]
+                copied = info._replace(compared=compared)
+                self._entries[i] = copied
+                updated.append((info, copied))
+        return updated
 
 
 ##################################
