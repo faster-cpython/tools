@@ -1681,23 +1681,6 @@ class PyperfResultsIndex:
     def __eq__(self, other):
         raise NotImplementedError
 
-    def _collate_by_suite(self):
-        by_suite = {}
-        suite_baselines = {}
-        for i, entry in enumerate(self._entries):
-            suite = entry.uploadid.suite or 'pyperformance'
-            try:
-                indices = by_suite[suite]
-            except KeyError:
-                indices = by_suite[suite] = []
-            indices.append(i)
-            if entry.mean == self.BASELINE_MEAN:
-                assert suite not in suite_baselines, suite
-                suite_baselines[suite] = entry
-            elif suite not in suite_baselines:
-                suite_baselines[suite] = None
-        return by_suite, suite_baselines
-
     @property
     def baseline(self):
         return self.get_baseline()
