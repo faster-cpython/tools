@@ -1770,6 +1770,30 @@ class PyperfResultsInfo(
             return None
         return resfile.read()
 
+    def as_rendered_row(self, columns):
+        results = None
+        row = []
+        for column in columns:
+            if column == 'date':
+                print(self.date)
+                rendered = self.date.strftime('%Y-%m-%d (%H:%M UTC)')
+            elif column == 'release':
+                rendered = f'{self.uploadid.impl} {self.uploadid.version}'
+            elif column == 'commit':
+                rendered = self.uploadid.commit[:10]
+            elif column == 'host':
+                host = self.uploadid.host
+                if isinstance(host, _utils.HostInfo):
+                    rendered = str(host.id)
+                else:
+                    rendered = str(host)
+            elif column == 'mean':
+                rendered = str(self.mean)
+            else:
+                raise NotImplementedError(column)
+            row.append(rendered)
+        return row
+
 
 class PyperfResultsIndex:
 
@@ -1888,6 +1912,10 @@ class PyperfResultsIndex:
                 self._entries[i] = copied
                 updated.append((info, copied))
         return updated
+
+    def as_rendered_rows(self, columns):
+        for info in self._entries:
+            yield info.as_rendered_row(columns), info
 
 
 ##################################
@@ -2441,12 +2469,15 @@ class PyperfResultsRepo(PyperfResultsStorage):
             compressed=compressed,
             split=split,
         )
+        index = self._resultsdir.load_index()
+        readme = self._update_table(index)
 
         logger.info('committing to the repo...')
         for info in added:
             relfile = os.path.relpath(info.filename, self.root)
             self._git('add', relfile)
         self._git('add', self._resultsdir.indexfile)
+        self._git('add', os.path.relpath(readme, self.root))
         msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
         self._git('commit', '-m', msg, cfg=gitcfg)
         logger.info('...done committing')
@@ -2477,6 +2508,62 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise NotImplementedError(author)
 
         return branch, cfg
+
+    def _update_table(self, index):
+        table_lines = self._render_markdown(index)
+        MARKDOWN_START = '<!-- START results table -->'
+        MARKDOWN_END = '<!-- END results table -->'
+        filename = os.path.join(self.root, 'README.md')
+        with open(filename) as infile:
+            text = infile.read()
+        try:
+            start = text.index(MARKDOWN_START)
+        except ValueError:
+            start = end = -1
+            sep = os.linesep * 2
+        else:
+            end = text.index(MARKDOWN_END, start) + len(MARKDOWN_END)
+            sep = ''
+        text = (text[:start] +
+                sep +
+                os.linesep.join([
+                    MARKDOWN_START,
+                    *table_lines,
+                    MARKDOWN_END,
+                ]) +
+                text[end:])
+        with open(filename, 'w') as outfile:
+            outfile.write(text)
+        return filename
+
+    def _render_markdown(self, index):
+        def render_row(row):
+            row = (f' {v} ' for v in row)
+            return f'| {"|".join(row)} |'
+        columns = 'date release commit host mean'.split()
+
+        rows = index.as_rendered_rows(columns)
+        by_suite = {}
+        for row, info in sorted(rows, key=(lambda r: (r[0][1], r[0][0]))):
+            suite = info.uploadid.suite
+            if suite not in by_suite:
+                by_suite[suite] = []
+            date, release, commit, host, mean = row
+            relpath = os.path.relpath(info.filename, self.root)
+            relpath = relpath.replace('\/', '/')
+            date = f'[{date}]({relpath})'
+            row = date, release, commit, host, mean
+            by_suite[suite].append(row)
+
+        for suite, rows in sorted(by_suite.items()):
+            yield ''
+            yield f'{suite or "???"}:'
+            yield ''
+            yield render_row(columns)
+            yield render_row(['---'] * len(columns))
+            for row in rows:
+                yield render_row(row)
+        yield ''
 
     def _upload(self, reltarget):
         if not self.remote:
