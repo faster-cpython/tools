@@ -603,17 +603,18 @@ class PyperfComparisonValue:
 class PyperfComparisonBaseline:
     """The filename and set of result values for baseline results."""
 
-    def __init__(self, source, byname):
+    def __init__(self, source, byname=None):
         if not source:
             raise ValueError('missing source')
         # XXX Validate source as a filename.
         #elif not os.path.isabs(source):
         #    raise ValueError(f'expected an absolute source, got {source!r}')
         _byname = {}
-        for name, value in byname.items():
-            assert name and isinstance(name, str), (name, value, byname)
-            assert value and isinstance(value, str), (name, value, byname)
-            _byname[name] = _utils.ElapsedTimeWithUnits.parse(value, fail=True)
+        if byname:
+            for name, value in byname.items():
+                assert name and isinstance(name, str), (name, value, byname)
+                assert value and isinstance(value, str), (name, value, byname)
+                _byname[name] = _utils.ElapsedTimeWithUnits.parse(value, fail=True)
         self._source = source or None
         self._byname = byname
 
@@ -629,7 +630,7 @@ class PyperfComparisonBaseline:
         except AttributeError:
             self._hash = hash((
                 self._source,
-                tuple(sorted(self._byname.items())),
+                tuple(sorted(self._byname.items())) if self._byname else (),
             ))
             return self._hash
 
@@ -677,7 +678,7 @@ class PyperfComparison:
                 raise TypeError(raw)
             return None
 
-    def __init__(self, baseline, source, byname, mean):
+    def __init__(self, baseline, source, mean, byname=None):
         if not baseline:
             raise ValueError('missing baseline')
         elif not isinstance(baseline, PyperfComparisonBaseline):
@@ -689,12 +690,13 @@ class PyperfComparison:
         #    raise ValueError(f'expected an absolute source, got {source!r}')
 
         _byname = {}
-        for name, value in byname.items():
-            assert name and isinstance(name, str), (name, value, byname)
-            assert value and isinstance(value, str), (name, value, byname)
-            _byname[name] = PyperfComparisonValue.parse(value, fail=True)
-        if sorted(_byname) != sorted(baseline.byname):
-            raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
+        if byname:
+            for name, value in byname.items():
+                assert name and isinstance(name, str), (name, value, byname)
+                assert value and isinstance(value, str), (name, value, byname)
+                _byname[name] = PyperfComparisonValue.parse(value, fail=True)
+            if sorted(_byname) != sorted(baseline.byname):
+                raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
         self._baseline = baseline
         self._source = source
         self._byname = _byname
@@ -794,7 +796,7 @@ class PyperfComparisons:
         _bysource = {}
         for source, data in bysource.items():
             byname, mean = data
-            _bysource[source] = PyperfComparison(baseline, source, byname, mean)
+            _bysource[source] = PyperfComparison(baseline, source, mean, byname)
         self._baseline = baseline
         self._bysource = _bysource
 
