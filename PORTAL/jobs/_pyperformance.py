@@ -1562,6 +1562,8 @@ class PyperfResultsMetadata:
 class PyperfResultsInfo(
         namedtuple('PyperfResultsInfo', 'uploadid build filename compared')):
 
+    BASELINE_MEAN = '(ref)'
+
     @classmethod
     def from_results(cls, results, compared=None):
         if not isinstance(results, PyperfResults):
@@ -1720,8 +1722,24 @@ class PyperfResultsInfo(
             return self._date
 
     @property
+    def baseline(self):
+        if not self.compared:
+            return None
+        if not self.compared.baseline:
+            return None
+        return self.compared.baseline.source
+
+    @property
     def mean(self):
-        return self.compared.mean if self.compared else None
+        if not self.compared:
+            return None
+        if not self.compared.baseline:
+            return None
+        return self.compared.mean
+
+    @property
+    def isbaseline(self):
+        return self.compared and not self.compared.baseline
 
     def match(self, specifier, suites=None, *, checkexists=False):
         # specifier: uploadID, version, filename
@@ -1791,8 +1809,13 @@ class PyperfResultsInfo(
                     rendered = str(host.id)
                 else:
                     rendered = str(host)
+            elif column == 'baseline':
+                rendered = self.baseline or ''
             elif column == 'mean':
-                rendered = str(self.mean)
+                if self.isbaseline:
+                    rendered = self.BASELINE_REF
+                else:
+                    rendered = str(self.mean) if self.mean else ''
             else:
                 raise NotImplementedError(column)
             row.append(rendered)
@@ -1800,8 +1823,6 @@ class PyperfResultsInfo(
 
 
 class PyperfResultsIndex:
-
-    BASELINE_MEAN = '(ref)'
 
 #    iter_all()
 #    add()
@@ -1830,7 +1851,7 @@ class PyperfResultsIndex:
         for entry in self._entries:
             if entry.uploadid.suite != suite:
                 continue
-            if entry.mean == self.BASELINE_MEAN:
+            if entry.mean == PyperfResultsInfo.BASELINE_MEAN:
                 return entry
         return None
 
@@ -1948,7 +1969,13 @@ def normalize_results_filename(filename, resultsroot=None):
 class PyperfResultsDir:
 
     INDEX = 'index.tsv'
-    INDEX_FIELDS = ['relative path', 'uploadid', 'build', 'geometric mean']
+    INDEX_FIELDS = [
+        'relative path',
+        'uploadid',
+        'build',
+        'baseline',
+        'geometric mean',
+    ]
 
     @classmethod
     def _convert_to_uploadid(cls, uploadid):
@@ -1985,7 +2012,8 @@ class PyperfResultsDir:
     def indexfile(self):
         return self._indexfile
 
-    def _info_from_values(self, filename, uploadid, build=None, mean=None):
+    def _info_from_values(self, filename, uploadid, build=None,
+                          baseline=None, mean=None):
         if not build:
             build = ['PGO', 'LTO']
 #            # XXX Get it from somewhere.
@@ -2078,7 +2106,7 @@ class PyperfResultsDir:
         row = rowstr.split('\t')
         if len(row) != len(self.INDEX_FIELDS):
             raise ValueError(rowstr)
-        relfile, uploadid, build, mean = row
+        relfile, uploadid, build, baseline, mean = row
         uploadid = PyperfUploadID.parse(uploadid)
         if not uploadid:
             raise ValueError(f'bad uploadid in {rowstr}')
@@ -2086,7 +2114,7 @@ class PyperfResultsDir:
             raise ValueError(f'missing relative path for {uploadid}')
         elif os.path.isabs(relfile):
             raise ValueError(f'got absolute relative path {relfile!r}')
-        return relfile, uploadid, build or None, mean or None
+        return relfile, uploadid, build or None, baseline or None, mean or None
 
     def save_index(self, index):
         # We use a basic tab-separated values format.
@@ -2111,6 +2139,9 @@ class PyperfResultsDir:
             'relative path': os.path.relpath(info.filename, self._root),
             'uploadid': str(info.uploadid),
             'build': ','.join(info.build) if info.build else None,
+            'baseline': (os.path.relpath(info.baseline, self._root)
+                         if info.baseline
+                         else None),
             'geometric mean': str(info.mean) if info.mean else None,
         }
 
