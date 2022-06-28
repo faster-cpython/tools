@@ -665,13 +665,17 @@ class PyperfComparison:
                          'bench baseline baseresult source result comparison')
 
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw, *, fail=None):
         if not raw:
-            raise ValueError('missing comparison')
+            if fail:
+                raise ValueError('missing comparison')
+            return None
         elif isinstance(raw, cls):
             return raw
         else:
-            raise TypeError(raw)
+            if fail or fail is None:
+                raise TypeError(raw)
+            return None
 
     def __init__(self, baseline, source, byname, mean):
         if not baseline:
@@ -1607,7 +1611,7 @@ class PyperfResultsInfo(
         elif resultsroot or compared:
             raise ValueError('missing filename')
         if compared:
-            compared = PyperfComparison.from_raw(compared)
+            compared = PyperfComparison.from_raw(compared, fail=True)
         self = cls.__new__(cls, uploadid, build, filename, compared)
         if resultsroot:
             self._resultsroot = resultsroot
