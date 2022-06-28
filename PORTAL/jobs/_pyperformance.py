@@ -1898,7 +1898,8 @@ def normalize_results_filename(filename, resultsroot=None):
 
 class PyperfResultsDir:
 
-    INDEX = 'index.json'
+    INDEX = 'index.tsv'
+    INDEX_FIELDS = ['relative path', 'uploadid', 'build', 'geometric mean']
 
     @classmethod
     def _convert_to_uploadid(cls, uploadid):
@@ -1935,12 +1936,12 @@ class PyperfResultsDir:
     def indexfile(self):
         return self._indexfile
 
-    def _info_from_values(self, filename, uploadid, build=None):
+    def _info_from_values(self, filename, uploadid, build=None, mean=None):
         if not build:
             build = ['PGO', 'LTO']
 #            # XXX Get it from somewhere.
 #            raise NotImplementedError
-        compared = None  # XXX
+        compared = None  # XXX Build using mean.
         return PyperfResultsInfo.from_values(
             uploadid,
             build,
@@ -1999,51 +2000,70 @@ class PyperfResultsDir:
         return index
 
     def _load_index(self):
+        # We use a basic tab-separated values format.
         index = PyperfResultsIndex()
-        with open(self._indexfile) as infile:
-            text = infile.read()
-        # We use a basic JSON format.
-        data = json.loads(text)
-        if sorted(data) != ['entries']:
-            raise ValueError(f'unsupported index data {data!r}')
-        fields = ['relative path', 'uploadid', 'build', 'geometric mean']
-        expected = sorted(fields)
-        for entrydata in data['entries']:
-            if sorted(entrydata) != expected:
-                raise ValueError(f'unsupported index entry data {data!r}')
-            uploadid = PyperfUploadID.parse(entrydata['uploadid'])
-            if not uploadid:
-                raise ValueError(f'bad uploadid in {data}')
-            relfile = entrydata['relative path'] or None
-            if not relfile:
-                raise ValueError(f'missing relative path for {uploadid}')
-            elif os.path.isabs(relfile):
-                raise ValueError(f'got absolute relative path {relfile!r}')
-            build = entrydata['build'] or None
-            mean = entrydata['geometric mean'] or None
-            info = self._info_from_values(relfile, uploadid, build)
+        for row in self._read_rows():
+            parsed = self._parse_row(row)
+            info = self._info_from_values(*parsed)
             index.add(info)
         return index
 
+    def _read_rows(self):
+        with open(self._indexfile) as infile:
+            text = infile.read()
+        rows = iter(l
+                    for l in text.splitlines()
+                    if l and not l.startswith('#'))
+        # First read the header.
+        try:
+            headerstr = next(rows)
+        except StopIteration:
+            raise NotImplementedError(self._indexfile)
+        if headerstr != '\t'.join(self.INDEX_FIELDS):
+            raise ValueError(header)
+        # Now read the rows.
+        return rows
+
+    def _parse_row(self, row):
+        rowstr = row
+        row = rowstr.split('\t')
+        if len(row) != len(self.INDEX_FIELDS):
+            raise ValueError(rowstr)
+        relfile, uploadid, build, mean = row
+        uploadid = PyperfUploadID.parse(uploadid)
+        if not uploadid:
+            raise ValueError(f'bad uploadid in {rowstr}')
+        if not relfile:
+            raise ValueError(f'missing relative path for {uploadid}')
+        elif os.path.isabs(relfile):
+            raise ValueError(f'got absolute relative path {relfile!r}')
+        return relfile, uploadid, build or None, mean or None
+
     def save_index(self, index):
-        # We use a basic JSON format.
-        entries = []
+        # We use a basic tab-separated values format.
+        rows = [self.INDEX_FIELDS]
         for info in index.iter_all():
-            if not info.filename:
-                raise NotImplementedError(info)
-            if info.resultsroot != self._root:
-                raise NotImplementedError((info, self._root))
-            entries.append({
-                'relative path': os.path.relpath(info.filename, self._root),
-                'uploadid': str(info.uploadid),
-                'build': info.build or None,
-                'geometric mean': str(info.mean) if info.mean else None,
-            })
-        data = {'entries': entries}
-        text = json.dumps(data, indent=2)
+            row = self._render_as_row(info)
+            rows.append(
+                [(row[f] or '') for f in self.INDEX_FIELDS]
+            )
+        rows = ('\t'.join(row) for row in rows)
+        text = os.linesep.join(rows)
         with open(self._indexfile, 'w', encoding='utf-8') as outfile:
             outfile.write(text)
             print(file=outfile)  # Add a blank line at the end.
+
+    def _render_as_row(self, info):
+        if not info.filename:
+            raise NotImplementedError(info)
+        if info.resultsroot != self._root:
+            raise NotImplementedError((info, self._root))
+        return {
+            'relative path': os.path.relpath(info.filename, self._root),
+            'uploadid': str(info.uploadid),
+            'build': ','.join(info.build) if info.build else None,
+            'geometric mean': str(info.mean) if info.mean else None,
+        }
 
     def get(self, uploadid, default=None, *, checkexists=True):
         index = self.load_index()
