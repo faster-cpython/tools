@@ -3728,7 +3728,7 @@ class CPythonVersion(Version):
     def parse_extended(cls, verstr):
         # "3.11.0a7 (64-bit) revision 45772541f6"
         m = re.match(
-            rf'^({Version.PAT}) \((\d+)-bit\) revision [a-fA-F0-9]{{4,40}})$',
+            rf'^({Version.PAT}) \((\d+)-bit\) revision ([a-fA-F0-9]{{4,40}})$',
             verstr,
             re.VERBOSE,
         )
