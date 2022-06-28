@@ -356,6 +356,8 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             return self._name
         except AttributeError:
             impl, version, commit, host, compatid, suite = self
+            if isinstance(host, _utils.HostInfo):
+                host = host.id
             name = f'{impl}-{version}-{commit[:10]}-{host}-{compatid[:12]}'
             if suite in self.SUITES:
                 name = f'{name}-{suite}'
