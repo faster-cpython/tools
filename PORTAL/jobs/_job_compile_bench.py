@@ -201,13 +201,13 @@ class CompileBenchResult(Result):
             )
 #            self._pyperf = resfile.read(self.host, self.request.release)
             results = resfile.read()
-            metadata = results.metadata
 
             modified = False
-            if metadata.overwrite('hostid', self.host) != self.host:
+            PMD = _pyperformance.PyperfResultsMetadata
+            if PMD.overwrite_raw(results.data, 'hostid', self.host):
                 modified = True
             pyversion = self.request.versionstr
-            if metadata.overwrite('python_version', pyversion) != pyversion:
+            if PMD.overwrite_raw_all(results.data, 'python_version', pyversion):
                 modified = True
             if modified:
                 resfile.write(results)

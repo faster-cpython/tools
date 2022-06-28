@@ -1,4 +1,5 @@
 from collections import namedtuple
+import collections
 import gzip
 import hashlib
 import json
@@ -1146,6 +1147,31 @@ class PyperfResults:
     BENCHMARKS = Benchmarks()
 
     @classmethod
+    def get_metadata_raw(cls, data):
+        return data['metadata']
+
+    @classmethod
+    def iter_benchmarks_from_data(cls, data):
+        yield from data['benchmarks']
+
+    @classmethod
+    def get_benchmark_name(cls, benchdata):
+        return benchdata['metadata']['name']
+
+    @classmethod
+    def get_benchmark_metadata_raw(cls, benchdata):
+        return benchdata['metadata']
+
+    @classmethod
+    def iter_benchmark_runs_from_data(cls, benchdata):
+        for rundata in benchdata['runs']:
+            yield (
+                rundata['metadata'],
+                rundata.get('warmups'),
+                rundata.get('values'),
+            )
+
+    @classmethod
     def _validate_data(cls, data):
         if data['version'] == '1.0':
             for key in ('metadata', 'benchmarks', 'version'):
@@ -1177,6 +1203,18 @@ class PyperfResults:
     @property
     def data(self):
         return self._data
+
+    @property
+    def raw(self):
+        return self._data
+
+    @property
+    def raw_metadata(self):
+        return self._data['metadata']
+
+    @property
+    def raw_benchmarks(self):
+        return self._data['benchmarks']
 
     @property
     def metadata(self):
@@ -1253,13 +1291,10 @@ class PyperfResults:
             logger.warn(f'empty results {self}')
         return by_suite
 
-    def _get_bench_name(self, benchdata):
-        return benchdata['metadata']['name']
-
     def _iter_benchmarks(self):
-        for data in self._data['benchmarks']:
-            name = self._get_bench_name(data)
-            yield name, data
+        for benchdata in self.iter_benchmarks_from_data(self._data):
+            name = self.get_benchmark_name(benchdata)
+            yield name, benchdata
 
     def split_benchmarks(self):
         """Return results collated by suite."""
@@ -1298,8 +1333,7 @@ class PyperfResults:
 
 class PyperfResultsMetadata:
 
-    EXPECTED = {
-        # top-level
+    _EXPECTED_TOP = {
         "aslr",
         "boot_time",
         "commit_branch",
@@ -1317,7 +1351,8 @@ class PyperfResultsMetadata:
         "performance_version",
         "platform",
         "unit",
-        # per-benchmark
+    }
+    _EXPECTED_BENCH = {
         #"cpu_freq",
         "perf_version",
         "python_cflags",
@@ -1327,6 +1362,7 @@ class PyperfResultsMetadata:
         "runnable_threads",
         "timer",
     }
+    EXPECTED = _EXPECTED_TOP | _EXPECTED_BENCH
 
     @classmethod
     def from_raw(cls, raw):
@@ -1339,17 +1375,57 @@ class PyperfResultsMetadata:
 
     @classmethod
     def from_full_results(cls, data):
-        metadata = dict(data['metadata'])
-        for key, value in cls._merge_from_benchmarks(data['benchmarks']).items():
-            if key in metadata:
-                if value != metadata[key]:
-                    logger.warn(f'metadata mismatch for {key} (top: {metadata[key]!r}, bench: {value!r}); ignoring')
-            else:
-                metadata[key] = value
-        return cls(metadata, data['version'])
+        topdata = data['metadata']
+        benchdata = cls._merge_from_benchmarks(data['benchmarks'], topdata)
+        metadata = collections.ChainMap(topdata, benchdata)
+        self = cls(metadata, data['version'])
+        self._topdata = topdata
+        self._benchdata = benchdata
+        self._benchmarks = data['benchmarks']
+        return self
 
     @classmethod
-    def _merge_from_benchmarks(cls, data):
+    def overwrite_raw(cls, data, field, value, *, addifnotset=True):
+        _, modified = cls._overwrite(data['metadata'], field, value, addifnotset)
+        return modified
+
+    @classmethod
+    def overwrite_raw_all(cls, data, field, value):
+        _, modified = cls._overwrite(data['metadata'], field, value)
+        for benchdata in PyperfResults.iter_benchmarks_from_data(data):
+            name = PyperfResults.get_benchmark_name(benchdata)
+            benchmeta = PyperfResults.get_benchmark_metadata_raw(benchdata)
+            context = f'benchmark {name!r}'
+            _, _modified = cls._overwrite(benchmeta, field, value, context,
+                                          addifnotset=False)
+            if _modified:
+                modified = True
+            # XXX Update per-run metadata too?
+        return modified
+
+    @classmethod
+    def _overwrite(cls, data, field, value, context=None, addifnotset=True):
+        context = f' for {context}' if context else ''
+        try:
+            old = data[field]
+        except KeyError:
+            old = None
+        modified = False
+        if not old:
+            if addifnotset:
+                logger.debug(f'# initializing {field} in results metadata{context} ({value})')
+                data[field] = value
+                modified = True
+            else:
+                logger.debug(f'# {field} empty/missing in results metadata{context}; ignoring)')
+        elif old != value:
+             logger.warn(f'replacing {field} in results metadata{context} ({old} -> {value})')
+             data[field] = value
+             modified = True
+        return old, modified
+
+    @classmethod
+    def _merge_from_benchmarks(cls, data, topdata):
         metadata = {}
         for bench in data:
             for key, value in bench['metadata'].items():
@@ -1357,14 +1433,18 @@ class PyperfResultsMetadata:
                     continue
                 if not value:
                     continue
-                if key in metadata:
+                if key in topdata:
+                    if value != topdata[key]:
+                        logger.warn(f'top/per-benchmark metadata mismatch for {key} (top: {topdata[key]!r}, bench: {value!r}); ignoring')
+                elif key in metadata:
                     if metadata[key] is None:
                         continue
                     if value != metadata[key]:
-                        logger.warn(f'metadata mismatch for {key} ({value!r} != {metadata[key]!r}); ignoring')
+                        logger.warn(f'per-benchmark metadata mismatch for {key} ({value!r} != {metadata[key]!r}); ignoring')
                         metadata[key] = None
                 else:
                     metadata[key] = value
+            # XXX Incorporate pre-run metadata?
         for key, value in list(metadata.items()):
             if value is None:
                 del metadata[key]
@@ -1416,7 +1496,6 @@ class PyperfResultsMetadata:
                 self._data.get('python_version'),
             )
             return self._pyversion
-        raise NotImplementedError
 
     @property
     def build(self):
@@ -1452,12 +1531,7 @@ class PyperfResultsMetadata:
         )
 
     def overwrite(self, field, value):
-        old = self._data.get(field)
-        if not old:
-            self._data[field] = value
-        elif old != value:
-            logger.warn(f'replacing {field} in results metadata ({old} -> {value})')
-            self._data[field] = value
+        old, _ = self._overwrite(self._data, field, value)
         return old
 
 
