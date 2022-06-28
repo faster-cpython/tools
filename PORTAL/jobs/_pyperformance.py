@@ -1612,7 +1612,8 @@ class PyperfResultsInfo(
         if not build:
             return build
         if isinstance(build, str):
-            raise NotImplementedError(build)
+            # "PGO,LTO"
+            build = build.split(',')
         build = tuple(build)
         cls._validate_build_values(build)
         return build
