@@ -1241,6 +1241,13 @@ class PyperfResults:
         return self._resfile.filename
 
     @property
+    def date(self):
+        run0 = self.raw_benchmarks[0]['runs'][0]
+        date = run0['metadata']['date']
+        date, _ = _utils.get_utc_datetime(date)
+        return date
+
+    @property
     def uploadid(self):
         try:
             return self._uploadid
@@ -1698,6 +1705,15 @@ class PyperfResultsInfo(
                 return None
             self._resfile = PyperfResultsFile(self.filename, self.resultsroot)
             return self._resfile
+
+    @property
+    def date(self):
+        try:
+            return self._date
+        except AttributeError:
+            results = self.resfile.read()
+            self._date = results.date
+            return self._date
 
     @property
     def mean(self):
