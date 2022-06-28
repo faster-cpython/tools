@@ -270,8 +270,10 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         impl = _utils.resolve_python_implementation(
             impl or metadata.python_implementation or 'cpython',
         )
-        if not version or version == 'main':
-            # We assume "main".
+        if not version:
+            # We assume "main" if it's missing.
+            version = metadata.pyversion or 'main'
+        if version == 'main':
             version = impl.VERSION.resolve_main()
         else:
             version = impl.parse_version(version, requirestr=False)
@@ -1491,11 +1493,20 @@ class PyperfResultsMetadata:
         try:
             return self._pyversion
         except AttributeError:
+            text = self._data.get('python_version')
             impl = self.python_implementation
-            self._pyversion = impl.parse_version(
-                self._data.get('python_version'),
-            )
-            return self._pyversion
+            parsed = impl.parse_version(text)
+            if not parsed and hasattr(impl.VERSION, 'parse_extended'):
+                parsed = impl.VERSION.parse_extended(text)
+                if parsed:
+                    parsed, _, _ = parsed
+                else:
+                    # XXX This should have been covered by parse_extended().
+                    parsed = impl.parse_version(text.split()[0])
+            if not parsed:
+                parsed = None
+            self._pyversion = parsed
+            return parsed
 
     @property
     def build(self):
