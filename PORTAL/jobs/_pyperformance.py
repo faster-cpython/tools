@@ -2425,13 +2425,14 @@ class PyperfResultsRepo(PyperfResultsStorage):
             split=split,
         )
 
+        logger.info('committing to the repo...')
         for info in added:
-            logger.info('committing to the repo...')
             relfile = os.path.relpath(info.filename, self.root)
-            self._git('add', relfile, self._resultsdir.indexfile)
-            msg = f'Add Benchmark Results ({info.uploadid})'
-            self._git('commit', '-m', msg, cfg=gitcfg)
-            logger.info('...done committing')
+            self._git('add', relfile)
+        self._git('add', self._resultsdir.indexfile)
+        msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
+        self._git('commit', '-m', msg, cfg=gitcfg)
+        logger.info('...done committing')
 
         if push:
             self._upload(self.datadir or '.')
