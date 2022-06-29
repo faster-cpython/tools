@@ -1315,8 +1315,13 @@ def looks_like_git_branch(value):
     return looks_like_git_name(value)
 
 
+def looks_like_git_remote_url(value):
+    # XXX We could accept more values.
+    return GITHUB_REMOTE_URL.match(value)
+
+
 def looks_like_git_remote(value):
-    if GITHUB_REMOTE_URL.match(value):
+    if looks_like_git_remote_url(value):
         return True
     return looks_like_git_name(value)
 
