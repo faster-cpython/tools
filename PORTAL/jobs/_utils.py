@@ -675,9 +675,9 @@ class ElapsedTimeComparison:
 
     def __str__(self):
         if self._raw < 0:
-            return f'{-self._raw} slower'
+            return f'{-self._raw}x slower'
         else:
-            return f'{self._raw} faster'
+            return f'{self._raw}x faster'
 
     def __eq__(self, other):
         return str(self) == str(other)
