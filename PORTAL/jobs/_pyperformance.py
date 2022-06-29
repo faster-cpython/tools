@@ -2019,12 +2019,28 @@ class PyperfResultsDir:
         return self._indexfile
 
     def _info_from_values(self, filename, uploadid, build=None,
-                          baseline=None, mean=None):
+                          baseline=None, mean=None, *,
+                          baselines=None):
         if not build:
             build = ['PGO', 'LTO']
 #            # XXX Get it from somewhere.
 #            raise NotImplementedError
-        compared = None  # XXX Build using mean.
+        if baseline:
+            if baselines is not None:
+                try:
+                    baseline = baselines[baseline]
+                except KeyError:
+                    baseline = PyperfComparisonBaseline(baseline)
+                    baselines[baseline] = baseline
+            else:
+                baseline = PyperfComparisonBaseline(baseline)
+            source = filename
+            if os.path.isabs(source):
+                source = os.path.relpath(source, self._root)
+            compared = PyperfComparison(baseline, source, mean)
+        else:
+            assert not mean, mean
+            compared = None
         return PyperfResultsInfo.from_values(
             uploadid,
             build,
@@ -2084,10 +2100,14 @@ class PyperfResultsDir:
 
     def _load_index(self):
         # We use a basic tab-separated values format.
-        index = PyperfResultsIndex()
+        rows = []
+        baselines = {}
         for row in self._read_rows():
             parsed = self._parse_row(row)
-            info = self._info_from_values(*parsed)
+            info = self._info_from_values(*parsed, baselines=baselines)
+            rows.append(info)
+        index = PyperfResultsIndex()
+        for info in rows:
             index.add(info)
         return index
 
@@ -2120,6 +2140,13 @@ class PyperfResultsDir:
             raise ValueError(f'missing relative path for {uploadid}')
         elif os.path.isabs(relfile):
             raise ValueError(f'got absolute relative path {relfile!r}')
+        if baseline:
+            if os.path.isabs(baseline):
+                raise ValueError(f'got absolute relative path {baseline!r}')
+            if not mean:
+                raise ValueError('missing mean')
+        elif mean:
+            raise ValueError('missing baseline')
         return relfile, uploadid, build or None, baseline or None, mean or None
 
     def save_index(self, index):
