@@ -1745,6 +1745,10 @@ class PyperfResultsInfo(
     def isbaseline(self):
         return self.compared and not self.compared.baseline
 
+    @property
+    def sortkey(self):
+        return (self.uploadid, self.date)
+
     def match(self, specifier, suites=None, *, checkexists=False):
         # specifier: uploadID, version, filename
         if not specifier:
@@ -2248,7 +2252,8 @@ class PyperfResultsDir:
 
     def index_from_files(self, *, baseline=None):
         index = PyperfResultsIndex()
-        for info in self.iter_from_files():
+        rows = self.iter_from_files()
+        for info in sorted(rows, key=(lambda r: r.sortkey)):
             index.add(info)
         if baseline:
             index.ensure_means(baseline=baseline)
@@ -2612,7 +2617,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         rows = index.as_rendered_rows(columns)
         by_suite = {}
-        for row, info in sorted(rows, key=(lambda r: (r[0][1], r[0][0]))):
+        for row, info in sorted(rows, key=(lambda r: r[1].sortkey)):
             suite = info.uploadid.suite
             if suite not in by_suite:
                 by_suite[suite] = []
