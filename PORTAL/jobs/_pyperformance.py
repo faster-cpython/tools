@@ -2507,7 +2507,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
         )
 
     def _git(self, *args, cfg=None):
-        ec, text = _utils.git(*args, cwd=self.root, cfg=cfg)
+        ec, text = _utils.git_raw(*args, cwd=self.root, cfg=cfg)
         if ec:
             raise NotImplementedError((ec, text))
         return text

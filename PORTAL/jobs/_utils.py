@@ -1338,7 +1338,19 @@ def looks_like_git_ref(value):
         return False
 
 
-def git(cmd, *args, cwd=HOME, cfg=None, GIT=shutil.which('git')):
+def git(cmd, *args, cwd=HOME, cfg=None):
+    ec, text = _git(cmd, args, cwd, cfg)
+    if ec != 0:
+        print(text)
+        raise NotImplementedError(ec)
+    return text
+
+
+def git_raw(cmd, *args, cwd=HOME, cfg=None):
+    return _git(cmd, args, cwd, cfg)
+
+
+def _git(cmd, args, cwd, cfg, *, GIT=shutil.which('git')):
     env = dict(os.environ)
     preargs = []
     if cfg:
@@ -1409,7 +1421,7 @@ class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
     def _from_remote_name(cls, remote, reporoot):
-        ec, url = git('remote', 'get-url', remote, cwd=reporoot)
+        ec, url = git_raw('remote', 'get-url', remote, cwd=reporoot)
         if ec:
             return None
         if remote == 'origin':
@@ -1420,9 +1432,7 @@ class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
     def _find(cls, remote, reporoot):
-        ec, text = git('remote', '-v', cwd=reporoot)
-        if ec:
-            raise NotImplementedError
+        text = git('remote', '-v', cwd=reporoot)
         for line in text.splitlines():
             if line.endswith(' (fetch)'):
                 name, _url, _ = line.split()
@@ -1515,23 +1525,19 @@ class GitHubTarget(types.SimpleNamespace):
             reporoot = os.path.join(HOME, f'{origin.org}-{origin.project}')
             #reporoot = os.path.join(HOME, self.project)
         if os.path.exists(reporoot):
-            git('fetch', '--tags', 'origin', cwd=reporoot)
+            git_raw('fetch', '--tags', 'origin', cwd=reporoot)
             if remote and remote != 'origin':
-                git('fetch', '--tags', remote, cwd=reporoot)
-            ec, _ = git('checkout', 'main', cwd=reporoot)
-            if ec:
-                raise NotImplementedError
-            #git('pull', cwd=reporoot)
-            git('reset', '--hard', 'origin/main', cwd=reporoot)
+                git_raw('fetch', '--tags', remote, cwd=reporoot)
+            git('checkout', '-B', 'main', cwd=reporoot)
+            #git_raw('pull', cwd=reporoot)
+            git_raw('reset', '--hard', 'origin/main', cwd=reporoot)
         else:
-            ec, _ = git('clone', origin.url, reporoot)
-            if ec:
-                raise NotImplementedError
+            git('clone', origin.url, reporoot)
             if remote:
-                git('remote', 'add', '-f', '--tags', remote, self.url,
-                    cwd=reporoot)
-                git('remote', 'set-url', '--push', remote, self.push_url,
-                    cwd=reporoot)
+                git_raw('remote', 'add', '-f', '--tags', remote, self.url,
+                        cwd=reporoot)
+                git_raw('remote', 'set-url', '--push', remote, self.push_url,
+                        cwd=reporoot)
         return reporoot
 
     def copy(self, ref=None):
@@ -2069,7 +2075,7 @@ class CPythonGitRefs(types.SimpleNamespace):
 
     @classmethod
     def from_url(cls, url):
-        ec, text = git('ls-remote', '--refs', '--tags', '--heads', url)
+        ec, text = git_raw('ls-remote', '--refs', '--tags', '--heads', url)
         if ec != 0:
             if text.strip():
                 for line in text.splitlines():
