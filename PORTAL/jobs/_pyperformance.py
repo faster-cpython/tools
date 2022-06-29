@@ -1568,8 +1568,6 @@ class PyperfResultsMetadata:
 class PyperfResultsInfo(
         namedtuple('PyperfResultsInfo', 'uploadid build filename compared')):
 
-    BASELINE_MEAN = '(ref)'
-
     @classmethod
     def from_results(cls, results, compared=None):
         if not isinstance(results, PyperfResults):
@@ -1856,7 +1854,7 @@ class PyperfResultsIndex:
         for entry in self._entries:
             if entry.uploadid.suite != suite:
                 continue
-            if entry.mean == PyperfResultsInfo.BASELINE_MEAN:
+            if entry.mean == PyperfComparisonValue.BASELINE:
                 return entry
         return None
 
@@ -2622,6 +2620,11 @@ class PyperfResultsRepo(PyperfResultsStorage):
             relpath = os.path.relpath(info.filename, self.root)
             relpath = relpath.replace('\/', '/')
             date = f'[{date}]({relpath})'
+            if not mean:
+#                assert info.isbaseline, repr(info)
+#                assert not mean, repr(mean)
+                mean = PyperfComparisonValue.BASELINE
+            assert '3.10.4' not in release or mean == '(ref)', repr(mean)
             row = date, release, commit, host, mean
             by_suite[suite].append(row)
 
