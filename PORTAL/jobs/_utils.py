@@ -1521,6 +1521,18 @@ class GitHubTarget(types.SimpleNamespace):
         else:
             return self.upstream.origin
 
+    def as_remote_info(self, name=None):
+        if not name:
+            _name = vars(self)['remote']
+            if _name:
+                name = _name
+            elif name is not None:
+                name = self.org
+        if name:
+            return GitRemoteInfo.from_name(name, self.url, self.push_url)
+        else:
+            return GitRemoteInfo.from_url(self.url, self.push_url)
+
     def ensure_local(self, reporoot=None):
         remote = vars(self)['remote']
         origin = self.origin or self
@@ -1567,6 +1579,80 @@ class GitHubTarget(types.SimpleNamespace):
 
     def as_jsonable(self):
         return dict(vars(self))
+
+
+class GitRemoteInfo(namedtuple('GitRemoteInfo', 'url name pushurl')):
+
+    @classmethod
+    def from_raw(cls, raw, *, fail=None):
+        if not raw:
+            if fail:
+                raise ValueError('missing remote info')
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str) and looks_like_git_remote_url(raw):
+            return cls.from_url(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def from_name(cls, name, url, pushurl=True):
+        if not name:
+            raise ValueError('missing name')
+        return cls._from_values(url, name, pushurl)
+
+    @classmethod
+    def from_url(cls, url, pushurl=True):
+        return cls._from_values(url, None, pushurl)
+
+    @classmethod
+    def _from_values(cls, url, name, pushurl):
+        if pushurl is True:
+            pushurl = url
+        return cls(url, name, pushurl)
+
+    @classmethod
+    def _validate_name(cls, name):
+        if not name:
+            return
+        if not looks_like_git_name(name):
+            raise ValueError(name)
+
+    def __new__(cls, url, name=None, pushurl=None):
+        self = super().__new__(
+            cls,
+            url=url or None,
+            name=name or None
+            pushurl=pushurl or None,
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        if not self.url:
+            raise ValueError('missing url')
+        elif not looks_like_git_remote_url(self.url):
+            raise ValueError(self.url)
+
+        self._validate_name(self.name)
+
+        if self.pushurl != self.url:
+            if not self.pushurl:
+                raise ValueError('missing pushurl')
+            elif not looks_like_git_remote_url(self.pushurl):
+                raise ValueError(self.pushurl)
+
+    def change_name(self, name):
+        self._validate_name(name)
+        return self._replace(name=name)
+
+    def as_origin(self):
+        if self.name == 'origin':
+            return self
+        return self._replace(name='origin')
 
 
 class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
