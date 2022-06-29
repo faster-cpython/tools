@@ -784,7 +784,7 @@ class PyperfComparisons:
                 for source, byname in bysource.items():
                     byname[row.name] = values[source]
         for source, byname in bysource.items():
-            assert source.endswith('.json'), repr(source)
+            assert source.endswith(PyperfResultsFile._SUFFIXES), repr(source)
             bysource[source] = (byname, means[source])
         self = cls(
             PyperfComparisonBaseline(table.header.baseline, base_byname),
@@ -2274,6 +2274,7 @@ class PyperfResultsFile:
     SUFFIX = '.json'
     COMPRESSED_SUFFIX = '.json.gz'
     COMPRESSOR = gzip
+    _SUFFIXES = (SUFFIX, COMPRESSED_SUFFIX)
 
     @classmethod
     def from_raw(cls, raw):
