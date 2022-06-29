@@ -1580,6 +1580,7 @@ class PyperfResultsInfo(
             resfile.filename,
             compared,
             resfile.resultsroot,
+            results.date,
         )
         self._resfile = resfile
         return self
@@ -1603,14 +1604,15 @@ class PyperfResultsInfo(
 
     @classmethod
     def from_values(cls, uploadid, build=None, filename=None, compared=None,
-                    resultsroot=None):
+                    resultsroot=None, date=None):
         uploadid = PyperfUploadID.from_raw(uploadid, fail=True)
         build = cls._normalize_build(build)
         return cls._from_values(
-            uploadid, build, filename, compared, resultsroot)
+            uploadid, build, filename, compared, resultsroot, date)
 
     @classmethod
-    def _from_values(cls, uploadid, build, filename, compared, resultsroot):
+    def _from_values(cls, uploadid, build, filename, compared,
+                     resultsroot, date):
         if filename:
             (filename, relfile, resultsroot,
              ) = normalize_results_filename(filename, resultsroot)
@@ -1622,6 +1624,8 @@ class PyperfResultsInfo(
         if resultsroot:
             self._resultsroot = resultsroot
             self._relfile = relfile
+        if date:
+            self._date = date
         return self
 
     @classmethod
