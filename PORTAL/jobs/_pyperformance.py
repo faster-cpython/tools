@@ -1799,7 +1799,6 @@ class PyperfResultsInfo(
         row = []
         for column in columns:
             if column == 'date':
-                print(self.date)
                 rendered = self.date.strftime('%Y-%m-%d (%H:%M UTC)')
             elif column == 'release':
                 rendered = f'{self.uploadid.impl} {self.uploadid.version}'
@@ -2506,6 +2505,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             compressed=compressed,
             split=split,
         )
+        added = list(added)  # Force the iterator to complete.
         index = self._resultsdir.load_index()
         readme = self._update_table(index)
 
