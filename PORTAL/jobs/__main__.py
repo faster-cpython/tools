@@ -16,7 +16,7 @@ from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
 )
-from ._pyperformance import PyperfResultsFile, PyperfTable, FasterCPythonResults
+#from ._pyperformance import PyperfTable
 from ._utils import (
     LogSection, tail_file, render_file, get_bool_env_var, TableSpec,
 )
@@ -248,7 +248,7 @@ def cmd_upload(jobs, reqid, *, author=None, push=True):
 
 
 def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
-    suites = ['pyston'] if pyston else [None]
+    suites = ['pyston'] if pyston else ['pyperformance']
     matched = list(jobs.match_results(res1, suites=suites))
     if not matched:
         logger.error(f'no results matched {res1!r}')
@@ -262,7 +262,8 @@ def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
             sys.exit(1)
         others.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    table = res1.compare(others)
+    compared = res1.compare(others)
+    table = compared.table
     fmt = 'meanonly' if meanonly else 'raw'
     for line in table.render(fmt):
         print(line)

@@ -41,6 +41,9 @@ class JobKind:
     Request = Request
     Result = Result
 
+    #def __new__(cls, *args, **kwargs):
+    #    raise TypeError(f'{cls.__name__} instances not supported')
+
     def set_request_fs(self, fs, context):
         raise NotImplementedError
 
@@ -109,10 +112,15 @@ class JobFS(types.SimpleNamespace):
 
     @classmethod
     def from_jobsfs(cls, jobsfs, reqid):
+        requestfs = _utils.FSTree(f'{jobsfs.requests}/{reqid}')
+        requestfs.requestsroot = jobsfs.requests.root
+        resultfs = _utils.FSTree(f'{jobsfs.results}/{reqid}')
+        resultfs.resultsroot = jobsfs.results.root
+        workfs = _utils.FSTree(f'{jobsfs.work}/{reqid}')
         self = cls(
-            request=f'{jobsfs.requests}/{reqid}',
-            result=f'{jobsfs.requests}/{reqid}',
-            work=f'{jobsfs.work}/{reqid}',
+            request=requestfs,
+            result=resultfs,
+            work=workfs,
             reqid=reqid,
             context=jobsfs.context,
         )
@@ -181,6 +189,22 @@ class JobFS(types.SimpleNamespace):
         if requests != 'REQUESTS':
             raise NotImplementedError
         return JobsFS(root)
+
+    @property
+    def requestsroot(self):
+        try:
+            return self.request.requestsroot
+        except AttributeError:
+            #return self.jobs.requests.root
+            return os.path.dirname(self.request.root)
+
+    @property
+    def resultsroot(self):
+        try:
+            return self.result.resultsroot
+        except AttributeError:
+            #return self.jobs.results.root
+            return os.path.dirname(self.result.root)
 
     @property
     def bench_script(self):
@@ -312,6 +336,9 @@ class Worker:
                 for n in 'fs ssh'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def fs(self):
         return self._fs
@@ -335,6 +362,9 @@ class JobWorker:
         args = (f'{n}={getattr(self, "_"+n)!r}'
                 for n in 'worker fs'.split())
         return f'{type(self).__name__}({"".join(args)})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def worker(self):
@@ -420,6 +450,9 @@ class Job:
 
     def __str__(self):
         return str(self._reqid)
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     @property
     def reqid(self):
@@ -1009,6 +1042,9 @@ class Jobs:
     def __str__(self):
         return self._fs.root
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def cfg(self):
         return self._cfg
@@ -1087,7 +1123,10 @@ class Jobs:
                 if suites:
                     # XXX Handle this?
                     pass
-                yield _pyperformance.PyperfResultsFile(filename)
+                yield _pyperformance.PyperfResultsFile(
+                    filename,
+                    resultsroot=self._fs.results.root,
+                )
 
     def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
         if kind_kwargs is None:

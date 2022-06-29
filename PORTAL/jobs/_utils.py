@@ -1,5 +1,6 @@
 from collections import namedtuple
 import datetime
+import decimal
 import glob
 import json
 import logging
@@ -44,14 +45,97 @@ def check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
-def validate_string(value, argname=None, *, required=True):
+def validate_str(value, argname=None, *, required=True):
+    validate_arg(value, str, argname, required=required)
+
+
+##################################
+# int utils
+
+def ensure_int(raw, min=None):
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str):
+        value = int(raw)
+    else:
+        raise TypeError(raw)
+    if value < min:
+        raise ValueError(raw)
+    return value
+
+
+def coerce_int(value, *, fail=None):
+    if isinstance(value, int):
+        return value
+    elif not value:
+        if fail:
+            raise ValueError('missing')
+    elif isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            if fail or fail is None:
+                raise  # re-raise
+    else:
+        if fail:
+            raise TypeError(f'unsupported value {value!r}')
+    return None
+
+
+def validate_int(value, name=None, *, range=None, required=True):
+    def fail(value=value, name=name, range=range):
+        qualifier = 'an'
+        if isinstance(value, int):
+            if range:
+                qualifier = f'a {range}'
+            Error = ValueError
+        else:
+            Error = TypeError
+        namepart = f' for {name}' if name else ''
+        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+
+    if isinstance(value, int) and value is not False:
+        if not range:
+            return value
+        elif range == 'non-negative':
+            if value < 0:
+                fail()
+        elif range == 'positive':
+            if value <= 0:
+                fail()
+        else:
+            raise NotImplementedError(f'unsupported range {range!r}')
+    elif not value:
+        if not required:
+            return None
+        raise ValueError(f'missing {name}' if name else 'missing')
+    else:
+        fail()
+
+
+def normalize_int(value, name=None, *,
+                  range=None,
+                  coerce=False,
+                  required=True,
+                  ):
+    if coerce:
+        value = coerce_int(value)
+    return validate_int(value, name, range=range, required=required)
+
+
+##################################
+# validation utils
+
+def validate_arg(value, expected, argname=None, *, required=True):
+    if not isinstance(expected, type):
+        raise NotImplementedError(expected)
     if not value:
         if not required:
             return
         raise ValueError(f'missing {argname or "required value"}')
-    if not isinstance(value, str):
+    if not isinstance(value, expected):
         label = f' for {argname}' if argname else ''
-        raise TypeError(f'expected str{label}, got {value!r}')
+        raise TypeError(f'expected {expected.__name__}{label}, got {value!r}')
 
 
 ##################################
@@ -213,6 +297,9 @@ class RenderingRows:
         self.count = 0
         self.pending = []
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     def __iter__(self):
         return self
 
@@ -248,6 +335,9 @@ class TableRow:
 
     def __repr__(self):
         return f'{type(self).__name__}({self.data!r})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def render_values(self, colnames=None):
         if not colnames:
@@ -322,6 +412,279 @@ def get_utc_datetime(timestamp=None, *, fail=True):
         #timestamp = datetime.datetime.combine(timestamp, None, datetime.timezone.utc)
         hastime = False
     return timestamp, hastime
+
+
+class ElapsedTimeWithUnits:
+    """A quanitity of elapsed time in specific units."""
+    # We'd subclass decimal.Decimal or datetime.timedelta,
+    # but neither is friendly to subclassing (methods drop
+    # the subclass).  Plus, timedelta doesn't go smaller
+    # than microseconds.
+
+    __slots__ = ['_elapsed', '_units']
+
+    UNITS = ['s', 'ms', 'us', 'ns']  # us == microseconds
+    _UNITS = {s: 1000**i for i, s in enumerate(UNITS)}
+    PAT = rf'''
+        (?:
+            \b
+            (
+                (?: 0 | 0* [1-9] \d* )
+                (?: \. \d+ )?
+             )  # <elapsed>
+            (?:
+                \s+
+                ( sec | {'|'.join(UNITS)} )  # <units>
+             )?
+            \b
+         )
+        '''
+    REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+
+    @classmethod
+    def parse(cls, elapsedstr, *, fail=False):
+        m = cls.REGEX.match(elapsedstr)
+        if not m:
+            if fail:
+                raise ValueError(f'could not parse {elapsedstr!r}')
+            return None
+        elapsedstr, units = m.groups()
+        if units == 'sec':
+            units = 's'
+        #elapsed = decimal.Decimal(elapsedstr).normalize()
+        elapsed = decimal.Decimal(elapsedstr)
+        return cls._from_values(elapsed, units)
+
+    @classmethod
+    def from_seconds(cls, elapsed, *, normalize=True):
+        elapsed = decimal.Decimal(elapsed)
+        cls._validate_elapsed(elapsed)
+        return cls._from_values(elapsed, None if normalize else 's')
+
+    @classmethod
+    def from_timedelta(cls, elapsed):
+        if not isinstance(elapsed, datetime.timedelta):
+            raise TypeError(elapsed)
+        micro = elapsed.microseconds
+        elapsed = decimal.Decimal(elapsed.total_seconds())
+        if micro:
+            elapsed = (elapsed * 1_000_000 + micro) / 1_000_000
+        cls._validate_elapsed(elapsed)
+        return cls._from_values(elapsed, units=None)
+
+    @classmethod
+    def from_values(cls, elapsed, units=None):
+        if isinstance(elapsed, datetime.timedelta):
+            if units:
+                raise TypeError('datetime.timedelta has fixed units; use cls.from_timedelta()')
+            return cls.from_timedelta(elapsed)
+        else:
+            elapsed = decimal.Decimal(elapsed)
+            cls._validate_elapsed(elapsed)
+            return cls._from_values(elapsed, units)
+
+    @classmethod
+    def _from_values(cls, elapsed, units):
+        assert units
+        if units:
+            self = cls.__new__(cls, elapsed, units)
+            self._check_for_abnormal(elapsed, units)
+        else:
+            self = cls.__new__(cls, elapsed, 's')
+            self = self.normalize()
+        return self
+
+    @classmethod
+    def _convert_to_seconds(cls, elapsed, units):
+        if units == 's':
+            return elapsed
+        return (elapsed / cls._resolve_units(units)).normalize()
+
+    @classmethod
+    def _convert_from_seconds(cls, elapsed, units):
+        if units == 's':
+            return elapsed
+        return (elapsed * cls._resolve_units(units)).normalize()
+
+    @classmethod
+    def _resolve_units(cls, units):
+        try:
+            return cls._UNITS[units]
+        except KeyError:
+            raise ValueError(f'unsupported units {units!r}')
+
+    @classmethod
+    def _validate_elapsed(cls, elapsed):
+        if elapsed < 0:
+            raise ValueError(f'expected non-negative value, got {elapsed}')
+
+    @classmethod
+    def _check_for_abnormal(cls, elapsed, units):
+        if elapsed < 1 or elapsed >= 1000:
+            logger.warn('abnormal elapsed value {elapsed} {units}, consider normalizing')
+
+    def __new__(cls, elapsed, units='s'):
+        self = super().__new__(cls)
+        self._elapsed = decimal.Decimal(elapsed)
+        self._units = units
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._elapsed = self._elapsed.normalize()
+        self._validate()
+
+    def _validate(self):
+        self._validate_elapsed(self._elapsed)
+        if not self._units:
+            raise ValueError('missing units')
+        elif self._units not in self._UNITS:
+            raise ValueError(f'unsupported units {self._units!r}')
+        self._check_for_abnormal(self._elapsed, self._units)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._elapsed}, {self._units})'
+
+    def __str__(self):
+        # XXX Limit to 2 decimal places?
+        return f'{self._elapsed} {self_units}'
+
+    def __hash__(self):
+        return hash((self._elapsed, self._units))
+
+    def __eq__(self, other):
+        if not isinstance(other, ElapsedTimeWithUnits):
+            return NotImplemented
+        # XXX Normalize units first?
+        if self._units != other._units:
+            return False
+        if self._elapsed != other._elapsed:
+            return False
+        return True
+
+    @property
+    def value(self):
+        return self._elapsed
+
+    @property
+    def units(self):
+        return self._units
+
+    def normalize(self):
+        elapsed = self._elapsed
+        if elapsed >= 0 and elapsed < 1000:
+            return self
+        if elapsed >= 1000:
+            candidates = iter(reversed(self.UNITS))
+            for units in candidates:
+                if units == self._units:
+                    break
+            for units in candidates:
+                elapsed /= 1000
+                if elapsed < 1000:
+                    break
+            else:
+                # We leave it at the maximum units.
+                pass
+        else:
+            candidates = iter(self.UNITS)
+            for units in candidates:
+                if units == self._units:
+                    break
+            for units in candidates:
+                elapsed *= 1000
+                if elapsed >= 1:
+                    break
+            else:
+                # XXX Stick with the smallest units?
+                raise ValueError(f'{self} is smaller than the smallest units ({units})')
+        cls = type(self)
+        return cls.__new__(cls, elapsed.normalize(), units)
+
+    def convert_to(self, units='s'):
+        if not units:
+            raise ValueError('missing units')
+        if self._units == units:
+            return self
+        # We always convert to seconds (the largest unit) first.
+        converted = self._convert_to_seconds(self._elapsed, self._units)
+        # Now we convert to the target.
+        converted = self._convert_from_seconds(converted, units)
+        cls = type(self)
+        return cls.__new__(cls, converted, units)
+
+    def as_seconds(self):
+        return self.convert_to()._elapsed
+
+    def as_timedelta(self):
+        # XXX Fail if there are any digits smaller than microseconds?
+        return datetime.timedelta(seconds=float(self._elapsed))
+
+
+class ElapsedTimeComparison:
+    """The relative time difference between two elapsed time values."""
+    # We would subclass Decimal but it isn't subclass-friendly
+    # (methods drop the subclass).
+
+    __slots__ = ['_raw']
+
+    PAT = r'''
+        (?:
+            ( [1-9]\d*(?:\.\d+) )  # <value>
+            x
+            \s+
+            ( faster | slower )  # <direction>
+         )
+        '''
+    REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+
+    @classmethod
+    def parse(cls, comparisonstr, *, fail=False):
+        m = cls.REGEX.match(comparisonstr)
+        if not m:
+            if fail:
+                raise ValueError(f'could not parse {comparisonstr!r}')
+            return None
+        valuestr, direction = m.groups()
+        return cls.from_parsed_values(valuestr, direction, comparisonstr)
+
+    @classmethod
+    def from_parsed_values(cls, valuestr, direction, raw=None):
+        if direction == 'slower':
+            valuestr = f'-{valuestr}'
+        elif direction != 'faster':
+            raise NotImplementedError(raw or direction)
+        return cls.__new__(cls, valuestr)
+
+    def __new__(cls, value):
+        self = super().__new__(cls)
+        self._raw = decimal.Decimal(value)
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def __hash__(self):
+        return hash(self._raw)
+
+    def _validate(self):
+        if not (self._raw % 1):
+            raise ValueError(f'expected >= 1 or <= -1, got {self._raw}')
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._raw})'
+
+    def __str__(self):
+        if self._raw < 0:
+            return f'{-self._raw}x slower'
+        else:
+            return f'{self._raw}x faster'
+
+    def __eq__(self, other):
+        return str(self) == str(other)
+
+    @property
+    def raw(self):
+        return self._raw
 
 
 ##################################
@@ -411,8 +774,12 @@ def is_proc_running(pid):
 
 
 def run_fg(cmd, *args, cwd=None, env=None):
+    if not cwd:
+        cwd = os.getcwd()
     argv = [cmd, *args]
-    logger.debug('# running: %s', ' '.join(shlex.quote(a) for a in argv))
+    logger.debug('# running: %s  (CWD: %s)',
+                 ' '.join(shlex.quote(a) for a in argv),
+                 cwd)
     return subprocess.run(
         argv,
         stdout=subprocess.PIPE,
@@ -424,6 +791,9 @@ def run_fg(cmd, *args, cwd=None, env=None):
 
 
 def run_bg(argv, logfile=None, *, cwd=None, env=None):
+    if not cwd:
+        cwd = os.getcwd()
+
     if not argv:
         raise ValueError('missing argv')
     elif isinstance(argv, str):
@@ -438,7 +808,7 @@ def run_bg(argv, logfile=None, *, cwd=None, env=None):
         cmd = f'{cmd} >> {logfile}'
     cmd = f'{cmd} 2>&1'
 
-    logger.debug('# running (background): %s', cmd)
+    logger.debug('# running (background): %s  (CWD: %s)', cmd, cwd)
     #subprocess.run(cmd, shell=True)
     subprocess.Popen(
         cmd,
@@ -460,7 +830,7 @@ def run_bg(argv, logfile=None, *, cwd=None, env=None):
 # file utils
 
 def check_shell_str(value, *, required=True, allowspaces=False):
-    validate_string(value, required=required)
+    validate_str(value, required=required)
     if not value:
         return None
     if not allowspaces and ' ' in value:
@@ -473,6 +843,14 @@ def quote_shell_str(value, *, required=True):
     if value is not None:
         value = shlex.quote(value)
     return value
+
+
+def get_next_line(lines, notfound=None, *, skipempty=False):
+    for line in lines:
+        if not skipempty or line.rstrip():
+            return line
+    else:
+        return notfound
 
 
 def write_json(data, outfile):
@@ -585,6 +963,9 @@ class PIDFile:
     def __repr__(self):
         return f'{type(self).__name__}({self._filename!r})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def filename(self):
         return self._filename
@@ -671,6 +1052,9 @@ class LockFile:
     def __init__(self, filename):
         self._pidfile = PIDFile(filename)
         self._count = 0
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def __enter__(self):
         self.acquire()
@@ -1393,6 +1777,9 @@ class GitRefCandidates:
     def __repr__(self):
         return f'{type(self).__name__}({self._reqs})'
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     def __len__(self):
         return len(self._reqs)
 
@@ -1976,6 +2363,560 @@ class TopConfig(Config):
 
 
 ##################################
+# host info
+
+class HostInfo(namedtuple('HostInfo', 'id name dnsname cpu platform')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing host info')
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def from_metadata(cls, hostid, hostname, dnsname, platform,
+                      cpu_model_name, cpu_config,
+                      cpu_frequency=None, cpu_count=None, cpu_affinity=False):
+        platform = PlatformInfo.parse(platform)
+        cpu = CPUInfo.from_metadata(cpu_model_name, platform, cpu_config,
+                                    cpu_frequency, cpu_count, cpu_affinity)
+        (hostid, hostname, dnsname,
+         ) = cls._normalize_ids(hostid, hostname, dnsname, platform, cpu)
+        return cls.__new__(cls, hostid, hostname, dnsname, cpu, platform)
+
+    @classmethod
+    def _normalize_ids(cls, hostid, hostname, dnsname, platform, cpu):
+        validate_str(hostname, 'hostname')
+
+        if hostid:
+            validate_str(hostid, 'hostid')
+        else:
+            for hostid in [hostname, dnsname]:
+                if hostid and cls._is_good_hostid(hostid):
+                    break
+            else:
+                # We fall back to a single unique-enough ID.
+                # We could use additional identifying information,
+                # but it doesn't buy us much (and makes the ID longer).
+                hostid = platform.os_name
+                if not hostid:
+                    raise NotImplementedError
+                if cpu.arch in ('arm32', 'arm64'):
+                    hostid += '-arm'
+                # XXX
+                #if not cls._is_good_hostid(hostid):
+                #    raise ValueError('missing hostid')
+
+        if dnsname:
+            validate_str(dnsname, 'dnsname')
+        elif re.match(rf'^{DOMAIN_NAME}$', hostname):
+            dnsname = hostname
+
+        return hostid, hostname, dnsname
+
+    @classmethod
+    def _is_good_hostid(cls, hostid):
+        # XXX What makes a good one?
+        return False
+
+    def __new__(cls, id, name, dnsname, cpu, platform):
+        self = super().__new__(
+            cls,
+            id=id or None,
+            name=name or None,
+            dnsname=dnsname or None,
+            cpu=cpu or None,
+            platform=platform or None,
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate(self)
+
+    def _validate(self):
+        validate_str(self.id, 'id')
+        validate_str(self.name, 'name')
+        validate_str(self.dnsname, 'dnsname', required=False)
+        if self.dnsname and not re.match(rf'^{DOMAIN_NAME}$', self.dnsname):
+            raise ValueError(f'invalid dnsname {self.dnsname!r}')
+        validate_arg(self.cpu, CPUInfo, 'cpu')
+        validate_arg(self.platform, PlatformInfo, 'platform')
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def os_name(self):
+        try:
+            return self._os_name
+        except AttributeError:
+            os_name = self.platform.os_name
+            if not os_name:
+                raise NotImplementedError
+            self._os_name = name
+            return name
+
+    def as_metadata(self):
+        metadata = {
+            'hostid': self.id,
+            'hostname': self.name,
+            'platform': str(self.platform),
+            **self.cpu.as_metadata(),
+        }
+        if self.dnsname:
+            metadata['dnsname'] = self.dnsname
+        return metadata
+
+
+class PlatformInfo(namedtuple('PlatformInfo', 'kernel')):
+
+    # "Linux-5.4.0-91-generic-x86_64-with-glibc2.31"
+    KERNEL = r'''
+        (?:
+            (?:
+                ( Linux )  # <name>
+                -
+                ( \d+\.\d+\.\d+ )  # <version>
+                -
+                ( \d+ -
+                    (?:
+                        generic
+                     )
+                    -
+                    (
+                        # 64-bit
+                        x86_64 | amd64 | aarch64 | arm64
+                        |
+                        # 32-bit
+                        x86 | arm32
+                     )  # <arch>
+                    -
+                    (?:
+                        .*
+                     )  # opts
+                 )  # <build>
+             )
+         )
+        '''
+    REGEX = re.compile(rf'^({KERNEL})$', re.VERBOSE)
+
+    @classmethod
+    def from_raw(cls, raw, *, fail=None):
+        if not raw:
+            if fail:
+                raise ValueError('missing platform info')
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        else:
+            if fail or fail is None:
+                raise TypeError(raw)
+        return None
+
+    @classmethod
+    def parse(cls, platstr):
+        m = cls.REGEX.match(platstr)
+        if not m:
+            return None
+        (kernel,
+         *kernel_parts
+         ) = m.groups()
+        self = cls.__new__(cls, kernel)
+        self._handle_parsed_kernel(
+            ((p.lower() if p else p) for p in kernel_parts)
+        )
+        self._raw = platstr
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._parse_kernel()
+        self._validate()
+
+    def _validate(self):
+        pass
+
+    def __str__(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = f'{self.kernel}'
+            return self._raw
+
+    def _parse_kernel(self):
+        kernelstr = self.kernel.lower()
+        m = re.match(rf'^({KERNEL})$', kernelstr, re.VERBOSE)
+        if not m:
+            raise ValueError(f'unsupported kernel str{self.kernel!r}')
+        self._handle_parsed_kernel(m.groups())
+
+    def _handle_parsed_kernel(self, parts):
+        (linux_name, linux_version, linux_build, linux_arch,
+         ) = parts
+        if linux_name:
+            (name, version, build, arch,
+             ) = linux_name, linux_version, linux_build, linux_arch,
+        else:
+            raise NotImplementedError(self.kernel)
+        version = Version.parse(version)
+        self._kernel_name = name
+        self._kernel_version = version
+        self._kernel_build = build
+        self._kernel_arch = arch
+
+    @property
+    def kernel_name(self):
+        try:
+            return self._kernel_name
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_name
+
+    @property
+    def kernel_version(self):
+        try:
+            return self._kernel_version
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_version
+
+    @property
+    def kernel_build(self):
+        try:
+            return self._kernel_build
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_build
+
+    @property
+    def kernel_arch(self):
+        try:
+            return self._kernel_arch
+        except AttributeError:
+            self._parse_kernel()
+            return self._kernel_arch
+
+    @property
+    def os_name(self):
+        platform = str(self).lower()
+        if 'linux' in platform:
+            return 'linux'
+        elif 'darwin' in platform or 'macos' in platform or 'osx' in platform:
+            return 'mac'
+        elif 'win' in platform:
+            return 'windows'
+        else:
+            return None
+
+
+class CPUInfo(namedtuple('CPUInfo', 'model arch cores')):
+    # model: "Intel(R) Xeon(R) W-2255 CPU @ 3.70GHz"
+
+    @classmethod
+    def from_metadata(cls, model, platform, config,
+                      frequency=None, count=None, affinity=None):
+        validate_str(model, 'model')
+        arch = cls._arch_from_metadata(platform, model)
+        cores = cls._cores_from_metadata(count, config, frequency, affinity)
+        return cls.__new__(cls, model, arch, cores)
+
+    @classmethod
+    def _arch_from_metadata(cls, platform, model):
+        platform = PlatformInfo.from_raw(platform)
+        arch = platform.kernel_arch if platform else None
+        if not arch:
+            model = model.lower()
+            if 'aarch64' in model:
+                arch = 'arm64'
+            elif 'arm' in model:
+                if '64' in model:
+                    arch = 'arm64'
+                else:
+                    arch = 'arm32'
+            elif 'intel' in model:
+                arch = 'x86_64'
+            else:
+                raise NotImplementedError((platform, model))
+        return arch
+
+    @classmethod
+    def _cores_from_metadata(cls, count, configs, frequencies, affinities):
+        count = max(0, int(count)) if count else 0
+
+        cores_by_id = {}
+        def add_core(coreid):
+            core = cores_by_id[coreid] = {
+                'id': coreid,
+                'config': [],
+                'frequency': None,
+                'affinity': None,
+            }
+            return core
+        if count:
+            for i in range(count):
+                add_core(i)
+            def ensure_core(coreid):
+                if coreid >= count:
+                    raise ValueError(f'expected {count} cores, got {coreid+1}')
+                return cores_by_id[coreid]
+        else:
+            def ensure_core(coreid):
+                if coreid < count:
+                    return cores_by_id[coreid]
+                count = coreid + 1
+                for i in range(count, coreid):
+                    add_core(i)
+                return add_core(coreid)
+
+        parsed = cls._parse_grouped_core_data(configs)
+        for coreid, configstr in parsed.items():
+            core = ensure_core(coreid)
+            core['config'] = CPUConfig.parse(configstr)
+
+        if frequencies:
+            parsed = cls._parse_grouped_core_data(frequencies)
+            for coreid, freq in parsed.items():
+                core = ensure_core(coreid)
+                core['frequency'] = cls._normalize_frequency(freq)
+
+        if affinities:
+            for coreid in cls._parse_core_ids(affinities):
+                core = ensure_core(coreid)
+                core['affinity'] = True
+
+        if not count:
+            raise ValueError('missing count')
+        return (CPUCoreInfo(**cores_by_id[i]) for i in range(count))
+
+    @classmethod
+    def _parse_grouped_core_data(cls, datastr):
+        # "0=...; 1,11,14=..."
+        data_per_core = {}
+        for corepart in datastr.split(';'):
+            m = re.match(r'^\s*(?:(\d+(?:,\d+(?:-\d+)?)*)=)?(.*?)\s*$', corepart)
+            if not m:
+                raise ValueError(f'invalid core part {corepart!r} ({datastr})')
+            coreids, coredatastr = m.groups()
+            if not coreids:
+                continue  # XXX
+            for coreid in cls._parse_core_ids(coreids):
+                if coreid in data_per_core:
+                    raise ValueError(f'duplicate core ID {coreid}')
+                data_per_core[coreid] = coredatastr
+        return data_per_core
+
+    @classmethod
+    def _render_core_data_grouped(cls, data_per_core):
+        coreparts = {}
+        for core, data in sorted(data_per_core.items(),
+                                 key=lambda v: (v[1], v[0])):
+            if isinstance(core, int):
+                coreid = core
+            else:
+                assert isinstance(core, CPUCoreInfo), core
+                coreid = core.id
+            if data not in coreparts:
+                coreparts[data] = [coreid]
+            else:
+                coreparts[data].append(coreid)
+        for data in list(coreparts):
+            coreids = cls._render_core_ids(coreparts.pop(data))
+            coreparts[coreids] = data
+        return '; '.join(f'{i}={c}' for i, c in sorted(coreparts.items()))
+
+    @classmethod
+    def _parse_core_ids(cls, rawstr):
+        # "0-1,11,14"
+        parsed = []
+        for coreid in rawstr.split(','):
+            if '-' in coreid:
+                start, stop = coreid.split('-')
+                parsed.extend(range(int(start), int(stop) + 1))
+            else:
+                parsed.append(int(coreid))
+        return parsed
+
+    @classmethod
+    def _render_core_ids(cls, coreids):
+        ranges = []
+        start = end = None
+        for coreid in sorted(coreids):
+            if start is None:
+                start = coreid
+                end = coreid
+            else:
+                if coreid == start + 1:
+                    end += 1
+                elif coreid == end:
+                    raise ValueError(f'duplicate CPU ID {coreid}')
+                else:
+                    ranges.append(
+                        str(start) if start is end else f'{start}-{end}'
+                    )
+        return ','.join(ranges)
+
+    @classmethod
+    def _normalize_frequency(cls, freq):
+        raise NotImplementedError  # XXX
+
+    def __new__(cls, model, arch, cores):
+        self = super().__new__(
+            cls,
+            model=model,
+            arch = arch or None,
+            cores=tuple(CPUCoreInfo.from_raw(c) for c in cores or ()),
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        validate_str(self.model, 'model')
+        validate_str(self.arch, 'arch')
+        validate_arg(self.cores, tuple, 'cores')
+        for i, core in enumerate(self.cores):
+            validate_arg(core, CPUCoreInfo, f'core {i}')
+            if core.id != i:
+                raise ValueError(f'cores[{i}].id is {core.id}')
+
+    @property
+    def num_cores(self):
+        return len(self.cores)
+
+    def as_metadata(self):
+        metadata = {
+            'cpu_model_name': self.model,
+            'cpu_count': self.num_cores,
+            'cpu_arch': self.arch,
+        }
+
+        frequencies = {}
+        configs = {}
+        affinity = []
+        for core in self.cores:
+            core_meta = core.as_metadata()
+            configs[core] = core_meta['cpu_config']
+            freq = core_meta.get('cpu_freq')
+            if freq:
+                frequencies[core] = self._normalize_frequency(freq)
+            if core_meta.get('cpu_affinity'):
+                affinity.append(core.id)
+        if configs:
+            metadata['cpu_config'] = self._render_core_data_grouped(configs)
+        if frequencies:
+            metadata['cpu_freq'] = self._render_core_data_grouped(frequencies)
+        if affinity:
+            metadata['cpu_affinity'] = self._render_core_ids(frequencies)
+
+        return metadata
+
+
+class CPUCoreInfo(namedtuple('CPUCoreInfo', 'id config frequency affinity')):
+
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing CPU core info')
+        elif isinstance(raw, cls):
+            return raw
+        else:
+            raise TypeError(raw)
+
+    def __new__(cls, id, config, frequency=None, affinity=False):
+        self = super().__new__(
+            cls,
+            id=coerce_int(id),
+            config=CPUConfig.from_raw(config),
+            frequency=frequency or None,
+            affinity=True if affinity else False,
+        )
+        return self
+
+    def __init__(self, *args, **kwargs):
+        self._validate()
+
+    def _validate(self):
+        #validate_arg(self.config, CPUConfig, 'config')
+        validate_int(self.frequency, 'frequency', required=False)
+        #if not isinstance(self.affinity, bool):
+        #    raise TypeError(f'expected True/False for affinity, got {self.affinity!r}')
+
+    def as_metadata(self):
+        metadata = {
+           'cpu_config': self.config,
+        }
+        if self.frequency:
+           metadata['cpu_freq'] = self.frequency
+        if self.affinity:
+           metadata['cpu_affinity'] = True
+        return metadata
+
+
+class CPUConfig:
+
+    @classmethod
+    def from_raw(cls, raw):
+        if raw == []:
+            return cls([])
+        elif not raw:
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls.parse(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def parse(cls, configstr):
+        # "driver:intel_pstate, intel_pstate:no turbo, governor:performance, isolated"
+        if not configstr:
+            raise ValueError('missing configstr')
+        configs = configstr.replace(',', ' ').split()
+        self = cls(configs)
+        self._raw = configstr
+        return self
+
+    def __init__(self, data):
+        if not all(data):
+            raise ValueError(f'empty value(s) in {data!r}')
+        self._data = tuple(data)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._data!r})'
+
+    def __str__(self):
+        try:
+            return self._raw
+        except AttributeError:
+            self._raw = ', '.join(self._data)
+            return self._raw
+
+    def __hash__(self):
+        return hash(self._data)
+
+    def __eq__(self, other):
+        try:
+            return self._data == other._data
+        except AttributeError:
+            return NotImplemented
+
+    def __lt__(self, other):
+        try:
+            return self._data < other._data
+        except AttributeError:
+            return NotImplemented
+
+    @property
+    def values(self):
+        return self._data
+
+
+##################################
 # network utils
 
 # We don't bother going full RFC 5322.
@@ -2187,6 +3128,9 @@ class SSHCommands:
         args = (f'{n}={getattr(self, n)!r}'
                 for n in 'host port user'.split())
         return f'{type(self).__name__}({"".join(args)})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def run(self, cmd, *args, agent=None):
         conn = f'{self.user}@{self.host}'
@@ -2497,6 +3441,9 @@ class ReleasePlan:
             raise ValueError('missing data')
         self._schedule, self._bylevel = self._normalize_data(data)
 
+    def __eq__(self, other):
+        raise NotImplementedError
+
     @property
     def nalphas(self):
         return len(self._bylevel['alpha'])
@@ -2530,6 +3477,9 @@ class ReleasePlans:
         if not plans:
             raise ValueError('missing plans')
         self._plans = self._normalize_data(plans)
+
+    def __eq__(self, other):
+        raise NotImplementedError
 
     def get(self, version):
         return self._plans.get(version.plain)
@@ -2576,15 +3526,20 @@ class Version(namedtuple('Version', 'major minor micro release')):
         m = cls.REGEX.match(verstr)
         if not m:
             return None
+        self = cls._from_parsed(verstr, m.groups())
+        if match is not None and not self.match(match):
+            return None
+        return self
+
+    @classmethod
+    def _from_parsed(cls, verstr, parts):
         (major, minor, micro, release, extra,
-         ) = cls._handle_parsed(verstr, *m.groups())
+         ) = cls._handle_parsed(verstr, *parts)
         cls._validate_values(verstr, major, minor, micro, release)
         cls._validate_extra(verstr, extra, major, minor, micro, release)
         self = cls.__new__(cls, major, minor, micro, release)
         self._raw = verstr
         self._extra = extra
-        if match is not None and not self.match(match):
-            return None
         return self
 
     @classmethod
@@ -2770,6 +3725,31 @@ class Version(namedtuple('Version', 'major minor micro release')):
 class CPythonVersion(Version):
 
     @classmethod
+    def parse_extended(cls, verstr):
+        # "3.11.0a7 (64-bit) revision 45772541f6"
+        m = re.match(
+            rf'^({Version.PAT}) \((\d+)-bit\) revision ([a-fA-F0-9]{{4,40}})$',
+            verstr,
+            re.VERBOSE,
+        )
+        if not m:
+            return None
+        verstr, *verparts, bits, commit = m.groups()
+        version = cls._from_parsed(verstr, verparts)
+        return version, int(bits), commit
+
+    @classmethod
+    def render_extended(cls, version, bits, commit):
+        if isinstance(version, str):
+            assert CPythonVersion.parse(version), version
+        elif isinstance(version, Version):
+            pass
+#            version = version.full
+        else:
+            raise TypeError(version)
+        return f'{version} ({bits}-bit) revision {commit}'
+
+    @classmethod
     def resolve_main(cls):
         # XXX Use CPythonGitRefs to get the right one.
         return cls(3, 12, 0).unreleased
@@ -2825,7 +3805,15 @@ class PythonImplementation:
     def __str__(self):
         return self.name
 
-    # XXX Support comparision with str.
+    def __hash__(self):
+        return hash(self._name)
+
+    def __eq__(self, other):
+        if not isinstance(other, PythonImplementation):
+            return NotImplemented
+        return self._name == other._name
+
+    # XXX Support comparison with str.
 
     @property
     def name(self):
@@ -2854,82 +3842,51 @@ def resolve_python_implementation(impl):
             return CPython()
         else:
             return PythonImplementation(impl)
+    elif isinstance(impl, PythonImplementation):
+        return impl
     else:
-        raise NotImplementedError(impl)
+        raise NotImplementedError(repr(impl))
 
 
 ##################################
 # other utils
 
-def ensure_int(raw, min=None):
-    if isinstance(raw, int):
-        value = raw
-    elif isinstance(raw, str):
-        value = int(raw)
+def hashable(value):
+    try:
+        hash(value)
+    except TypeError as exc:
+        if 'unhashable type' not in str(exc):
+            raise  # re-raise
+        return False
     else:
-        raise TypeError(raw)
-    if value < min:
-        raise ValueError(raw)
-    return value
+        return True
 
 
-def coerce_int(value, *, fail=True):
-    if isinstance(value, int):
-        return value
-    elif not value:
-        if fail:
-            raise ValueError('missing')
-    elif isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            if fail:
-                raise  # re-raise
+def iterable(value):
+    try:
+        iter(value)
+    except TypeError as exc:
+        if 'is not iterable' not in str(exc):
+            raise  # re-raise
+        return False
     else:
-        if fail:
-            raise TypeError(f'unsupported value {value!r}')
-    return None
+        return True
 
 
-def validate_int(value, name=None, *, range=None, required=True):
-    def fail(value=value, name=name, range=range):
-        qualifier = 'an'
-        if isinstance(value, int):
-            if range:
-                qualifier = f'a {range}'
-            Error = ValueError
-        else:
-            Error = TypeError
-        namepart = f' for {name}' if name else ''
-        raise Error(f'expected {qualifier} int{namepart}, got {value!r}')
+class Sentinel:
 
-    if isinstance(value, int) and value is not False:
-        if not range:
-            return value
-        elif range == 'non-negative':
-            if value < 0:
-                fail()
-        elif range == 'positive':
-            if value <= 0:
-                fail()
-        else:
-            raise NotImplementedError(f'unsupported range {range!r}')
-    elif not value:
-        if not required:
-            return None
-        raise ValueError(f'missing {name}' if name else 'missing')
-    else:
-        fail()
+    def __init__(self, label):
+        if not label:
+            raise ValueError('missing label')
+        elif not isinstance(label, str):
+            raise TypeError(label)
+        self._label = label
 
+    def __repr__(self):
+        return f'{type(self).__name__}({self._label!r})'
 
-def normalize_int(value, name=None, *,
-                  range=None,
-                  coerce=False,
-                  required=True,
-                  ):
-    if coerce:
-        value = coerce_int(value)
-    return validate_int(value, name, range=range, required=required)
+    def __str__(self):
+        return self._label
 
 
 def get_slice(raw):

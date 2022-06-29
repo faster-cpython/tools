@@ -143,6 +143,15 @@ class CompileBenchRequest(Request):
         return release
 
     @property
+    def versionstr(self):
+        return _utils.CPythonVersion.render_extended(
+            version=self.release,
+            bits=64,
+            commit=self.ref.commit[:10],
+        )
+        return f'{version} ({bits}-bit) revision {commit}'
+
+    @property
     def result(self):
         return CompileBenchResult(self.id, self.reqdir)
 
@@ -185,10 +194,25 @@ class CompileBenchResult(Result):
         try:
             return self._pyperf
         except AttributeError:
+            filename = self.fs.pyperformance_results
             resfile = _pyperformance.PyperfResultsFile(
-                self.fs.pyperformance_results,
+                filename,
+                resultsroot=self.fs.resultsroot,
             )
-            self._pyperf = resfile.read(self.host, self.request.release)
+#            self._pyperf = resfile.read(self.host, self.request.release)
+            results = resfile.read()
+
+            modified = False
+            PMD = _pyperformance.PyperfResultsMetadata
+            if PMD.overwrite_raw(results.data, 'hostid', self.host):
+                modified = True
+            pyversion = self.request.versionstr
+            if PMD.overwrite_raw_all(results.data, 'python_version', pyversion):
+                modified = True
+            if modified:
+                resfile.write(results)
+
+            self._pyperf = results
             return self._pyperf
 
 
