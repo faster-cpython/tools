@@ -3741,7 +3741,11 @@ class CPythonVersion(Version):
     @classmethod
     def render_extended(cls, version, bits, commit):
         if isinstance(version, str):
-            assert CPythonVersion.parse(version), version
+            if not CPythonVersion.parse(version):
+                if version == 'main':
+                    version = cls.resolve_main()
+                else:
+                    raise ValueError(version)
         elif isinstance(version, Version):
             pass
 #            version = version.full
