@@ -697,10 +697,14 @@ class PyperfComparison:
                 _byname[name] = PyperfComparisonValue.parse(value, fail=True)
             if sorted(_byname) != sorted(baseline.byname):
                 raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
+
+        if mean:
+            mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
+
         self._baseline = baseline
         self._source = source
         self._byname = _byname
-        self._mean = _utils.ElapsedTimeComparison.parse(mean)
+        self._mean = mean or None
 
     def __repr__(self):
         values = [f'{a}={getattr(self, "_"+a)!r}' for a in self._fields]
