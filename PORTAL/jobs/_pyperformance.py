@@ -1939,6 +1939,7 @@ class PyperfResultsIndex:
                     continue
                 i = entry_indices[info]
                 copied = info._replace(compared=compared)
+                entry_indices[copied] = i
                 self._entries[i] = copied
                 updated.append((info, copied))
         return updated
