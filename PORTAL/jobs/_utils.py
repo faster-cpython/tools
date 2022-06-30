@@ -1896,10 +1896,12 @@ class GitLocalRepo(GitRepo):
         return os.path.exists(self._root)
 
     def _git(self, cmd, args, cfg):
-        return _git(cmd, args, self._root, cfg)
+        text = _git(cmd, args, self._root, cfg)
+        return text.strip()
 
     def _git_raw(self, cmd, args, cfg):
-        return _git_raw(cmd, args, self._root, cfg)
+        ec, text = _git_raw(cmd, args, self._root, cfg)
+        return ec, text.strip()
 
     def resolve(self, *relpath):
         return os.path.join(self._root, *relpath)
@@ -1939,7 +1941,7 @@ class GitLocalRepo(GitRepo):
             if remote.name != 'origin':
                 self.git('fetch', '--tags', str(remote))
             branch = self.branches.current
-            self.git('reset', '--hard', f'{remote}/{branch}')
+            self.git('reset', '--hard', f'{remote.name}/{branch}')
         else:
             self.clean()
 
