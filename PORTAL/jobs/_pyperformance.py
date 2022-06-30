@@ -2489,8 +2489,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
         elif not isinstance(remote, _utils.GitHubTarget):
             raise TypeError(f'unsupported remote {remote!r}')
         raw = remote.ensure_local(root)
-        raw.clean()
-        raw.switch_branch('main')
+#        raw.clean()
+#        raw.switch_branch('main')
         kwargs = {}
         if datadir:
             kwargs['datadir'] = datadir
@@ -2554,9 +2554,12 @@ class PyperfResultsRepo(PyperfResultsStorage):
             author=None,
             compressed=False,
             split=True,
+            clean=True,
             push=True,
             ):
         repo = self._raw.using_author(author)
+        if clean:
+            repo.refresh()
         repo.switch_branch(branch or self.BRANCH)
 
         #added = self._resultsdir.add(info, ...)

@@ -855,7 +855,7 @@ class Job:
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
-    def upload_result(self, author=None, *, push=True):
+    def upload_result(self, author=None, *, clean=True, push=True):
         res = self.load_result()
         # We upload directly.
         self._store.add(
@@ -864,6 +864,7 @@ class Job:
             author=author,
             compressed=False,
             split=True,
+            clean=clean,
             push=push,
         )
 
