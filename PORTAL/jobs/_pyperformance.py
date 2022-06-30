@@ -2480,37 +2480,58 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
     BRANCH = 'add-benchmark-results'
 
-    def __init__(self, root, remote=None, datadir=None, baseline=None):
+    @classmethod
+    def from_remote(cls, remote, root, datadir=None, baseline=None):
         if root:
             root = os.path.abspath(root)
-        if remote:
-            if isinstance(remote, str):
-                remote = _utils.GitHubTarget.resolve(remote, root)
-            elif not isinstance(remote, _utils.GitHubTarget):
-                raise TypeError(f'unsupported remote {remote!r}')
-            root = remote.ensure_local(root)
-        else:
-            if root:
-                if not os.path.exists(root):
-                    raise FileNotFoundError(root)
-                #_utils.verify_git_repo(root)
-            else:
-                raise ValueError('missing root')
-            remote = None
-        self.root = root
+        if isinstance(remote, str):
+            remote = _utils.GitHubTarget.resolve(remote, root)
+        elif not isinstance(remote, _utils.GitHubTarget):
+            raise TypeError(f'unsupported remote {remote!r}')
+        raw = remote.ensure_local(root)
+        raw.clean()
+        raw.switch_branch('main')
+        kwargs = {}
+        if datadir:
+            kwargs['datadir'] = datadir
+        if baseline:
+            kwargs['baseline'] = baseline
+        return cls(raw, remote, **kwargs)
+
+    @classmethod
+    def from_root(cls, root, datadir=None, baseline=None):
+        if root:
+            root = os.path.abspath(root)
+        raw = _utils.GitLocalRepo.ensure(root)
+        if not raw.exists:
+            raise FileNotFoundError(root)
+        remote = None
+        kwargs = {}
+        if datadir:
+            kwargs['datadir'] = datadir
+        if baseline:
+            kwargs['baseline'] = baseline
+        return cls(raw, remote, **kwargs)
+
+    def __init__(self, raw, remote=None, datadir=None, baseline=None):
+        if not raw:
+            raise ValueError('missing raw')
+        elif not isinstance(raw, _utils.GitLocalRepo):
+            raise TypeError(raw)
+        if remote and not isinstance(remote, _utils.GitHubTarget):
+            raise TypeError(f'unsupported remote {remote!r}')
+        self._raw = raw
         self.datadir = datadir or None
-        self.remote = remote
+        self.remote = remote or None
 
         self._baseline = baseline
         self._resultsdir = PyperfUploadsDir(
-            os.path.join(root, datadir) if datadir else root,
+            raw.resolve(datadir) if datadir else raw.root,
         )
 
-    def _git(self, *args, cfg=None):
-        ec, text = _utils.git_raw(*args, cwd=self.root, cfg=cfg)
-        if ec:
-            raise NotImplementedError((ec, text))
-        return text
+    @property
+    def root(self):
+        return self._raw.root
 
     def iter_all(self):
         for info in self._resultsdir.iter_from_files():
@@ -2535,8 +2556,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
             split=True,
             push=True,
             ):
-        branch, gitcfg = self._prep_for_commit(branch, author)
-        self._git('checkout', '-B', branch)
+        repo = self._raw.using_author(author)
+        repo.switch_branch(branch or self.BRANCH)
 
         #added = self._resultsdir.add(info, ...)
         added = self._resultsdir.add_from_results(
@@ -2551,46 +2572,21 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         logger.info('committing to the repo...')
         for info in added:
-            relfile = os.path.relpath(info.filename, self.root)
-            self._git('add', relfile)
-        self._git('add', self._resultsdir.indexfile)
-        self._git('add', os.path.relpath(readme, self.root))
+            repo.add(info.filename)
+        repo.add(self._resultsdir.indexfile)
+        repo.add(readme)
         msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
-        self._git('commit', '-m', msg, cfg=gitcfg)
+        repo.commit(msg)
         logger.info('...done committing')
 
         if push:
             self._upload(self.datadir or '.')
 
-    def _prep_for_commit(self, branch, author):
-        if not branch:
-            branch = self.BRANCH
-
-        # We already ran self.remote.ensure_local() in __init__().
-
-        cfg = {}
-        if not author:
-            pass
-        elif isinstance(author, str):
-            parsed = _utils.parse_email_address(author)
-            if not parsed:
-                raise ValueError(f'invalid author {author!r}')
-            name, email = parsed
-            if not name:
-                name = '???'
-                author = f'??? <{author}>'
-            cfg['user.name'] = name
-            cfg['user.email'] = email
-        else:
-            raise NotImplementedError(author)
-
-        return branch, cfg
-
     def _update_table(self, index):
         table_lines = self._render_markdown(index)
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
-        filename = os.path.join(self.root, 'README.md')
+        filename = self._raw.resolve('README.md')
         with open(filename) as infile:
             text = infile.read()
         try:
@@ -2626,7 +2622,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             if suite not in by_suite:
                 by_suite[suite] = []
             date, release, commit, host, mean = row
-            relpath = os.path.relpath(info.filename, self.root)
+            relpath = self._raw.relpath(info.filename)
             relpath = relpath.replace('\/', '/')
             date = f'[{date}]({relpath})'
             if not mean:
@@ -2652,7 +2648,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise Exception('missing remote')
         url = f'{self.remote.url}/tree/main/{reltarget}'
         logger.info(f'uploading results to {url}...')
-        self._git('push', self.remote.push_url)
+        self._raw.push(self.remote.push_url)
         logger.info('...done uploading')
 
 
@@ -2665,7 +2661,17 @@ class FasterCPythonResults(PyperfResultsRepo):
     DATADIR = 'benchmark-results'
     BASELINE = '3.10.4'
 
-    def __init__(self, root=None, remote=None, baseline=BASELINE):
+    @classmethod
+    def from_remote(cls, remote=None, root=None, baseline=None):
         if not remote:
-            remote = self.REMOTE
+            remote = cls.REMOTE
+        return super().from_remote(remote, root, baseline=baseline)
+
+    @classmethod
+    def from_root(cls, root, baseline=None):
+        raise NotImplementedError
+
+    def __init__(self, root, remote, baseline=BASELINE):
+        if not remote:
+            raise ValueError('missing remote')
         super().__init__(root, remote, self.DATADIR, baseline)

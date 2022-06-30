@@ -1037,7 +1037,7 @@ class Jobs:
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
-        self._store = _pyperformance.FasterCPythonResults()
+        self._store = _pyperformance.FasterCPythonResults.from_remote()
 
     def __str__(self):
         return self._fs.root

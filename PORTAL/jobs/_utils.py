@@ -1344,18 +1344,22 @@ def looks_like_git_ref(value):
 
 
 def git(cmd, *args, cwd=HOME, cfg=None):
-    ec, text = _git(cmd, args, cwd, cfg)
+    return _git(cmd, args, cwd, cfg)
+
+
+def git_raw(cmd, *args, cwd=HOME, cfg=None):
+    return _git_raw(cmd, args, cwd, cfg)
+
+
+def _git(cmd, args, cwd, cfg):
+    ec, text = _git_raw(cmd, args, cwd, cfg)
     if ec != 0:
         print(text)
         raise NotImplementedError(ec)
     return text
 
 
-def git_raw(cmd, *args, cwd=HOME, cfg=None):
-    return _git(cmd, args, cwd, cfg)
-
-
-def _git(cmd, args, cwd, cfg, *, GIT=shutil.which('git')):
+def _git_raw(cmd, args, cwd, cfg, *, GIT=shutil.which('git')):
     env = dict(os.environ)
     preargs = []
     if cfg:
@@ -1533,29 +1537,27 @@ class GitHubTarget(types.SimpleNamespace):
         else:
             return GitRemoteInfo.from_url(self.url, self.push_url)
 
-    def ensure_local(self, reporoot=None):
-        remote = vars(self)['remote']
-        origin = self.origin or self
+    def _resolve_origin_info(self, remotename):
+        if remotename:
+            if not looks_like_git_name(remotename):
+                raise ValueError(remotename)
+            copied = self.copy()
+            vars(copied)['remote'] = remotename
+            remote = copied.as_remote_info()
+        else:
+            remote = self.as_remote_info()
+        return remote if remote.name else remote.as_origin()
+
+    def ensure_local(self, reporoot=None, remotename=None):
+        origin = self._resolve_origin_info(remotename)
         if reporoot:
             reporoot = os.path.abspath(reporoot)
         else:
-            reporoot = os.path.join(HOME, f'{origin.org}-{origin.project}')
-            #reporoot = os.path.join(HOME, self.project)
-        if os.path.exists(reporoot):
-            git_raw('fetch', '--tags', 'origin', cwd=reporoot)
-            if remote and remote != 'origin':
-                git_raw('fetch', '--tags', remote, cwd=reporoot)
-            git('checkout', '-B', 'main', cwd=reporoot)
-            #git_raw('pull', cwd=reporoot)
-            git_raw('reset', '--hard', 'origin/main', cwd=reporoot)
-        else:
-            git('clone', origin.url, reporoot)
-            if remote:
-                git_raw('remote', 'add', '-f', '--tags', remote, self.url,
-                        cwd=reporoot)
-                git_raw('remote', 'set-url', '--push', remote, self.push_url,
-                        cwd=reporoot)
-        return reporoot
+            reporoot = os.path.join(HOME, f'{self.org}-{self.project}')
+        repo = GitLocalRepo.ensure(reporoot, origin)
+        if origin.name != 'origin':
+            repo.remotes.add(remote)
+        return repo
 
     def copy(self, ref=None):
         return type(self)(
@@ -1594,7 +1596,9 @@ class GitRemoteInfo(namedtuple('GitRemoteInfo', 'url name pushurl')):
         elif isinstance(raw, str) and looks_like_git_remote_url(raw):
             return cls.from_url(raw)
         else:
-            raise TypeError(raw)
+            if fail or fail is None:
+                raise TypeError(raw)
+            return None
 
     @classmethod
     def from_name(cls, name, url, pushurl=True):
@@ -1623,7 +1627,7 @@ class GitRemoteInfo(namedtuple('GitRemoteInfo', 'url name pushurl')):
         self = super().__new__(
             cls,
             url=url or None,
-            name=name or None
+            name=name or None,
             pushurl=pushurl or None,
         )
         return self
@@ -1645,6 +1649,9 @@ class GitRemoteInfo(namedtuple('GitRemoteInfo', 'url name pushurl')):
             elif not looks_like_git_remote_url(self.pushurl):
                 raise ValueError(self.pushurl)
 
+    def __str__(self):
+        return self.url
+
     def change_name(self, name):
         self._validate_name(name)
         return self._replace(name=name)
@@ -1653,6 +1660,332 @@ class GitRemoteInfo(namedtuple('GitRemoteInfo', 'url name pushurl')):
         if self.name == 'origin':
             return self
         return self._replace(name='origin')
+
+
+class GitRemotes:
+
+    def __init__(self, repo):
+        _repo = GitLocalRepo.from_raw(repo)
+        if not repo:
+            raise TypeError(repo)
+        self._repo = repo
+
+    def _git(self, cmd, *args):
+        return self._repo.git('remote', cmd, *args)
+
+    def resolve(self, remote):
+        try:
+            remote = GitRemoteInfo.from_raw(remote, fail=True)
+        except Exception:
+            if not remote:
+                raise  # re-raise
+            GitRemoteInfo.from_raw(remote, fail=False)
+            if not isinstance(remote, str) or not looks_like_git_name(remote):
+                raise  # re-raise
+            return self.get(remote)
+        else:
+            # XXX Match an existing remote.
+            return remote
+
+    def get(self, name):
+        if not name:
+            raise ValueError('missing name')
+        elif not isinstance(name, str):
+            raise TypeError(name)
+        elif not looks_like_git_name(name):
+            raise ValueError(name)
+        ec, url = self._repo.git_raw('remote', 'get-url', name)
+        if ec != 0:
+            url = None
+        ec, pushurl = self._repo.git_raw('remote', 'get-url', '--push', name)
+        if ec != 0:
+            pushurl = None
+        if not url or not pushurl:
+            return None
+        return GitRemoteInfo.from_name(name, url, pushurl)
+
+    def add(self, remote):
+        remote = GitRemoteInfo.from_raw(remote, fail=True)
+        if not remote.name:
+            raise ValueError('missing remote name')
+        self._git('add', remote.name, remote.url)
+        if not remote.pushurl:
+            # XXX Set to a bogus value?
+            raise NotImplementedError
+        elif remote.pushurl != remote.url:
+            self._git('set-url', '--push', remote.name, remote.pushurl)
+
+
+class GitBranches:
+
+    def __init__(self, repo):
+        _repo = GitLocalRepo.from_raw(repo)
+        if not repo:
+            raise TypeError(repo)
+        self._repo = repo
+
+    @property
+    def current(self):
+        return self._repo.git('rev-parse', '--abbrev-ref', 'HEAD')
+
+
+class GitRepo:
+
+    @classmethod
+    def from_raw(cls, raw, *, fail=None):
+        if not raw:
+            if fail:
+                raise ValueError('missing repo')
+            return None
+        elif isinstance(raw, cls):
+            return raw
+        elif isinstance(raw, str):
+            return cls._parse(raw)
+        else:
+            raise TypeError(raw)
+
+    @classmethod
+    def _parse(cls, repostr):
+        raise NotImplementedError(repostr)
+
+    def __init__(self, location, cfg=None):
+        if not location:
+            raise ValueError('missing location')
+        self._loc = location
+        self._cfg = cfg or None
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._loc!r})'
+
+    def __str__(self):
+        return self._loc
+
+    def __eq__(self, other):
+        if not isinstance(other, GitRepo):
+            return NotImplemented
+        return self._loc == other._loc
+
+    def __hash__(self):
+        return hash(self._loc)
+
+    def _verify(self):
+        raise NotImplementedError
+
+    @property
+    def location(self):
+        return self._loc
+
+    @property
+    def branches(self):
+        try:
+            return self._branches
+        except AttributeError:
+            self._branches = GitBranches(self)
+            return self._branches
+
+    @property
+    def exists(self):
+        raise NotImplementedError
+
+    def git(self, cmd, *args, cfg=None):
+        if cfg is None:
+            cfg = self._cfg
+        return self._git(cmd, args, cfg)
+
+    def git_raw(self, cmd, *args, cfg=None):
+        if cfg is None:
+            cfg = self._cfg
+        return self._git_raw(cmd, args, cfg)
+
+    def _git(self, cmd, args, cfg):
+        raise NotImplementedError
+
+    def _git_raw(self, cmd, args, cfg):
+        raise NotImplementedError
+
+    def verify(self):
+        if not self.exists:
+            raise ValueError(f'repo missing ({self._loc})')
+        self._verify()
+
+    def resolve(self, *relpath):
+        raise NotImplementedError
+
+
+class GitLocalRepo(GitRepo):
+
+    @classmethod
+    def ensure(cls, root, origin=None):
+        origin = GitRemoteInfo.from_raw(origin)
+        self = cls(root)
+        if self.exists:
+            self._verify()
+            if origin:
+                remote = origin
+                origin = origin.as_origin()
+                if not self.remotes.resolve(origin):
+                    raise ValueError(f'missing/mismatched origin {origin!r}')
+                self.git('fetch', '--tags')
+                if remote.name and remote.name != 'origin':
+                    self.git('fetch', '--tags', remote.name)
+            else:
+                self.git('fetch', '--tags')
+        elif not origin:
+            # XXX init the repo?
+            raise ValueError('missing origin')
+        else:
+            self._clone(origin.url)
+            if origin.pushurl != origin.url:
+                self.remotes.add(origin)
+            self.git('fetch', '--tags')
+        return self
+
+    @classmethod
+    def _parse(cls, repostr):
+        # XXX Make sure it looks like a dirname.
+        return cls(raw)
+
+    def __init__(self, root, cfg=None):
+        super().__init__(root, cfg)
+        if not os.path.isabs(root):
+            raise ValueError(f'expected absolute root, got {root!r}')
+        self._root = root
+
+    def _verify(self):
+        # XXX Check .git, etc.
+        ...
+
+    def _clone(self, origin):
+        git('clone', str(origin), self._root)
+
+    @property
+    def root(self):
+        return self._root
+
+    @property
+    def remotes(self):
+        try:
+            return self._remotes
+        except AttributeError:
+            self._remotes = GitRemotes(self)
+            return self._remotes
+
+    @property
+    def branches(self):
+        try:
+            return self._branches
+        except AttributeError:
+            self._branches = GitBranches(self)
+            return self._branches
+
+    @property
+    def exists(self):
+        return os.path.exists(self._root)
+
+    def _git(self, cmd, args, cfg):
+        return _git(cmd, args, self._root, cfg)
+
+    def _git_raw(self, cmd, args, cfg):
+        return _git_raw(cmd, args, self._root, cfg)
+
+    def resolve(self, *relpath):
+        return os.path.join(self._root, *relpath)
+
+    def relpath(self, filename):
+        relfile = os.path.relpath(filename, self._root)
+        if relfile.startswith(f'..{os.path.sep}') or os.path.isabs(relfile):
+            raise NotImplementedError(filename)
+        return relfile
+
+    def fetch(self, remote=None):
+        if remote:
+            remote = self.remotes.resolve(remote)
+            self.git('fetch', '--tags', str(remote))
+        else:
+            self.git('fetch', '--tags')
+
+    def pull(self, remote=None):
+        if remote:
+            remote = self.remotes.resolve(remote)
+            self.git('pull', str(remote))
+        else:
+            self.git('pull')
+
+    def is_clean(self):
+        ec, _ = self.git_raw('diff-index', '--quiet', 'HEAD')
+        return True if ec == 0 else False
+
+    def clean(self):
+        self.git_raw('reset', '--hard', 'HEAD')
+        self.git_raw('clean', '-d', '--force')
+
+    def refresh(self, remote='origin'):
+        self.git('fetch', '--tags')
+        if remote:
+            remote = self.remotes.resolve(remote)
+            if remote.name != 'origin':
+                self.git('fetch', '--tags', str(remote))
+            branch = self.branches.current
+            self.git('reset', '--hard', f'{remote}/{branch}')
+        else:
+            self.clean()
+
+    def checkout(self, ref='HEAD'):
+        if not ref:
+            raise ValueError('missing ref')
+        elif not isinstance(ref, str):
+            raise NotImplementedError(ref)
+        if not self.is_clean():
+            raise NotImplementedError
+        self.git('checkout', ref)
+
+    def switch_branch(self, branch, base='main'):
+        if not branch:
+            raise ValueError('missing branch')
+        elif not isinstance(branch, str):
+            raise NotImplementedError(branch)
+        self.checkout(base)
+        self.git('checkout', '-B', branch)
+
+    def add(self, filename, *others):
+        relfile = self.relpath(filename)
+        relothers = (self.relpath(f) for f in others)
+        self.git('add', relfile, *relothers)
+
+    def commit(self, msg):
+        self.git('commit', '-m', msg)
+
+    def push(self, remote=None):
+        if not remote:
+            self.git('push')
+        else:
+            if not isinstance(remote, str):
+                raise NotImplementedError(remote)
+            elif not looks_like_git_remote(remote):
+                raise ValueError(remote)
+            self.git('push', remote)
+
+    def swap_config(self, cfg):
+        cls = type(self)
+        return cls(self._root, cfg)
+
+    def using_author(self, author=None):
+        cfg = {}
+        if not author:
+            pass
+        elif isinstance(author, str):
+            parsed = parse_email_address(author)
+            if not parsed:
+                raise ValueError(f'invalid author {author!r}')
+            name, email = parsed
+            if not name:
+                name = '???'
+                author = f'??? <{author}>'
+            cfg['user.name'] = name
+            cfg['user.email'] = email
+        else:
+            raise NotImplementedError(author)
+        return self.swap_config(cfg)
 
 
 class GitRefRequest(namedtuple('GitRefRequest', 'remote branch revision')):
