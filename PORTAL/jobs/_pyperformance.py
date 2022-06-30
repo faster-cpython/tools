@@ -1908,6 +1908,8 @@ class PyperfResultsIndex:
 
     def _add(self, info):
         #assert info
+        # XXX Do not add if already added.
+        # XXX Fail if compatid is different but fails are same?
         self._entries.append(info)
 
     def add_from_results(self, results, compared=None):
@@ -2428,7 +2430,10 @@ class PyperfResultsDir:
 
         # Then update the index.
         logger.info('updating index...')
-        index = self.load_index(baseline=baseline)
+        try:
+            index = self.load_index(baseline=baseline, createifmissing=False)
+        except FileNotFoundError:
+            index = PyperfResultsIndex()
         for results in copied:
             info = index.add_from_results(results)
             # XXX Do this after everything has been yielded.
