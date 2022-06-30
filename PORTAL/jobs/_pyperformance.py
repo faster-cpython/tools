@@ -2434,11 +2434,10 @@ class PyperfResultsDir:
             index = PyperfResultsIndex()
         for results in copied:
             info = index.add_from_results(results)
-            # XXX Do this after everything has been yielded.
-            if baseline:
-                index.ensure_means(baseline=baseline)
-            self.save_index(index)
             yield info
+        if baseline:
+            index.ensure_means(baseline=baseline)
+        self.save_index(index)
         logger.info('...done updating index')
 
 #    def add_from_file(self, filename):
