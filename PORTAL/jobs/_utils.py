@@ -45,6 +45,19 @@ def check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
+def check_str(valuestr, label=None, *, required=False, fail=False):
+    if not valuestr:
+        if required:
+            if fail:
+                raise ValueError(f'missing {label}' if label else 'missing')
+            return False
+    elif not isinstance(valuestr, str):
+        if fail or fail is None:
+            raise TypeError(valuestr)
+        return False
+    return True
+
+
 def validate_str(value, argname=None, *, required=True):
     validate_arg(value, str, argname, required=required)
 
