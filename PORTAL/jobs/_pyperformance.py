@@ -600,76 +600,15 @@ class PyperfComparisonValue:
         return self._comparison == self.BASELINE
 
 
-class PyperfComparisonBaseline:
-    """The filename and set of result values for baseline results."""
+class _PyperfComparison:
 
-    def __init__(self, source, byname=None):
-        if not source:
-            raise ValueError('missing source')
-        # XXX Validate source as a filename.
-        #elif not os.path.isabs(source):
-        #    raise ValueError(f'expected an absolute source, got {source!r}')
-        _byname = {}
-        if byname:
-            for name, value in byname.items():
-                assert name and isinstance(name, str), (name, value, byname)
-                assert value and isinstance(value, str), (name, value, byname)
-                _byname[name] = _utils.ElapsedTimeWithUnits.parse(value, fail=True)
-        self._source = source or None
-        self._byname = byname
-
-    def __repr__(self):
-        return f'{type(self).__name__}({self._source!r}, {self._byname!r})'
-
-    def __str__(self):
-        return f'<baseline {self._source!r}>'
-
-    def __hash__(self):
-        try:
-            return self._hash
-        except AttributeError:
-            self._hash = hash((
-                self._source,
-                tuple(sorted(self._byname.items())) if self._byname else (),
-            ))
-            return self._hash
-
-    def __eq__(self, other):
-        if not isinstance(other, PyperfComparisonBaseline):
-            return NotImplemented
-        if self._source != other._source:
-            return False
-        if self._byname != other._byname:
-            return False
-        return True
-
-    @property
-    def source(self):
-        return self._source
-
-    @property
-    def byname(self):
-        return dict(self._byname)
-
-
-class PyperfComparison:
-    """The per-benchmark differences between one results set and a baseline.
-
-    The comparison values are a mapping from benchmark name to the
-    relative differences (e.g. "1.04x faster").  The geometric mean
-    is also provided.
-    """
-
-    _fields = 'baseline source byname mean'.split()
-
-    Summary = namedtuple('Summary',
-                         'bench baseline baseresult source result comparison')
+    kind = None
 
     @classmethod
     def from_raw(cls, raw, *, fail=None):
         if not raw:
             if fail:
-                raise ValueError('missing comparison')
+                raise ValueError(f'missing {cls.kind}')
             return None
         elif isinstance(raw, cls):
             return raw
@@ -678,65 +617,53 @@ class PyperfComparison:
                 raise TypeError(raw)
             return None
 
-    def __init__(self, baseline, source, mean, byname=None):
-        if not baseline:
-            raise ValueError('missing baseline')
-        elif not isinstance(baseline, PyperfComparisonBaseline):
-            raise TypeError(baseline)
-        if not source:
-            raise ValueError('missing source')
-        # XXX Validate source as a filename.
-        #elif not os.path.isabs(source):
-        #    raise ValueError(f'expected an absolute source, got {source!r}')
+    @classmethod
+    def _parse_value(cls, valuestr):
+        return _utils.ElapsedTimeWithUnits.parse(valuestr, fail=True)
+
+    def __init__(self, source, byname=None):
+        _utils.check_str(source, 'source', required=True, fail=True)
+        if not os.path.isabs(source):
+            raise ValueError(f'expected an absolute source, got {source!r}')
+        # XXX Further validate source as a filename?
 
         _byname = {}
         if byname:
             for name, value in byname.items():
                 assert name and isinstance(name, str), (name, value, byname)
                 assert value and isinstance(value, str), (name, value, byname)
-                _byname[name] = PyperfComparisonValue.parse(value, fail=True)
-            if sorted(_byname) != sorted(baseline.byname):
-                raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
+                _byname[name] = self._parse_value(value)
 
-        if mean:
-            mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
-
-        self._baseline = baseline
         self._source = source
         self._byname = _byname
-        self._mean = mean or None
 
     def __repr__(self):
-        values = [f'{a}={getattr(self, "_"+a)!r}' for a in self._fields]
-        return f'{type(self).__name__}({", ".join(values)})'
+        return f'{type(self).__name__}({self._source!r}, {self._byname!r})'
 
     def __str__(self):
-        return f'<{self._mean} ({self._source})>'
+        return f'<{self.kind} {self._source!r}>'
 
     def __hash__(self):
         try:
             return self._hash
         except AttributeError:
-            self._hash = hash((
-                self._baseline,
-                self._source,
-                tuple(sorted(self._byname.items())),
-                self._mean,
-            ))
+            self._hash = hash(self._as_hashable())
             return self._hash
 
     def __eq__(self, other):
-        if not isinstance(other, PyperfComparison):
+        if not isinstance(other, _PyperfComparison):
             return NotImplemented
-        for field in self._fields:
-            field = '_' + field
-            if getattr(self, field) != getattr(other, field):
-                return False
+        if self._source != other._source:
+            return False
+        if self._byname != other._byname:
+            return False
         return True
 
-    @property
-    def baseline(self):
-        return self._baseline
+    def _as_hashable(self):
+        return (
+            self._source,
+            tuple(sorted(self._byname.items())) if self._byname else (),
+        )
 
     @property
     def source(self):
@@ -745,6 +672,73 @@ class PyperfComparison:
     @property
     def byname(self):
         return dict(self._byname)
+
+
+class PyperfComparisonBaseline(_PyperfComparison):
+    """The filename and set of result values for baseline results."""
+
+    kind = 'baseline'
+
+
+class PyperfComparison(_PyperfComparison):
+    """The per-benchmark differences between one results set and a baseline.
+
+    The comparison values are a mapping from benchmark name to the
+    relative differences (e.g. "1.04x faster").  The geometric mean
+    is also provided.
+    """
+
+    kind = 'comparison'
+
+    Summary = namedtuple('Summary',
+                         'bench baseline baseresult source result comparison')
+
+    @classmethod
+    def _parse_value(cls, valuestr):
+        return PyperfComparisonValue.parse(valuestr, fail=True)
+
+    def __init__(self, baseline, source, mean, byname=None):
+        super().__init__(source, byname)
+        baseline = PyperfComparisonBaseline.from_raw(baseline, fail=True)
+        if self._byname and sorted(self._byname) != sorted(baseline.byname):
+            raise ValueError(f'mismatch with baseline ({sorted(self._byname)} != {sorted(baseline.byname)})')
+        if mean:
+            mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
+
+        self._baseline = baseline
+        self._mean = mean or None
+
+    def __repr__(self):
+        fields = 'baseline source byname mean'.split()
+        values = [f'{a}={getattr(self, "_"+a)!r}' for a in fields]
+        return f'{type(self).__name__}({", ".join(values)})'
+
+    def __str__(self):
+        return f'<{self._mean} ({self._source})>'
+
+    __hash__ = _PyperfComparison.__hash__
+
+    def __eq__(self, other):
+        if not isinstance(other, PyperfComparison):
+            return NotImplemented
+        if not super().__eq__(other):
+            return False
+        if self._baseline != other._baseline:
+            return False
+        if self._mean != other._mean:
+            return False
+        return True
+
+    def _as_hashable(self):
+        return (
+            self._baseline,
+            *super()._as_hashable(),
+            self._mean,
+        )
+
+    @property
+    def baseline(self):
+        return self._baseline
 
     @property
     def mean(self):
@@ -1707,7 +1701,8 @@ class PyperfResultsInfo(
                 return None
             if not hasattr(self, '_resultsroot'):
                 return os.path.basename(self.filename)
-            self._relfile = os.path.relpath(self.filename, self._resultsroot)
+            self._relfile = _utils.strinct_relpath(self.filename,
+                                                   self._resultsroot)
             return self._relfile
 
     @property
@@ -1963,12 +1958,11 @@ class PyperfResultsIndex:
 def normalize_results_filename(filename, resultsroot=None):
     if not filename:
         raise ValueError('missing filename')
-    resultsroot = os.path.abspath(resultsroot) if resultsroot else None
+    if resultsroot and not os.path.isabs(resultsroot):
+        raise ValueError(resultsroot)
     if os.path.isabs(filename):
         if resultsroot:
-            relfile = os.path.relpath(filename, resultsroot)
-            if relfile.startswith('..' + os.path.sep):
-                raise ValueError(f'filename does not match resultsroot ({filename!r}, {resultsroot!r})')
+            relfile = _utils.strict_relpath(filename, resultsroot)
         else:
             resultsroot, relfile = os.path.split(filename)
     else:
@@ -2144,8 +2138,9 @@ class PyperfResultsFile:
             *(optional),
             '--table',
             self._relfile,
-            *(os.path.relpath(o.filename, cwd)
-              for o in others),
+#            *(_utils.strict_relpath(o.filename, cwd)
+#              for o in others),
+            *(o._relfile for o in others),
             cwd=cwd,
         )
         if proc.returncode:
@@ -2153,7 +2148,8 @@ class PyperfResultsFile:
             return None
         filenames = [
             self._filename,
-            *(os.path.join(cwd, o.filename) for o in others),
+#            *(os.path.join(cwd, o.filename) for o in others),
+            *(o.filename for o in others),
         ]
         return PyperfComparisons.parse_table(proc.stdout, filenames)
 #        return PyperfTable.parse(proc.stdout, filenames)
@@ -2186,10 +2182,11 @@ class PyperfResultsDir:
         return uploadid
 
     def __init__(self, root):
-        if not root:
-            raise ValueError('missing root')
-        self._root = os.path.abspath(root)
-        self._indexfile = os.path.join(self._root, self.INDEX)
+        _utils.check_str(root, 'root', required=True, fail=True)
+        if not os.path.isabs(root):
+            raise ValueError(root)
+        self._root = root
+        self._indexfile = os.path.join(root, self.INDEX)
 
     def __repr__(self):
         return f'{type(self).__name__}({self._root!r})'
@@ -2205,14 +2202,18 @@ class PyperfResultsDir:
     def indexfile(self):
         return self._indexfile
 
-    def _info_from_values(self, filename, uploadid, build=None,
+    def _info_from_values(self, relfile, uploadid, build=None,
                           baseline=None, mean=None, *,
                           baselines=None):
+        assert not os.path.isabs(relfile), relfile
+        filename = os.path.join(self._root, relfile)
         if not build:
             build = ['PGO', 'LTO']
 #            # XXX Get it from somewhere.
 #            raise NotImplementedError
         if baseline:
+            assert not os.path.isabs(baseline), baseline
+            baseline = os.path.join(self._root, baseline)
             if baselines is not None:
                 try:
                     baseline = baselines[baseline]
@@ -2221,10 +2222,7 @@ class PyperfResultsDir:
                     baselines[baseline] = baseline
             else:
                 baseline = PyperfComparisonBaseline(baseline)
-            source = filename
-            if os.path.isabs(source):
-                source = os.path.relpath(source, self._root)
-            compared = PyperfComparison(baseline, source, mean)
+            compared = PyperfComparison(baseline, source=filename, mean=mean)
         else:
             assert not mean, mean
             compared = None
@@ -2357,10 +2355,10 @@ class PyperfResultsDir:
         if info.resultsroot != self._root:
             raise NotImplementedError((info, self._root))
         return {
-            'relative path': os.path.relpath(info.filename, self._root),
+            'relative path': _utils.strict_relpath(info.filename, self._root),
             'uploadid': str(info.uploadid),
             'build': ','.join(info.build) if info.build else None,
-            'baseline': (os.path.relpath(info.baseline, self._root)
+            'baseline': (_utils.strict_relpath(info.baseline, self._root)
                          if info.baseline
                          else None),
             'geometric mean': str(info.mean) if info.mean else None,
@@ -2487,8 +2485,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
     @classmethod
     def from_remote(cls, remote, root, datadir=None, baseline=None):
-        if root:
-            root = os.path.abspath(root)
+        if not root or not _utils.check_str(root):
+            root = None
+        elif not os.path.isabs(root):
+            raise ValueError(root)
         if isinstance(remote, str):
             remote = _utils.GitHubTarget.resolve(remote, root)
         elif not isinstance(remote, _utils.GitHubTarget):
@@ -2505,8 +2505,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
     @classmethod
     def from_root(cls, root, datadir=None, baseline=None):
-        if root:
-            root = os.path.abspath(root)
+        if not root or not _utils.check_str(root):
+            root = None
+        elif not os.path.isabs(root):
+            raise ValueError(root)
         raw = _utils.GitLocalRepo.ensure(root)
         if not raw.exists:
             raise FileNotFoundError(root)

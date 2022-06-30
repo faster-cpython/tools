@@ -866,6 +866,13 @@ def get_next_line(lines, notfound=None, *, skipempty=False):
         return notfound
 
 
+def strict_relpath(filename, rootdir):
+    relfile = os.path.relpath(filename, rootdir)
+    if relfile.startswith('..' + os.path.sep):
+        raise ValueError(f'relpath mismatch ({filename!r}, {rootdir!r})')
+    return relfile
+
+
 def write_json(data, outfile):
     json.dump(data, outfile, indent=4)
     print(file=outfile)
