@@ -376,6 +376,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             filename, *_ = self.resolve_filenames()
             return filename
 
+    @property
+    def sortkey(self):
+        # We leave commit and suite out.
+        return (self.impl, self.version, self.host, self.compatid)
+
     def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
         dirnames = []
         if dirname is True:
@@ -1746,7 +1751,7 @@ class PyperfResultsInfo(
 
     @property
     def sortkey(self):
-        return (self.uploadid, self.date)
+        return (*self.uploadid.sortkey, self.date)
 
     def match(self, specifier, suites=None, *, checkexists=False):
         # specifier: uploadID, version, filename
