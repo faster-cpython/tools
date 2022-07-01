@@ -2338,7 +2338,7 @@ class PyperfResultsDir:
     def save_index(self, index):
         # We use a basic tab-separated values format.
         rows = [self.INDEX_FIELDS]
-        for info in index.iter_all():
+        for info in sorted(index.iter_all(), key=(lambda v: v.sortkey)):
             row = self._render_as_row(info)
             rows.append(
                 [(row[f] or '') for f in self.INDEX_FIELDS]
