@@ -242,9 +242,9 @@ def cmd_wait(jobs, reqid=None):
         pass
 
 
-def cmd_upload(jobs, reqid, *, author=None, push=True):
+def cmd_upload(jobs, reqid, *, author=None, clean=True, push=True):
     job = jobs.get(reqid)
-    job.upload_result(author, push=push)
+    job.upload_result(author, clean=clean, push=push)
 
 
 def cmd_compare(jobs, res1, others, *, meanonly=False, pyston=False):
@@ -923,6 +923,8 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     sub = add_cmd('upload', help='Upload benchmark results to the public data store')
     if add_hidden:
         sub.add_argument('--author')
+        sub.add_argument('--no-clean', dest='clean', action='store_false')
+        sub.add_argument('--clean', dest='clean', action='store_const', const=True)
         sub.add_argument('--no-push', dest='push', action='store_false')
         sub.add_argument('--push', dest='push', action='store_const', const=True)
     sub.add_argument('reqid')

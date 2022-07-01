@@ -376,6 +376,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             filename, *_ = self.resolve_filenames()
             return filename
 
+    @property
+    def sortkey(self):
+        # We leave commit and suite out.
+        return (self.impl, self.version, self.host, self.compatid)
+
     def resolve_filenames(self, *, dirname=True, prefix=True, suffix=True):
         dirnames = []
         if dirname is True:
@@ -600,76 +605,15 @@ class PyperfComparisonValue:
         return self._comparison == self.BASELINE
 
 
-class PyperfComparisonBaseline:
-    """The filename and set of result values for baseline results."""
+class _PyperfComparison:
 
-    def __init__(self, source, byname=None):
-        if not source:
-            raise ValueError('missing source')
-        # XXX Validate source as a filename.
-        #elif not os.path.isabs(source):
-        #    raise ValueError(f'expected an absolute source, got {source!r}')
-        _byname = {}
-        if byname:
-            for name, value in byname.items():
-                assert name and isinstance(name, str), (name, value, byname)
-                assert value and isinstance(value, str), (name, value, byname)
-                _byname[name] = _utils.ElapsedTimeWithUnits.parse(value, fail=True)
-        self._source = source or None
-        self._byname = byname
-
-    def __repr__(self):
-        return f'{type(self).__name__}({self._source!r}, {self._byname!r})'
-
-    def __str__(self):
-        return f'<baseline {self._source!r}>'
-
-    def __hash__(self):
-        try:
-            return self._hash
-        except AttributeError:
-            self._hash = hash((
-                self._source,
-                tuple(sorted(self._byname.items())) if self._byname else (),
-            ))
-            return self._hash
-
-    def __eq__(self, other):
-        if not isinstance(other, PyperfComparisonBaseline):
-            return NotImplemented
-        if self._source != other._source:
-            return False
-        if self._byname != other._byname:
-            return False
-        return True
-
-    @property
-    def source(self):
-        return self._source
-
-    @property
-    def byname(self):
-        return dict(self._byname)
-
-
-class PyperfComparison:
-    """The per-benchmark differences between one results set and a baseline.
-
-    The comparison values are a mapping from benchmark name to the
-    relative differences (e.g. "1.04x faster").  The geometric mean
-    is also provided.
-    """
-
-    _fields = 'baseline source byname mean'.split()
-
-    Summary = namedtuple('Summary',
-                         'bench baseline baseresult source result comparison')
+    kind = None
 
     @classmethod
     def from_raw(cls, raw, *, fail=None):
         if not raw:
             if fail:
-                raise ValueError('missing comparison')
+                raise ValueError(f'missing {cls.kind}')
             return None
         elif isinstance(raw, cls):
             return raw
@@ -678,65 +622,53 @@ class PyperfComparison:
                 raise TypeError(raw)
             return None
 
-    def __init__(self, baseline, source, mean, byname=None):
-        if not baseline:
-            raise ValueError('missing baseline')
-        elif not isinstance(baseline, PyperfComparisonBaseline):
-            raise TypeError(baseline)
-        if not source:
-            raise ValueError('missing source')
-        # XXX Validate source as a filename.
-        #elif not os.path.isabs(source):
-        #    raise ValueError(f'expected an absolute source, got {source!r}')
+    @classmethod
+    def _parse_value(cls, valuestr):
+        return _utils.ElapsedTimeWithUnits.parse(valuestr, fail=True)
+
+    def __init__(self, source, byname=None):
+        _utils.check_str(source, 'source', required=True, fail=True)
+        if not os.path.isabs(source):
+            raise ValueError(f'expected an absolute source, got {source!r}')
+        # XXX Further validate source as a filename?
 
         _byname = {}
         if byname:
             for name, value in byname.items():
                 assert name and isinstance(name, str), (name, value, byname)
                 assert value and isinstance(value, str), (name, value, byname)
-                _byname[name] = PyperfComparisonValue.parse(value, fail=True)
-            if sorted(_byname) != sorted(baseline.byname):
-                raise ValueError(f'mismatch with baseline ({sorted(_byname)} != {sorted(baseline.byname)})')
+                _byname[name] = self._parse_value(value)
 
-        if mean:
-            mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
-
-        self._baseline = baseline
         self._source = source
         self._byname = _byname
-        self._mean = mean or None
 
     def __repr__(self):
-        values = [f'{a}={getattr(self, "_"+a)!r}' for a in self._fields]
-        return f'{type(self).__name__}({", ".join(values)})'
+        return f'{type(self).__name__}({self._source!r}, {self._byname!r})'
 
     def __str__(self):
-        return f'<{self._mean} ({self._source})>'
+        return f'<{self.kind} {self._source!r}>'
 
     def __hash__(self):
         try:
             return self._hash
         except AttributeError:
-            self._hash = hash((
-                self._baseline,
-                self._source,
-                tuple(sorted(self._byname.items())),
-                self._mean,
-            ))
+            self._hash = hash(self._as_hashable())
             return self._hash
 
     def __eq__(self, other):
-        if not isinstance(other, PyperfComparison):
+        if not isinstance(other, _PyperfComparison):
             return NotImplemented
-        for field in self._fields:
-            field = '_' + field
-            if getattr(self, field) != getattr(other, field):
-                return False
+        if self._source != other._source:
+            return False
+        if self._byname != other._byname:
+            return False
         return True
 
-    @property
-    def baseline(self):
-        return self._baseline
+    def _as_hashable(self):
+        return (
+            self._source,
+            tuple(sorted(self._byname.items())) if self._byname else (),
+        )
 
     @property
     def source(self):
@@ -745,6 +677,73 @@ class PyperfComparison:
     @property
     def byname(self):
         return dict(self._byname)
+
+
+class PyperfComparisonBaseline(_PyperfComparison):
+    """The filename and set of result values for baseline results."""
+
+    kind = 'baseline'
+
+
+class PyperfComparison(_PyperfComparison):
+    """The per-benchmark differences between one results set and a baseline.
+
+    The comparison values are a mapping from benchmark name to the
+    relative differences (e.g. "1.04x faster").  The geometric mean
+    is also provided.
+    """
+
+    kind = 'comparison'
+
+    Summary = namedtuple('Summary',
+                         'bench baseline baseresult source result comparison')
+
+    @classmethod
+    def _parse_value(cls, valuestr):
+        return PyperfComparisonValue.parse(valuestr, fail=True)
+
+    def __init__(self, baseline, source, mean, byname=None):
+        super().__init__(source, byname)
+        baseline = PyperfComparisonBaseline.from_raw(baseline, fail=True)
+        if self._byname and sorted(self._byname) != sorted(baseline.byname):
+            raise ValueError(f'mismatch with baseline ({sorted(self._byname)} != {sorted(baseline.byname)})')
+        if mean:
+            mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
+
+        self._baseline = baseline
+        self._mean = mean or None
+
+    def __repr__(self):
+        fields = 'baseline source byname mean'.split()
+        values = [f'{a}={getattr(self, "_"+a)!r}' for a in fields]
+        return f'{type(self).__name__}({", ".join(values)})'
+
+    def __str__(self):
+        return f'<{self._mean} ({self._source})>'
+
+    __hash__ = _PyperfComparison.__hash__
+
+    def __eq__(self, other):
+        if not isinstance(other, PyperfComparison):
+            return NotImplemented
+        if not super().__eq__(other):
+            return False
+        if self._baseline != other._baseline:
+            return False
+        if self._mean != other._mean:
+            return False
+        return True
+
+    def _as_hashable(self):
+        return (
+            self._baseline,
+            *super()._as_hashable(),
+            self._mean,
+        )
+
+    @property
+    def baseline(self):
+        return self._baseline
 
     @property
     def mean(self):
@@ -1568,8 +1567,6 @@ class PyperfResultsMetadata:
 class PyperfResultsInfo(
         namedtuple('PyperfResultsInfo', 'uploadid build filename compared')):
 
-    BASELINE_MEAN = '(ref)'
-
     @classmethod
     def from_results(cls, results, compared=None):
         if not isinstance(results, PyperfResults):
@@ -1582,6 +1579,7 @@ class PyperfResultsInfo(
             resfile.filename,
             compared,
             resfile.resultsroot,
+            results.date,
         )
         self._resfile = resfile
         return self
@@ -1605,14 +1603,15 @@ class PyperfResultsInfo(
 
     @classmethod
     def from_values(cls, uploadid, build=None, filename=None, compared=None,
-                    resultsroot=None):
+                    resultsroot=None, date=None):
         uploadid = PyperfUploadID.from_raw(uploadid, fail=True)
         build = cls._normalize_build(build)
         return cls._from_values(
-            uploadid, build, filename, compared, resultsroot)
+            uploadid, build, filename, compared, resultsroot, date)
 
     @classmethod
-    def _from_values(cls, uploadid, build, filename, compared, resultsroot):
+    def _from_values(cls, uploadid, build, filename, compared,
+                     resultsroot, date):
         if filename:
             (filename, relfile, resultsroot,
              ) = normalize_results_filename(filename, resultsroot)
@@ -1624,6 +1623,8 @@ class PyperfResultsInfo(
         if resultsroot:
             self._resultsroot = resultsroot
             self._relfile = relfile
+        if date:
+            self._date = date
         return self
 
     @classmethod
@@ -1705,7 +1706,8 @@ class PyperfResultsInfo(
                 return None
             if not hasattr(self, '_resultsroot'):
                 return os.path.basename(self.filename)
-            self._relfile = os.path.relpath(self.filename, self._resultsroot)
+            self._relfile = _utils.strinct_relpath(self.filename,
+                                                   self._resultsroot)
             return self._relfile
 
     @property
@@ -1746,6 +1748,10 @@ class PyperfResultsInfo(
     @property
     def isbaseline(self):
         return self.compared and not self.compared.baseline
+
+    @property
+    def sortkey(self):
+        return (*self.uploadid.sortkey, self.date)
 
     def match(self, specifier, suites=None, *, checkexists=False):
         # specifier: uploadID, version, filename
@@ -1856,7 +1862,7 @@ class PyperfResultsIndex:
         for entry in self._entries:
             if entry.uploadid.suite != suite:
                 continue
-            if entry.mean == PyperfResultsInfo.BASELINE_MEAN:
+            if entry.mean == PyperfComparisonValue.BASELINE:
                 return entry
         return None
 
@@ -1902,6 +1908,8 @@ class PyperfResultsIndex:
 
     def _add(self, info):
         #assert info
+        # XXX Do not add if already added.
+        # XXX Fail if compatid is different but fails are same?
         self._entries.append(info)
 
     def add_from_results(self, results, compared=None):
@@ -1955,12 +1963,11 @@ class PyperfResultsIndex:
 def normalize_results_filename(filename, resultsroot=None):
     if not filename:
         raise ValueError('missing filename')
-    resultsroot = os.path.abspath(resultsroot) if resultsroot else None
+    if resultsroot and not os.path.isabs(resultsroot):
+        raise ValueError(resultsroot)
     if os.path.isabs(filename):
         if resultsroot:
-            relfile = os.path.relpath(filename, resultsroot)
-            if relfile.startswith('..' + os.path.sep):
-                raise ValueError(f'filename does not match resultsroot ({filename!r}, {resultsroot!r})')
+            relfile = _utils.strict_relpath(filename, resultsroot)
         else:
             resultsroot, relfile = os.path.split(filename)
     else:
@@ -1970,303 +1977,6 @@ def normalize_results_filename(filename, resultsroot=None):
         else:
             raise ValueError('missing resultsroot')
     return filename, relfile, resultsroot
-
-
-class PyperfResultsDir:
-
-    INDEX = 'index.tsv'
-    INDEX_FIELDS = [
-        'relative path',
-        'uploadid',
-        'build',
-        'baseline',
-        'geometric mean',
-    ]
-
-    @classmethod
-    def _convert_to_uploadid(cls, uploadid):
-        if not uploadid:
-            return None
-        orig = uploadid
-        if isinstance(orig, str):
-            uploadid = PyperfUploadID.parse(orig)
-            if not uploadid:
-                uploadid = PyperfUploadID.from_filename(orig)
-        elif isinstance(orig, PyperfUploadID):
-            uploadid = orig
-        else:
-            return None
-        return uploadid
-
-    def __init__(self, root):
-        if not root:
-            raise ValueError('missing root')
-        self._root = os.path.abspath(root)
-        self._indexfile = os.path.join(self._root, self.INDEX)
-
-    def __repr__(self):
-        return f'{type(self).__name__}({self._root!r})'
-
-    def __eq__(self, other):
-        raise NotImplementedError
-
-    @property
-    def root(self):
-        return self._root
-
-    @property
-    def indexfile(self):
-        return self._indexfile
-
-    def _info_from_values(self, filename, uploadid, build=None,
-                          baseline=None, mean=None, *,
-                          baselines=None):
-        if not build:
-            build = ['PGO', 'LTO']
-#            # XXX Get it from somewhere.
-#            raise NotImplementedError
-        if baseline:
-            if baselines is not None:
-                try:
-                    baseline = baselines[baseline]
-                except KeyError:
-                    baseline = PyperfComparisonBaseline(baseline)
-                    baselines[baseline] = baseline
-            else:
-                baseline = PyperfComparisonBaseline(baseline)
-            source = filename
-            if os.path.isabs(source):
-                source = os.path.relpath(source, self._root)
-            compared = PyperfComparison(baseline, source, mean)
-        else:
-            assert not mean, mean
-            compared = None
-        return PyperfResultsInfo.from_values(
-            uploadid,
-            build,
-            filename,
-            compared,
-            self._root,
-        )
-
-    def _info_from_file(self, filename):
-        compared = None  # XXX
-        return PyperfResultsInfo.from_file(filename, self._root, compared)
-
-    def _info_from_results(self, results):
-        raise NotImplementedError  # XXX
-        ...
-
-    def _iter_results_files(self):
-        raise NotImplementedError
-
-    def iter_from_files(self):
-        for filename in self._iter_results_files():
-            info, _ = self._info_from_file(filename)
-            yield info
-
-    def iter_all(self):
-        index = self.load_index()
-        yield from index.iter_all()
-
-    def index_from_files(self, *, baseline=None):
-        index = PyperfResultsIndex()
-        for info in self.iter_from_files():
-            index.add(info)
-        if baseline:
-            index.ensure_means(baseline=baseline)
-        return index
-
-    def load_index(self, *,
-                   baseline=None,
-                   createifmissing=True,
-                   saveifupdated=True,
-                   ):
-        save = False
-        try:
-            index = self._load_index()
-        except FileNotFoundError:
-            if not createifmissing:
-                raise  # re-raise
-            index = self.index_from_files()
-            save = True
-        if baseline:
-            updated = index.ensure_means(baseline=baseline)
-            if updated and saveifupdated:
-                save = True
-        if save:
-            self.save_index(index)
-        return index
-
-    def _load_index(self):
-        # We use a basic tab-separated values format.
-        rows = []
-        baselines = {}
-        for row in self._read_rows():
-            parsed = self._parse_row(row)
-            info = self._info_from_values(*parsed, baselines=baselines)
-            rows.append(info)
-        index = PyperfResultsIndex()
-        for info in rows:
-            index.add(info)
-        return index
-
-    def _read_rows(self):
-        with open(self._indexfile) as infile:
-            text = infile.read()
-        rows = iter(l
-                    for l in text.splitlines()
-                    if l and not l.startswith('#'))
-        # First read the header.
-        try:
-            headerstr = next(rows)
-        except StopIteration:
-            raise NotImplementedError(self._indexfile)
-        if headerstr != '\t'.join(self.INDEX_FIELDS):
-            raise ValueError(header)
-        # Now read the rows.
-        return rows
-
-    def _parse_row(self, row):
-        rowstr = row
-        row = rowstr.split('\t')
-        if len(row) != len(self.INDEX_FIELDS):
-            raise ValueError(rowstr)
-        relfile, uploadid, build, baseline, mean = row
-        uploadid = PyperfUploadID.parse(uploadid)
-        if not uploadid:
-            raise ValueError(f'bad uploadid in {rowstr}')
-        if not relfile:
-            raise ValueError(f'missing relative path for {uploadid}')
-        elif os.path.isabs(relfile):
-            raise ValueError(f'got absolute relative path {relfile!r}')
-        if baseline:
-            if os.path.isabs(baseline):
-                raise ValueError(f'got absolute relative path {baseline!r}')
-            if not mean:
-                raise ValueError('missing mean')
-        elif mean:
-            raise ValueError('missing baseline')
-        return relfile, uploadid, build or None, baseline or None, mean or None
-
-    def save_index(self, index):
-        # We use a basic tab-separated values format.
-        rows = [self.INDEX_FIELDS]
-        for info in index.iter_all():
-            row = self._render_as_row(info)
-            rows.append(
-                [(row[f] or '') for f in self.INDEX_FIELDS]
-            )
-        rows = ('\t'.join(row) for row in rows)
-        text = os.linesep.join(rows)
-        with open(self._indexfile, 'w', encoding='utf-8') as outfile:
-            outfile.write(text)
-            print(file=outfile)  # Add a blank line at the end.
-
-    def _render_as_row(self, info):
-        if not info.filename:
-            raise NotImplementedError(info)
-        if info.resultsroot != self._root:
-            raise NotImplementedError((info, self._root))
-        return {
-            'relative path': os.path.relpath(info.filename, self._root),
-            'uploadid': str(info.uploadid),
-            'build': ','.join(info.build) if info.build else None,
-            'baseline': (os.path.relpath(info.baseline, self._root)
-                         if info.baseline
-                         else None),
-            'geometric mean': str(info.mean) if info.mean else None,
-        }
-
-    def get(self, uploadid, default=None, *, checkexists=True):
-        index = self.load_index()
-        return index.get(uploadid, default, checkexists=checkexists)
-
-    def match(self, specifier, suites=None, *, checkexists=True):
-        index = self.load_index()
-        yield from index.match(specifier, suites, checkexists=checkexists)
-
-    def match_uploadid(self, uploadid, *, checkexists=True):
-        index = self.load_index()
-        yield from index.match_uploadid(uploadid, checkexists=checkexists)
-
-#    def add(self, info, *,
-#            baseline=None,
-#            compressed=False,
-#            split=False,
-#            ):
-#        if isinstance(info, PyperfResultsInfo):
-#            pass
-#        else:
-#            raise NotImplementedError(info)
-#        raise NotImplementedError  # XXX
-#        index = self.load_index(baseline=baseline)
-#        ...
-#        index.ensure_means(baseline)
-
-    def add_from_results(self, results, *,
-                         baseline=None,
-                         compressed=False,
-                         split=False,
-                         ):
-        if not isinstance(results, PyperfResults):
-            raise NotImplementedError(results)
-
-        source = results.filename
-        if source and not os.path.exists(source):
-            logger.error(f'results not found at {source}')
-            return
-
-        # First add the file(s).
-        if split and results.suite is PyperfUploadID.MULTI_SUITE:
-            by_suite = results.split_benchmarks()
-        else:
-            by_suite = {results.suite: results}
-        copied = []
-        for suite, suite_results in sorted(by_suite.items()):
-            if results.suite in PyperfUploadID.SUITES:
-                logger.info(f'adding results {source or "???"} ({suite})...')
-            else:
-                logger.info(f'adding results {source or "???"}...')
-            resfile = PyperfResultsFile.from_uploadid(
-                suite_results.uploadid,
-                resultsroot=self._root,
-                compressed=compressed,
-            )
-            logger.info(f'...as {resfile.relfile}...')
-            #copied = suite_results.copy_to(resfile, self._root)
-            copied.append(
-                suite_results.copy_to(resfile, self._root)
-            )
-            logger.info('...done adding')
-
-        # Then update the index.
-        logger.info('updating index...')
-        index = self.load_index(baseline=baseline)
-        for results in copied:
-            info = index.add_from_results(results)
-            # XXX Do this after everything has been yielded.
-            if baseline:
-                index.ensure_means(baseline=baseline)
-            self.save_index(index)
-            yield info
-        logger.info('...done updating index')
-
-#    def add_from_file(self, filename):
-#        ...
-
-
-class PyperfUploadsDir(PyperfResultsDir):
-
-    def _iter_results_files(self):
-        for name in os.listdir(self._root):
-            uploadid = PyperfUploadID.parse(name, allowsuffix=True)
-            if not uploadid:
-                continue
-            filename = os.path.join(self._root, name)
-            if not os.path.isfile(filename):
-                continue
-            yield filename
 
 
 class PyperfResultsFile:
@@ -2433,8 +2143,9 @@ class PyperfResultsFile:
             *(optional),
             '--table',
             self._relfile,
-            *(os.path.relpath(o.filename, cwd)
-              for o in others),
+#            *(_utils.strict_relpath(o.filename, cwd)
+#              for o in others),
+            *(o._relfile for o in others),
             cwd=cwd,
         )
         if proc.returncode:
@@ -2442,10 +2153,313 @@ class PyperfResultsFile:
             return None
         filenames = [
             self._filename,
-            *(os.path.join(cwd, o.filename) for o in others),
+#            *(os.path.join(cwd, o.filename) for o in others),
+            *(o.filename for o in others),
         ]
         return PyperfComparisons.parse_table(proc.stdout, filenames)
 #        return PyperfTable.parse(proc.stdout, filenames)
+
+
+class PyperfResultsDir:
+
+    INDEX = 'index.tsv'
+    INDEX_FIELDS = [
+        'relative path',
+        'uploadid',
+        'build',
+        'baseline',
+        'geometric mean',
+    ]
+
+    @classmethod
+    def _convert_to_uploadid(cls, uploadid):
+        if not uploadid:
+            return None
+        orig = uploadid
+        if isinstance(orig, str):
+            uploadid = PyperfUploadID.parse(orig)
+            if not uploadid:
+                uploadid = PyperfUploadID.from_filename(orig)
+        elif isinstance(orig, PyperfUploadID):
+            uploadid = orig
+        else:
+            return None
+        return uploadid
+
+    def __init__(self, root):
+        _utils.check_str(root, 'root', required=True, fail=True)
+        if not os.path.isabs(root):
+            raise ValueError(root)
+        self._root = root
+        self._indexfile = os.path.join(root, self.INDEX)
+
+    def __repr__(self):
+        return f'{type(self).__name__}({self._root!r})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
+
+    @property
+    def root(self):
+        return self._root
+
+    @property
+    def indexfile(self):
+        return self._indexfile
+
+    def _info_from_values(self, relfile, uploadid, build=None,
+                          baseline=None, mean=None, *,
+                          baselines=None):
+        assert not os.path.isabs(relfile), relfile
+        filename = os.path.join(self._root, relfile)
+        if not build:
+            build = ['PGO', 'LTO']
+#            # XXX Get it from somewhere.
+#            raise NotImplementedError
+        if baseline:
+            assert not os.path.isabs(baseline), baseline
+            baseline = os.path.join(self._root, baseline)
+            if baselines is not None:
+                try:
+                    baseline = baselines[baseline]
+                except KeyError:
+                    baseline = PyperfComparisonBaseline(baseline)
+                    baselines[baseline] = baseline
+            else:
+                baseline = PyperfComparisonBaseline(baseline)
+            compared = PyperfComparison(baseline, source=filename, mean=mean)
+        else:
+            assert not mean, mean
+            compared = None
+        return PyperfResultsInfo.from_values(
+            uploadid,
+            build,
+            filename,
+            compared,
+            self._root,
+        )
+
+    def _info_from_file(self, filename):
+        compared = None  # XXX
+        return PyperfResultsInfo.from_file(filename, self._root, compared)
+
+    def _info_from_results(self, results):
+        raise NotImplementedError  # XXX
+        ...
+
+    def _iter_results_files(self):
+        raise NotImplementedError
+
+    def iter_from_files(self):
+        for filename in self._iter_results_files():
+            info, _ = self._info_from_file(filename)
+            yield info
+
+    def iter_all(self):
+        index = self.load_index()
+        yield from index.iter_all()
+
+    def index_from_files(self, *, baseline=None):
+        index = PyperfResultsIndex()
+        rows = self.iter_from_files()
+        for info in sorted(rows, key=(lambda r: r.sortkey)):
+            index.add(info)
+        if baseline:
+            index.ensure_means(baseline=baseline)
+        return index
+
+    def load_index(self, *,
+                   baseline=None,
+                   createifmissing=True,
+                   saveifupdated=True,
+                   ):
+        save = False
+        try:
+            index = self._load_index()
+        except FileNotFoundError:
+            if not createifmissing:
+                raise  # re-raise
+            index = self.index_from_files()
+            save = True
+        if baseline:
+            updated = index.ensure_means(baseline=baseline)
+            if updated and saveifupdated:
+                save = True
+        if save:
+            self.save_index(index)
+        return index
+
+    def _load_index(self):
+        # We use a basic tab-separated values format.
+        rows = []
+        baselines = {}
+        for row in self._read_rows():
+            parsed = self._parse_row(row)
+            info = self._info_from_values(*parsed, baselines=baselines)
+            rows.append(info)
+        index = PyperfResultsIndex()
+        for info in rows:
+            index.add(info)
+        return index
+
+    def _read_rows(self):
+        with open(self._indexfile) as infile:
+            text = infile.read()
+        rows = iter(l
+                    for l in text.splitlines()
+                    if l and not l.startswith('#'))
+        # First read the header.
+        try:
+            headerstr = next(rows)
+        except StopIteration:
+            raise NotImplementedError(self._indexfile)
+        if headerstr != '\t'.join(self.INDEX_FIELDS):
+            raise ValueError(header)
+        # Now read the rows.
+        return rows
+
+    def _parse_row(self, row):
+        rowstr = row
+        row = rowstr.split('\t')
+        if len(row) != len(self.INDEX_FIELDS):
+            raise ValueError(rowstr)
+        relfile, uploadid, build, baseline, mean = row
+        uploadid = PyperfUploadID.parse(uploadid)
+        if not uploadid:
+            raise ValueError(f'bad uploadid in {rowstr}')
+        if not relfile:
+            raise ValueError(f'missing relative path for {uploadid}')
+        elif os.path.isabs(relfile):
+            raise ValueError(f'got absolute relative path {relfile!r}')
+        if baseline:
+            if os.path.isabs(baseline):
+                raise ValueError(f'got absolute relative path {baseline!r}')
+            if not mean:
+                raise ValueError('missing mean')
+        elif mean:
+            raise ValueError('missing baseline')
+        return relfile, uploadid, build or None, baseline or None, mean or None
+
+    def save_index(self, index):
+        # We use a basic tab-separated values format.
+        rows = [self.INDEX_FIELDS]
+        for info in sorted(index.iter_all(), key=(lambda v: v.sortkey)):
+            row = self._render_as_row(info)
+            rows.append(
+                [(row[f] or '') for f in self.INDEX_FIELDS]
+            )
+        rows = ('\t'.join(row) for row in rows)
+        text = os.linesep.join(rows)
+        with open(self._indexfile, 'w', encoding='utf-8') as outfile:
+            outfile.write(text)
+            print(file=outfile)  # Add a blank line at the end.
+
+    def _render_as_row(self, info):
+        if not info.filename:
+            raise NotImplementedError(info)
+        if info.resultsroot != self._root:
+            raise NotImplementedError((info, self._root))
+        return {
+            'relative path': _utils.strict_relpath(info.filename, self._root),
+            'uploadid': str(info.uploadid),
+            'build': ','.join(info.build) if info.build else None,
+            'baseline': (_utils.strict_relpath(info.baseline, self._root)
+                         if info.baseline
+                         else None),
+            'geometric mean': str(info.mean) if info.mean else None,
+        }
+
+    def get(self, uploadid, default=None, *, checkexists=True):
+        index = self.load_index()
+        return index.get(uploadid, default, checkexists=checkexists)
+
+    def match(self, specifier, suites=None, *, checkexists=True):
+        index = self.load_index()
+        yield from index.match(specifier, suites, checkexists=checkexists)
+
+    def match_uploadid(self, uploadid, *, checkexists=True):
+        index = self.load_index()
+        yield from index.match_uploadid(uploadid, checkexists=checkexists)
+
+#    def add(self, info, *,
+#            baseline=None,
+#            compressed=False,
+#            split=False,
+#            ):
+#        if isinstance(info, PyperfResultsInfo):
+#            pass
+#        else:
+#            raise NotImplementedError(info)
+#        raise NotImplementedError  # XXX
+#        index = self.load_index(baseline=baseline)
+#        ...
+#        index.ensure_means(baseline)
+
+    def add_from_results(self, results, *,
+                         baseline=None,
+                         compressed=False,
+                         split=False,
+                         ):
+        if not isinstance(results, PyperfResults):
+            raise NotImplementedError(results)
+
+        source = results.filename
+        if source and not os.path.exists(source):
+            logger.error(f'results not found at {source}')
+            return
+
+        # First add the file(s).
+        if split and results.suite is PyperfUploadID.MULTI_SUITE:
+            by_suite = results.split_benchmarks()
+        else:
+            by_suite = {results.suite: results}
+        copied = []
+        for suite, suite_results in sorted(by_suite.items()):
+            if results.suite in PyperfUploadID.SUITES:
+                logger.info(f'adding results {source or "???"} ({suite})...')
+            else:
+                logger.info(f'adding results {source or "???"}...')
+            resfile = PyperfResultsFile.from_uploadid(
+                suite_results.uploadid,
+                resultsroot=self._root,
+                compressed=compressed,
+            )
+            logger.info(f'...as {resfile.relfile}...')
+            #copied = suite_results.copy_to(resfile, self._root)
+            copied.append(
+                suite_results.copy_to(resfile, self._root)
+            )
+            logger.info('...done adding')
+
+        # Then update the index.
+        logger.info('updating index...')
+        try:
+            index = self.load_index(baseline=baseline, createifmissing=False)
+        except FileNotFoundError:
+            index = PyperfResultsIndex()
+        for results in copied:
+            info = index.add_from_results(results)
+            yield info
+        if baseline:
+            index.ensure_means(baseline=baseline)
+        self.save_index(index)
+        logger.info('...done updating index')
+
+#    def add_from_file(self, filename):
+#        ...
+
+
+class PyperfUploadsDir(PyperfResultsDir):
+
+    def _iter_results_files(self):
+        for name in os.listdir(self._root):
+            uploadid = PyperfUploadID.parse(name, allowsuffix=True)
+            if not uploadid:
+                continue
+            filename = os.path.join(self._root, name)
+            if not os.path.isfile(filename):
+                continue
+            yield filename
 
 
 ##################################
@@ -2473,37 +2487,62 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
     BRANCH = 'add-benchmark-results'
 
-    def __init__(self, root, remote=None, datadir=None, baseline=None):
-        if root:
-            root = os.path.abspath(root)
-        if remote:
-            if isinstance(remote, str):
-                remote = _utils.GitHubTarget.resolve(remote, root)
-            elif not isinstance(remote, _utils.GitHubTarget):
-                raise TypeError(f'unsupported remote {remote!r}')
-            root = remote.ensure_local(root)
-        else:
-            if root:
-                if not os.path.exists(root):
-                    raise FileNotFoundError(root)
-                #_utils.verify_git_repo(root)
-            else:
-                raise ValueError('missing root')
-            remote = None
-        self.root = root
+    @classmethod
+    def from_remote(cls, remote, root, datadir=None, baseline=None):
+        if not root or not _utils.check_str(root):
+            root = None
+        elif not os.path.isabs(root):
+            raise ValueError(root)
+        if isinstance(remote, str):
+            remote = _utils.GitHubTarget.resolve(remote, root)
+        elif not isinstance(remote, _utils.GitHubTarget):
+            raise TypeError(f'unsupported remote {remote!r}')
+        raw = remote.ensure_local(root)
+#        raw.clean()
+#        raw.switch_branch('main')
+        kwargs = {}
+        if datadir:
+            kwargs['datadir'] = datadir
+        if baseline:
+            kwargs['baseline'] = baseline
+        return cls(raw, remote, **kwargs)
+
+    @classmethod
+    def from_root(cls, root, datadir=None, baseline=None):
+        if not root or not _utils.check_str(root):
+            root = None
+        elif not os.path.isabs(root):
+            raise ValueError(root)
+        raw = _utils.GitLocalRepo.ensure(root)
+        if not raw.exists:
+            raise FileNotFoundError(root)
+        remote = None
+        kwargs = {}
+        if datadir:
+            kwargs['datadir'] = datadir
+        if baseline:
+            kwargs['baseline'] = baseline
+        return cls(raw, remote, **kwargs)
+
+    def __init__(self, raw, remote=None, datadir=None, baseline=None):
+        if not raw:
+            raise ValueError('missing raw')
+        elif not isinstance(raw, _utils.GitLocalRepo):
+            raise TypeError(raw)
+        if remote and not isinstance(remote, _utils.GitHubTarget):
+            raise TypeError(f'unsupported remote {remote!r}')
+        self._raw = raw
         self.datadir = datadir or None
-        self.remote = remote
+        self.remote = remote or None
 
         self._baseline = baseline
         self._resultsdir = PyperfUploadsDir(
-            os.path.join(root, datadir) if datadir else root,
+            raw.resolve(datadir) if datadir else raw.root,
         )
 
-    def _git(self, *args, cfg=None):
-        ec, text = _utils.git(*args, cwd=self.root, cfg=cfg)
-        if ec:
-            raise NotImplementedError((ec, text))
-        return text
+    @property
+    def root(self):
+        return self._raw.root
 
     def iter_all(self):
         for info in self._resultsdir.iter_from_files():
@@ -2526,10 +2565,13 @@ class PyperfResultsRepo(PyperfResultsStorage):
             author=None,
             compressed=False,
             split=True,
+            clean=True,
             push=True,
             ):
-        branch, gitcfg = self._prep_for_commit(branch, author)
-        self._git('checkout', '-B', branch)
+        repo = self._raw.using_author(author)
+        if clean:
+            repo.refresh()
+        repo.switch_branch(branch or self.BRANCH)
 
         #added = self._resultsdir.add(info, ...)
         added = self._resultsdir.add_from_results(
@@ -2544,46 +2586,21 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         logger.info('committing to the repo...')
         for info in added:
-            relfile = os.path.relpath(info.filename, self.root)
-            self._git('add', relfile)
-        self._git('add', self._resultsdir.indexfile)
-        self._git('add', os.path.relpath(readme, self.root))
+            repo.add(info.filename)
+        repo.add(self._resultsdir.indexfile)
+        repo.add(readme)
         msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
-        self._git('commit', '-m', msg, cfg=gitcfg)
+        repo.commit(msg)
         logger.info('...done committing')
 
         if push:
             self._upload(self.datadir or '.')
 
-    def _prep_for_commit(self, branch, author):
-        if not branch:
-            branch = self.BRANCH
-
-        # We already ran self.remote.ensure_local() in __init__().
-
-        cfg = {}
-        if not author:
-            pass
-        elif isinstance(author, str):
-            parsed = _utils.parse_email_address(author)
-            if not parsed:
-                raise ValueError(f'invalid author {author!r}')
-            name, email = parsed
-            if not name:
-                name = '???'
-                author = f'??? <{author}>'
-            cfg['user.name'] = name
-            cfg['user.email'] = email
-        else:
-            raise NotImplementedError(author)
-
-        return branch, cfg
-
     def _update_table(self, index):
         table_lines = self._render_markdown(index)
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
-        filename = os.path.join(self.root, 'README.md')
+        filename = self._raw.resolve('README.md')
         with open(filename) as infile:
             text = infile.read()
         try:
@@ -2614,14 +2631,19 @@ class PyperfResultsRepo(PyperfResultsStorage):
 
         rows = index.as_rendered_rows(columns)
         by_suite = {}
-        for row, info in sorted(rows, key=(lambda r: (r[0][1], r[0][0]))):
+        for row, info in sorted(rows, key=(lambda r: r[1].sortkey)):
             suite = info.uploadid.suite
             if suite not in by_suite:
                 by_suite[suite] = []
             date, release, commit, host, mean = row
-            relpath = os.path.relpath(info.filename, self.root)
+            relpath = self._raw.relpath(info.filename)
             relpath = relpath.replace('\/', '/')
             date = f'[{date}]({relpath})'
+            if not mean:
+#                assert info.isbaseline, repr(info)
+#                assert not mean, repr(mean)
+                mean = PyperfComparisonValue.BASELINE
+            assert '3.10.4' not in release or mean == '(ref)', repr(mean)
             row = date, release, commit, host, mean
             by_suite[suite].append(row)
 
@@ -2640,7 +2662,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise Exception('missing remote')
         url = f'{self.remote.url}/tree/main/{reltarget}'
         logger.info(f'uploading results to {url}...')
-        self._git('push', self.remote.push_url)
+        self._raw.push(self.remote.push_url)
         logger.info('...done uploading')
 
 
@@ -2653,7 +2675,17 @@ class FasterCPythonResults(PyperfResultsRepo):
     DATADIR = 'benchmark-results'
     BASELINE = '3.10.4'
 
-    def __init__(self, root=None, remote=None, baseline=BASELINE):
+    @classmethod
+    def from_remote(cls, remote=None, root=None, baseline=None):
         if not remote:
-            remote = self.REMOTE
+            remote = cls.REMOTE
+        return super().from_remote(remote, root, baseline=baseline)
+
+    @classmethod
+    def from_root(cls, root, baseline=None):
+        raise NotImplementedError
+
+    def __init__(self, root, remote, baseline=BASELINE):
+        if not remote:
+            raise ValueError('missing remote')
         super().__init__(root, remote, self.DATADIR, baseline)
