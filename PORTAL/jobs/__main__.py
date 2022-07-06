@@ -698,7 +698,7 @@ def _add_request_cli(add_cmd, add_hidden=True):
             args.cmd = f'request-{job}'
             if job == 'compile-bench':
                 # Process hidden args.
-                fake = (ns.pop('exitcode', None), ns.pop('fakedelay', None))
+                fake = (ns.pop('exitcode'), ns.pop('fakedelay'))
                 if any(v is not None for v in fake):
                     args._fake = fake
             else:
