@@ -635,7 +635,13 @@ def _add_request_cli(add_cmd, add_hidden=True):
     sub.add_argument('--detached', dest='after',
                      action='store_const', const=('run',),
                      help='do not attach')
-    sub.set_defaults(job='compile-bench')
+    sub.set_defaults(
+        job='compile-bench',
+        # Args set for the "request" command:
+        uploadargs=[],
+        exitcode=None,
+        fakedelay=None,
+    )
 
     if add_hidden:
         sub = add_cmd('add', aliases=['request'], help='Create a new job request')
