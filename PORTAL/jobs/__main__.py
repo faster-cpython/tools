@@ -707,7 +707,7 @@ def _add_request_cli(add_cmd, add_hidden=True):
         elif type(args.after) is not tuple:
             raise NotImplementedError(args.after)
         # Handle --upload-arg.
-        uploadargs = ns.pop('uploadargs')
+        uploadargs = ns.pop('uploadargs', None)
         if uploadargs:
             if 'upload' not in args.after:
                 parser.error('--upload-arg requires --upload')
