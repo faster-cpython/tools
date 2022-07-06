@@ -692,41 +692,40 @@ def _add_request_cli(add_cmd, add_hidden=True):
             sub.add_argument('--fake-delay', dest='fakedelay')
 
     def handle_args(args, parser):
-        if args.cmd == 'run-bench':
-            assert args.job == 'compile-bench', args.job
-            args.cmd = 'request'
-        elif args.cmd not in ('add', 'request'):
-            return
-        ns = vars(args)
-        job = ns.pop('job')
-        args.cmd = f'request-{job}'
-        if job == 'compile-bench':
-            # Process hidden args.
-            fake = (ns.pop('exitcode', None), ns.pop('fakedelay', None))
-            if any(v is not None for v in fake):
-                args._fake = fake
-        else:
-            raise NotImplementedError((job, args))
-        if args.after is None:
-            # Use --run-attached as the default.
-            args.after = ('run', 'attach')
-        elif type(args.after) is not tuple:
-            raise NotImplementedError(args.after)
-        # Handle --upload-arg.
-        uploadargs = ns.pop('uploadargs')
-        if uploadargs:
-            if 'upload' not in args.after:
-                parser.error('--upload-arg requires --upload')
-            args.upload_kwargs = {}
-            for arg in uploadargs:
-                if arg == '<no-push>':
-                    args.upload_kwargs['push'] = False
-                #elif arg in ('', '-', '<>', '<default>'):
-                #    args.upload_kwargs['repo'] = 'gh:faster-cpython/ideas'
-                else:
-                    raise NotImplementedError(arg)
-        elif 'upload' in args.after:
-            args.upload_kwargs = {}
+        if args.cmd in ('add', 'request', 'run-bench'):
+            if args.cmd == 'run-bench':
+                assert args.job == 'compile-bench', args.job
+                args.cmd = 'request'
+            ns = vars(args)
+            job = ns.pop('job')
+            args.cmd = f'request-{job}'
+            if job == 'compile-bench':
+                # Process hidden args.
+                fake = (ns.pop('exitcode', None), ns.pop('fakedelay', None))
+                if any(v is not None for v in fake):
+                    args._fake = fake
+            else:
+                raise NotImplementedError((job, args))
+            if args.after is None:
+                # Use --run-attached as the default.
+                args.after = ('run', 'attach')
+            elif type(args.after) is not tuple:
+                raise NotImplementedError(args.after)
+            # Handle --upload-arg.
+            uploadargs = ns.pop('uploadargs')
+            if uploadargs:
+                if 'upload' not in args.after:
+                    parser.error('--upload-arg requires --upload')
+                args.upload_kwargs = {}
+                for arg in uploadargs:
+                    if arg == '<no-push>':
+                        args.upload_kwargs['push'] = False
+                    #elif arg in ('', '-', '<>', '<default>'):
+                    #    args.upload_kwargs['repo'] = 'gh:faster-cpython/ideas'
+                    else:
+                        raise NotImplementedError(arg)
+            elif 'upload' in args.after:
+                args.upload_kwargs = {}
     return handle_args
 
 
