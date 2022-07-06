@@ -635,7 +635,13 @@ def _add_request_cli(add_cmd, add_hidden=True):
     sub.add_argument('--detached', dest='after',
                      action='store_const', const=('run',),
                      help='do not attach')
-    sub.set_defaults(job='compile-bench')
+    sub.set_defaults(
+        job='compile-bench',
+        # Args set for the "request" command:
+        uploadargs=[],
+        exitcode=None,
+        fakedelay=None,
+    )
 
     if add_hidden:
         sub = add_cmd('add', aliases=['request'], help='Create a new job request')
@@ -700,14 +706,14 @@ def _add_request_cli(add_cmd, add_hidden=True):
             if any(v is not None for v in fake):
                 args._fake = fake
         else:
-            raise NotImplementedError(repr(job))
+            raise NotImplementedError((job, args))
         if args.after is None:
             # Use --run-attached as the default.
             args.after = ('run', 'attach')
         elif type(args.after) is not tuple:
             raise NotImplementedError(args.after)
         # Handle --upload-arg.
-        uploadargs = ns.pop('uploadargs', None)
+        uploadargs = ns.pop('uploadargs')
         if uploadargs:
             if 'upload' not in args.after:
                 parser.error('--upload-arg requires --upload')
