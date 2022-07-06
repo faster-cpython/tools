@@ -700,7 +700,7 @@ def _add_request_cli(add_cmd, add_hidden=True):
             if any(v is not None for v in fake):
                 args._fake = fake
         else:
-            raise NotImplementedError(repr(job))
+            raise NotImplementedError((job, args))
         if args.after is None:
             # Use --run-attached as the default.
             args.after = ('run', 'attach')
