@@ -693,9 +693,6 @@ def _add_request_cli(add_cmd, add_hidden=True):
 
     def handle_args(args, parser):
         if args.cmd in ('add', 'request', 'run-bench'):
-            if args.cmd == 'run-bench':
-                assert args.job == 'compile-bench', args.job
-                args.cmd = 'request'
             ns = vars(args)
             job = ns.pop('job')
             args.cmd = f'request-{job}'
