@@ -29,7 +29,7 @@ class JobKind:
     TYPICAL_DURATION_SECS = None
 
     REQFS_FIELDS = [
-        'bench_script',
+        'job_script',
         'portal_script',
         'ssh_okay',
     ]
@@ -148,7 +148,7 @@ class _JobFS(types.SimpleNamespace):
         # the request
         request.metadata = f'{request}/request.json'
         # the job
-        work.bench_script = f'{work}/run.sh'
+        work.job_script = f'{work}/run.sh'
         work.pidfile = f'{work}/job.pid'
         work.logfile = f'{work}/job.log'
         # the results
@@ -204,8 +204,8 @@ class _JobFS(types.SimpleNamespace):
             return os.path.dirname(self.result.root)
 
     @property
-    def bench_script(self):
-        return self.work.bench_script
+    def job_script(self):
+        return self.work.job_script
 
     @property
     def pidfile(self):
@@ -611,9 +611,9 @@ class Job:
         req.result.save(self._fs.result.metadata)
 
         # Write the commands to execute remotely.
-        with open(self._fs.bench_script, 'w') as outfile:
+        with open(self._fs.job_script, 'w') as outfile:
             outfile.write(worker_script)
-        os.chmod(self._fs.bench_script, 0o755)
+        os.chmod(self._fs.job_script, 0o755)
 
         # Write the commands to execute locally.
         script = self._build_send_script(queue_log, pushfsattrs, pullfsattrs)
@@ -647,7 +647,7 @@ class Job:
         pidfile = _utils.quote_shell_str(pfiles.pidfile)
 
         _utils.check_shell_str(bfiles.request.root)
-        _utils.check_shell_str(bfiles.bench_script)
+        _utils.check_shell_str(bfiles.job_script)
         _utils.check_shell_str(bfiles.work.root)
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
@@ -659,7 +659,7 @@ class Job:
             # Technically we don't need request.json on the bench host,
             # but it can help with debugging.
             ('request', 'metadata'),
-            ('work', 'bench_script'),
+            ('work', 'job_script'),
             ('result', 'metadata'),
             *pushfsfields,
         ]
@@ -742,7 +742,7 @@ class Job:
                 {pushfiles}
 
                 # Run the request.
-                {ssh(bfiles.bench_script)}
+                {ssh(bfiles.job_script)}
                 exitcode=$?
 
                 # Finish up.
