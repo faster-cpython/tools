@@ -73,7 +73,7 @@ def resolve_job_kind(kind):
 
 class JobsConfig(_utils.TopConfig):
 
-    FIELDS = ['worker_user', 'bench_ssh', 'data_dir']
+    FIELDS = ['local_user', 'bench_ssh', 'data_dir']
     OPTIONAL = ['data_dir']
 
     FILE = 'jobs.json'
@@ -82,20 +82,20 @@ class JobsConfig(_utils.TopConfig):
     ]
 
     def __init__(self,
-                 worker_user,
+                 local_user,
                  bench_ssh,
                  data_dir=None,
                  **ignored
                  ):
-        if not worker_user:
-            raise ValueError('missing worker_user')
+        if not local_user:
+            raise ValueError('missing local_user')
         bench_ssh = _utils.SSHConnectionConfig.from_raw(bench_ssh)
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
-            data_dir = f'/home/{worker_user}/BENCH'  # This matches DATA_ROOT.
+            data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
-            worker_user=worker_user,
+            local_user=local_user,
             bench_ssh=bench_ssh,
             data_dir=data_dir or None,
         )
@@ -324,7 +324,7 @@ class Worker:
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.worker_user, 'bench')
+        fs = JobsFS.from_user(cfg.local_user, 'bench')
         ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
@@ -562,7 +562,7 @@ class Job:
             ssh = _utils.SSHShellCommands('$benchuser', '$host', '$port')
             user = '$user'
         else:
-            user = _utils.check_shell_str(self._cfg.worker_user)
+            user = _utils.check_shell_str(self._cfg.local_user)
             _utils.check_shell_str(self._cfg.ssh.user)
             _utils.check_shell_str(self._cfg.ssh.host)
             ssh = self._worker.ssh.shell_commands
@@ -645,7 +645,7 @@ class Job:
             echo "(the "'"'"{reqid.kind}"'"'" job, {reqid}, has started)"
             echo
 
-            user=$(jq -r '.worker_user' {cfgfile})
+            user=$(jq -r '.local_user' {cfgfile})
             if [ "$USER" != '{user}' ]; then
                 echo "(switching users from $USER to {user})"
                 echo
