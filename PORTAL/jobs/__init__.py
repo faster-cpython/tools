@@ -656,7 +656,7 @@ class Job:
         ensure_user = '\n                '.join(ensure_user)
 
         pushfsfields = [
-            # Technically we don't need request.json on the bench host,
+            # Technically we don't need request.json on the worker,
             # but it can help with debugging.
             ('request', 'metadata'),
             ('work', 'job_script'),
@@ -703,10 +703,10 @@ class Job:
             # This script only runs on the portal host.
             # It does 4 things:
             #   1. switch to the {user} user, if necessary
-            #   2. prepare the bench host, including sending all
-            #      the request files to the bench host (over SSH)
+            #   2. prepare the job worker, including sending all
+            #      the request files to the worker (over SSH)
             #   3. run the job (e.g. run the benchmarks)
-            #   4. pull the results-related files from the bench host (over SSH)
+            #   4. pull the results-related files from the worker (over SSH)
 
             # The commands in this script are deliberately explicit
             # so you can copy-and-paste them selectively.
@@ -746,7 +746,7 @@ class Job:
                 exitcode=$?
 
                 # Finish up.
-                # XXX Push from the bench host in run.sh instead of pulling here?
+                # XXX Push from the worker in run.sh instead of pulling here?
                 {pullfiles}
 
                 )

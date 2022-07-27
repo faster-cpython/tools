@@ -312,7 +312,7 @@ def build_compile_script(req, bfiles, fake=None):
     elif exitcode != '':
         exitcode = _utils.ensure_int(exitcode, min=0)
         logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
-    python = 'python3.9'  # On the bench host.
+    python = 'python3.9'  # On the job worker.
     numjobs = 20
 
     _utils.check_shell_str(str(req.id) if req.id else '')
@@ -348,7 +348,7 @@ def build_compile_script(req, bfiles, fake=None):
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
-        # This script runs only on the bench host.
+        # This script runs only on the job worker.
 
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
