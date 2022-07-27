@@ -533,7 +533,7 @@ class CompileBenchKind(JobKind):
         fs.pyperformance_config = f'{fs}/pyperformance.ini'
 
     def set_work_fs(self, fs, context):
-        if context == 'bench':
+        if context == 'job-worker':
             # other directories needed by the job
             fs.venv = f'{fs}/pyperformance-venv'
             fs.scratch_dir = f'{fs}/pyperformance-scratch'

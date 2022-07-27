@@ -352,13 +352,13 @@ class WorkerConfig(_utils.Config):
 class WorkerJobFS(_JobFS):
     """The file structure of a job's data on a worker."""
 
-    context = 'bench'
+    context = 'job-worker'
 
 
 class WorkerJobsFS(_JobsFS):
     """The file structure of the jobs data on a worker."""
 
-    context = 'bench'
+    context = 'job-worker'
 
     JOBFS = WorkerJobFS
 
@@ -373,6 +373,7 @@ class WorkerJobsFS(_JobsFS):
 
 
 class JobWorker:
+    """A worker assigned to run a requested job."""
 
     def __init__(self, worker, fs):
         self._worker = worker
