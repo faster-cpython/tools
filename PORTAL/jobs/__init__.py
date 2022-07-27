@@ -320,7 +320,39 @@ def _check_reqdir(reqdir, pfiles, cls=RequestDirError):
 ##################################
 # workers
 
-class Worker:
+class JobWorker:
+
+    def __init__(self, workers, fs):
+        self._workers = workers
+        self._fs = fs
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'worker fs'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
+
+#    @property
+#    def worker(self):
+#        return self._workers
+
+    @property
+    def fs(self):
+        return self._fs
+
+    @property
+    def topfs(self):
+        return self._workers.fs
+
+    @property
+    def ssh(self):
+        return self._workers.ssh
+
+
+class Workers:
+    """The set of configured workers."""
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
@@ -351,37 +383,6 @@ class Worker:
     def resolve(self, reqid):
         fs = self._fs.resolve_request(reqid)
         return JobWorker(self, fs)
-
-
-class JobWorker:
-
-    def __init__(self, worker, fs):
-        self._worker = worker
-        self._fs = fs
-
-    def __repr__(self):
-        args = (f'{n}={getattr(self, "_"+n)!r}'
-                for n in 'worker fs'.split())
-        return f'{type(self).__name__}({"".join(args)})'
-
-    def __eq__(self, other):
-        raise NotImplementedError
-
-    @property
-    def worker(self):
-        return self._worker
-
-    @property
-    def fs(self):
-        return self._fs
-
-    @property
-    def topfs(self):
-        return self._worker.fs
-
-    @property
-    def ssh(self):
-        return self._worker.ssh
 
 
 ##################################
@@ -1038,7 +1039,7 @@ class Jobs:
         self._cfg = cfg
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
-        self._worker = Worker.from_config(cfg, self.FS)
+        self._workers = Workers.from_config(cfg, self.FS)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
 
     def __str__(self):
@@ -1079,7 +1080,7 @@ class Jobs:
         return Job(
             reqid,
             self._fs.resolve_request(reqid),
-            self._worker.resolve(reqid),
+            self._workers.resolve(reqid),
             self._cfg,
             self._store,
         )

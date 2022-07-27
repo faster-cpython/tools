@@ -9,7 +9,7 @@ from . import (
     NoRunningJobError, JobNeverStartedError,
     JobAlreadyFinishedError, JobFinishedError,
     RequestAlreadyStagedError,
-    JobsConfig, Jobs, Worker, RequestID, Result,
+    JobsConfig, Jobs, RequestID, Result,
     sort_jobs, select_jobs,
 )
 from .queue import (
