@@ -73,7 +73,7 @@ def resolve_job_kind(kind):
 
 class JobsConfig(_utils.TopConfig):
 
-    FIELDS = ['local_user', 'bench_ssh', 'data_dir']
+    FIELDS = ['local_user', 'worker', 'data_dir']
     OPTIONAL = ['data_dir']
 
     FILE = 'jobs.json'
@@ -83,26 +83,29 @@ class JobsConfig(_utils.TopConfig):
 
     def __init__(self,
                  local_user,
-                 bench_ssh,
+                 worker,
                  data_dir=None,
                  **ignored
                  ):
         if not local_user:
             raise ValueError('missing local_user')
-        bench_ssh = _utils.SSHConnectionConfig.from_raw(bench_ssh)
+        if not worker:
+            raise ValueError('missing worker')
+        elif not isinstance(worker, WorkerConfig):
+            worker = WorkerConfig.from_jsonable(worker)
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
             data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
             local_user=local_user,
-            bench_ssh=bench_ssh,
+            worker=worker,
             data_dir=data_dir or None,
         )
 
     @property
     def ssh(self):
-        return self.bench_ssh
+        return self.worker.ssh
 
 
 ##################################
@@ -320,10 +323,36 @@ def _check_reqdir(reqdir, pfiles, cls=RequestDirError):
 ##################################
 # workers
 
+class WorkerConfig(_utils.Config):
+
+    FIELDS = ['user', 'ssh_host', 'ssh_port']
+
+    def __init__(self,
+                 user,
+                 ssh_host,
+                 ssh_port,
+                 **ignored
+                 ):
+        if not user:
+            raise ValueError('missing user')
+        ssh = _utils.SSHConnectionConfig(user, ssh_host, ssh_port)
+        super().__init__(
+            user=user,
+            ssh=ssh,
+        )
+
+    def as_jsonable(self):
+        return {
+            'user': self.user,
+            'ssh_host': self.ssh.host,
+            'ssh_port': self.ssh.port,
+        }
+
+
 class JobWorker:
 
-    def __init__(self, workers, fs):
-        self._workers = workers
+    def __init__(self, worker, fs):
+        self._worker = worker
         self._fs = fs
 
     def __repr__(self):
@@ -334,29 +363,25 @@ class JobWorker:
     def __eq__(self, other):
         raise NotImplementedError
 
-#    @property
-#    def worker(self):
-#        return self._workers
-
     @property
     def fs(self):
         return self._fs
 
     @property
     def topfs(self):
-        return self._workers.fs
+        return self._worker.fs
 
     @property
     def ssh(self):
-        return self._workers.ssh
+        return self._worker.ssh
 
 
-class Workers:
-    """The set of configured workers."""
+class Worker:
+    """A single configured worker."""
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.local_user, 'bench')
+        fs = JobsFS.from_user(cfg.user, 'bench')
         ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
@@ -380,9 +405,32 @@ class Workers:
     def ssh(self):
         return self._ssh
 
-    def resolve(self, reqid):
+    def resolve_job(self, reqid):
         fs = self._fs.resolve_request(reqid)
         return JobWorker(self, fs)
+
+
+class Workers:
+    """The set of configured workers."""
+
+    @classmethod
+    def from_config(cls, cfg, JobsFS=JobsFS):
+        worker = Worker.from_config(cfg.worker, JobsFS)
+        return cls(worker)
+
+    def __init__(self, worker):
+        self._worker = worker
+
+    def __repr__(self):
+        args = (f'{n}={getattr(self, "_"+n)!r}'
+                for n in 'worker'.split())
+        return f'{type(self).__name__}({"".join(args)})'
+
+    def __eq__(self, other):
+        raise NotImplementedError
+
+    def resolve_job(self, reqid):
+        return self._worker.resolve_job(reqid)
 
 
 ##################################
@@ -698,7 +746,7 @@ class Job:
         '''[1:-1])
 
     def _get_ssh_agent(self):
-        agent = self._cfg.bench_ssh.agent
+        agent = self._cfg.worker.ssh.agent
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:
@@ -1080,7 +1128,7 @@ class Jobs:
         return Job(
             reqid,
             self._fs.resolve_request(reqid),
-            self._workers.resolve(reqid),
+            self._workers.resolve_job(reqid),
             self._cfg,
             self._store,
         )
