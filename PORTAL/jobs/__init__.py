@@ -85,6 +85,7 @@ class JobsConfig(_utils.TopConfig):
                  worker_user,
                  bench_ssh,
                  data_dir=None,
+                 **ignored
                  ):
         if not worker_user:
             raise ValueError('missing worker_user')
