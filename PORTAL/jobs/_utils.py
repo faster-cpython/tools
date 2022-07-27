@@ -945,8 +945,6 @@ class FSTree(types.SimpleNamespace):
     def __init__(self, root):
         if not root or root == '.':
             root = CWD
-        else:
-            root = os.path.abspath(os.path.expanduser(root))
         super().__init__(root=root)
 
     def __str__(self):
@@ -3592,7 +3590,7 @@ class SSHCommands:
 
     def run_shell(self, cmd, *, agent=None):
         conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+        return [self._ssh, *self._ssh_opts, conn, cmd]
 
     def push(self, source, target, *, agent=None):
         conn = f'{self.user}@{self.host}'
@@ -3615,7 +3613,7 @@ class SSHShellCommands(SSHCommands):
         return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
 
     def run_shell(self, cmd, *, agent=None):
-        return ' '.join(super().run_shell(cmd))
+        return ' '.join(super().run_shell(shlex.quote(cmd)))
 
     def push(self, source, target, *, agent=None):
         return ' '.join(super().push(source, target))

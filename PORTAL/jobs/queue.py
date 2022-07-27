@@ -87,13 +87,13 @@ class JobQueue:
 
     @classmethod
     def from_config(cls, cfg):
-        fs = JobsFS(self.cfg.data_dir)
+        fs = JobsFS(self.cfg.worker_name, self.cfg.data_dir)
         return cls.from_jobsfs(fs)
 
     @classmethod
-    def from_fstree(cls, fs):
+    def from_fstree(cls, cfg, fs):
         if isinstance(fs, str):
-            fs = JobsFS(fs)
+            fs = JobsFS(cfg.worker_name, fs)
         elif not isinstance(fs, JobsFS):
             raise TypeError(f'expected JobsFS, got {fs!r}')
         self = cls(
