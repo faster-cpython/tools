@@ -111,8 +111,9 @@ class JobsConfig(_utils.TopConfig):
 ##################################
 # job files
 
-class JobFS(types.SimpleNamespace):
-    """The file structure of a job's data."""
+class _JobFS(types.SimpleNamespace):
+
+    context = None
 
     @classmethod
     def from_jobsfs(cls, jobsfs, reqid):
@@ -126,11 +127,10 @@ class JobFS(types.SimpleNamespace):
             result=resultfs,
             work=workfs,
             reqid=reqid,
-            context=jobsfs.context,
         )
         return self
 
-    def __init__(self, request, result, work, reqid=None, context='portal'):
+    def __init__(self, request, result, work, reqid=None):
         request = _utils.FSTree.from_raw(request, name='request')
         work = _utils.FSTree.from_raw(work, name='work')
         result = _utils.FSTree.from_raw(result, name='result')
@@ -145,38 +145,31 @@ class JobFS(types.SimpleNamespace):
             if not reqid:
                 raise ValueError(f'unsupported reqid {orig!r}')
 
-        if not context:
-            context = 'portal'
-        elif context not in ('portal', 'bench'):
-            raise ValueError(f'unsupported context {context!r}')
-
         # the request
         request.metadata = f'{request}/request.json'
         # the job
         work.bench_script = f'{work}/run.sh'
-        if context == 'portal':
-            work.portal_script = f'{work}/send.sh'
-            work.pidfile = f'{work}/send.pid'
-            work.logfile = f'{work}/job.log'
-            work.ssh_okay = f'{work}/ssh.ok'
-        elif context == 'bench':
-            work.pidfile = f'{work}/job.pid'
-            work.logfile = f'{work}/job.log'
+        work.pidfile = f'{work}/job.pid'
+        work.logfile = f'{work}/job.log'
         # the results
         result.metadata = f'{result}/results.json'
 
         super().__init__(
             reqid=reqid,
-            context=context,
             request=request,
             work=work,
             result=result,
         )
 
+        self._custom_init()
+
         jobkind = resolve_job_kind(reqid.kind)
-        jobkind.set_request_fs(request, context)
-        jobkind.set_work_fs(work, context)
-        jobkind.set_result_fs(result, context)
+        jobkind.set_request_fs(request, self.context)
+        jobkind.set_work_fs(work, self.context)
+        jobkind.set_result_fs(result, self.context)
+
+    def _custom_init(self):
+        pass
 
     def __str__(self):
         return str(self.request)
@@ -215,20 +208,12 @@ class JobFS(types.SimpleNamespace):
         return self.work.bench_script
 
     @property
-    def portal_script(self):
-        return self.work.portal_script
-
-    @property
     def pidfile(self):
         return self.work.pidfile
 
     @property
     def logfile(self):
         return self.work.logfile
-
-    @property
-    def ssh_okay(self):
-        return self.work.ssh_okay
 
     def look_up(self, name, subname=None):
         value = getattr(self, name)
@@ -242,50 +227,27 @@ class JobFS(types.SimpleNamespace):
             str(self.work),
             str(self.result),
             self.reqid,
-            self.context,
         )
 
 
-class JobsFS(_utils.FSTree):
-    """The file structure of the jobs data."""
+class _JobsFS(_utils.FSTree):
 
-    JOBFS = JobFS
+    context = None
+
+    JOBFS = _JobFS
 
     @classmethod
-    def from_user(cls, user, context='portal'):
-        return cls(f'/home/{user}/BENCH', context)
+    def from_user(cls, user):
+        return cls(f'/home/{user}/BENCH')
 
-    def __init__(self, root='~/BENCH', context='portal'):
+    def __init__(self, root='~/BENCH'):
         if not root:
             root = '~/BENCH'
         super().__init__(root)
 
-        if not context:
-            context = 'portal'
-        elif context not in ('portal', 'bench'):
-            raise ValueError(f'unsupported context {context!r}')
-        self.context = context
-
         self.requests = _utils.FSTree(f'{root}/REQUESTS')
-        if context == 'portal':
-            self.requests.current = f'{self.requests}/CURRENT'
-
         self.work = _utils.FSTree(self.requests.root)
         self.results = _utils.FSTree(self.requests.root)
-
-        if context == 'portal':
-            self.queue = _utils.FSTree(f'{self.requests}/queue.json')
-            self.queue.data = f'{self.requests}/queue.json'
-            self.queue.lock = f'{self.requests}/queue.lock'
-            self.queue.log = f'{self.requests}/queue.log'
-        elif context == 'bench':
-            # the local git repositories used by the job
-            self.repos = _utils.FSTree(f'{self}/repositories')
-            self.repos.cpython = f'{self.repos}/cpython'
-            self.repos.pyperformance = f'{self.repos}/pyperformance'
-            self.repos.pyston_benchmarks = f'{self.repos}/pyston-benchmarks'
-        else:
-            raise ValueError(f'unsupported context {context!r}')
 
     def __str__(self):
         return self.root
@@ -294,7 +256,45 @@ class JobsFS(_utils.FSTree):
         return self.JOBFS.from_jobsfs(self, reqid)
 
     def copy(self):
-        return type(self)(self.root, self.context)
+        return type(self)(self.root)
+
+
+class JobFS(_JobFS):
+    """The file structure of a job's data."""
+
+    context = 'portal'
+
+    def _custom_init(self):
+        work = self.work
+        work.pidfile = f'{work}/send.pid'  # overrides base
+        work.portal_script = f'{work}/send.sh'
+        work.ssh_okay = f'{work}/ssh.ok'
+
+    @property
+    def portal_script(self):
+        return self.work.portal_script
+
+    @property
+    def ssh_okay(self):
+        return self.work.ssh_okay
+
+
+class JobsFS(_JobsFS):
+    """The file structure of the jobs data."""
+
+    context = 'portal'
+
+    JOBFS = JobFS
+
+    def __init__(self, root='~/BENCH'):
+        super().__init__(root)
+
+        self.requests.current = f'{self.requests}/CURRENT'
+
+        self.queue = _utils.FSTree(f'{self.requests}/queue.json')
+        self.queue.data = f'{self.requests}/queue.json'
+        self.queue.lock = f'{self.requests}/queue.lock'
+        self.queue.log = f'{self.requests}/queue.log'
 
 
 class RequestDirError(Exception):
@@ -349,6 +349,29 @@ class WorkerConfig(_utils.Config):
         }
 
 
+class WorkerJobFS(_JobFS):
+    """The file structure of a job's data on a worker."""
+
+    context = 'bench'
+
+
+class WorkerJobsFS(_JobsFS):
+    """The file structure of the jobs data on a worker."""
+
+    context = 'bench'
+
+    JOBFS = WorkerJobFS
+
+    def __init__(self, root='~/BENCH'):
+        super().__init__(root)
+
+        # the local git repositories used by the job
+        self.repos = _utils.FSTree(f'{self}/repositories')
+        self.repos.cpython = f'{self.repos}/cpython'
+        self.repos.pyperformance = f'{self.repos}/pyperformance'
+        self.repos.pyston_benchmarks = f'{self.repos}/pyston-benchmarks'
+
+
 class JobWorker:
 
     def __init__(self, worker, fs):
@@ -380,8 +403,8 @@ class Worker:
     """A single configured worker."""
 
     @classmethod
-    def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.user, 'bench')
+    def from_config(cls, cfg, JobsFS=WorkerJobsFS):
+        fs = JobsFS.from_user(cfg.user)
         ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
@@ -414,7 +437,7 @@ class Workers:
     """The set of configured workers."""
 
     @classmethod
-    def from_config(cls, cfg, JobsFS=JobsFS):
+    def from_config(cls, cfg, JobsFS=WorkerJobsFS):
         worker = Worker.from_config(cfg.worker, JobsFS)
         return cls(worker)
 
@@ -1087,7 +1110,7 @@ class Jobs:
         self._cfg = cfg
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
-        self._workers = Workers.from_config(cfg, self.FS)
+        self._workers = Workers.from_config(cfg)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
 
     def __str__(self):
