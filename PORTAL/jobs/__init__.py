@@ -632,7 +632,7 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            ssh = _utils.SSHShellCommands('$benchuser', '$host', '$port')
+            ssh = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
             user = '$user'
         else:
             user = _utils.check_shell_str(self._cfg.local_user)
@@ -724,9 +724,9 @@ class Job:
                 echo
                 {ensure_user}
             fi
-            ssh_user=$(jq -r '.bench_ssh.user' {cfgfile})
-            ssh_host=$(jq -r '.bench_ssh.host' {cfgfile})
-            ssh_port=$(jq -r '.bench_ssh.port' {cfgfile})
+            ssh_user=$(jq -r '.worker.user' {cfgfile})
+            ssh_host=$(jq -r '.worker.ssh_host' {cfgfile})
+            ssh_port=$(jq -r '.worker.ssh_port' {cfgfile})
 
             exitcode=0
             if {ssh(f'test -e {bfiles.request}')}; then
