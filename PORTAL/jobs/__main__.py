@@ -856,7 +856,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         logfile = args.logfile
     else:
         args, argv = common.parse_known_args(argv)
-        cfgile = None
+        cfgfile = None
         logfile = None
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
 
