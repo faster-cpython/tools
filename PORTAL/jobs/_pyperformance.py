@@ -52,7 +52,9 @@ class Benchmarks:
         PYSTON: {
             'url': 'https://github.com/pyston/python-macrobenchmarks',
             'reldir': 'benchmarks',
-            'show_results': True,
+            # We hide the pyston benchmarks for now, pending resolution
+            # of https://github.com/faster-cpython/ideas/issues/434.
+            #'show_results': True,
         },
     }
     for _suitename in SUITES:
