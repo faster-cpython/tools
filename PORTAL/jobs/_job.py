@@ -7,7 +7,7 @@ import sys
 import textwrap
 import time
 
-from . import _utils, _common, _workers
+from . import _utils, _common, _workers, _current
 from .requests import RequestID, Request
 
 
@@ -617,8 +617,7 @@ class Job:
         res = self.load_result()
         pid = _utils.PIDFile(fs.pidfile).read()
 
-        from . import _get_staged_request
-        staged = _get_staged_request(fs.jobs)
+        staged = _current.get_staged_request(fs.jobs)
         isstaged = (self.reqid == staged)
 
         if self.check_ssh(fail=False):

@@ -3,7 +3,7 @@ import os
 import os.path
 import sys
 
-from . import _utils, _pyperformance, _common, _workers, _job
+from . import _utils, _pyperformance, _common, _workers, _job, _current
 from .requests import RequestID, Request
 
 # top-level exports
@@ -73,32 +73,6 @@ class JobsFS(_common.JobsFS):
         self.queue.log = f'{self.requests}/queue.log'
 
 
-class RequestDirError(Exception):
-    def __init__(self, reqid, reqdir, reason, msg):
-        super().__init__(f'{reason} ({msg} - {reqdir})')
-        self.reqid = reqid
-        self.reqdir = reqdir
-        self.reason = reason
-        self.msg = msg
-
-
-def _check_reqdir(reqdir, pfiles, cls=RequestDirError):
-    requests, reqidstr = os.path.split(reqdir)
-    if requests != pfiles.requests.root:
-        raise cls(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
-    reqid = RequestID.parse(reqidstr)
-    if not reqid:
-        raise cls(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
-    if not os.path.exists(reqdir):
-        raise cls(reqid, reqdir, 'missing', 'target request dir missing')
-    if not os.path.isdir(reqdir):
-        raise cls(reqid, reqdir, 'malformed', 'target is not a directory')
-    return reqid
-
-
-##################################
-# jobs
-
 class Jobs:
 
     FS = JobsFS
@@ -154,7 +128,7 @@ class Jobs:
         )
 
     def get_current(self):
-        reqid = _get_staged_request(self._fs)
+        reqid = _current.get_staged_request(self._fs)
         if not reqid:
             return None
         return self._get(reqid)
@@ -208,14 +182,14 @@ class Jobs:
 
     def activate(self, reqid):
         logger.debug('# staging request')
-        _stage_request(reqid, self._fs)
+        _current.stage_request(reqid, self._fs)
         logger.debug('# done staging request')
         job = self._get(reqid)
         job.set_status('activated')
         return job
 
     def wait_until_job_started(self, job=None, *, timeout=True):
-        current = _get_staged_request(self._fs)
+        current = _current.get_staged_request(self._fs)
         if isinstance(job, _job.Job):
             reqid = job.reqid
         else:
@@ -299,8 +273,8 @@ class Jobs:
 
         logger.info('# unstaging request %s', reqid)
         try:
-            _unstage_request(job.reqid, self._fs)
-        except RequestNotStagedError:
+            _current.unstage_request(job.reqid, self._fs)
+        except _current.RequestNotStagedError:
             pass
         logger.info('# done unstaging request')
         return job
@@ -308,8 +282,8 @@ class Jobs:
     def finish_successful(self, reqid):
         logger.info('# unstaging request %s', reqid)
         try:
-            _unstage_request(reqid, self._fs)
-        except RequestNotStagedError:
+            _current.unstage_request(reqid, self._fs)
+        except _current.RequestNotStagedError:
             pass
         logger.info('# done unstaging request')
 
@@ -370,221 +344,6 @@ def select_jobs(jobs, criteria=None):
     if not isinstance(jobs, (list, tuple)):
         jobs = list(jobs)
     yield from jobs[selection]
-
-
-##################################
-# the current job
-
-class StagedRequestError(Exception):
-
-    def __init__(self, reqid, msg):
-        super().__init__(msg)
-        self.reqid = reqid
-
-
-class StagedRequestDirError(StagedRequestError, RequestDirError):
-
-    def __init__(self, reqid, reqdir, reason, msg):
-        RequestDirError.__init__(self, reqid, reqdir, reason, msg)
-
-
-class StagedRequestStatusError(StagedRequestError):
-
-    reason = None
-
-    def __init__(self, reqid, status):
-        assert self.reason
-        super().__init__(reqid, self.reason)
-        self.status = status
-
-
-class OutdatedStagedRequestError(StagedRequestStatusError):
-    pass
-
-
-class StagedRequestNotRunningError(OutdatedStagedRequestError):
-    reason = 'is no longer running'
-
-
-class StagedRequestAlreadyFinishedError(OutdatedStagedRequestError):
-    reason = 'is still "current" even though it finished'
-
-
-class StagedRequestUnexpectedStatusError(StagedRequestStatusError):
-    reason = 'was set as the current job incorrectly'
-
-
-class StagedRequestInvalidMetadataError(StagedRequestStatusError):
-    reason = 'has invalid metadata'
-
-
-class StagedRequestMissingStatusError(StagedRequestInvalidMetadataError):
-    reason = 'is missing status metadata'
-
-
-class StagingRequestError(Exception):
-
-    def __init__(self, reqid, msg):
-        super().__init__(msg)
-        self.reqid = reqid
-
-
-class RequestNotPendingError(StagingRequestError):
-
-    def __init__(self, reqid, status=None):
-        super().__init__(reqid, f'could not stage {reqid} (expected pending, got {status or "???"} status)')
-        self.status = status
-
-
-class RequestAlreadyStagedError(StagingRequestError):
-
-    def __init__(self, reqid, curid):
-        super().__init__(reqid, f'could not stage {reqid} ({curid} already staged)')
-        self.curid = curid
-
-
-class UnstagingRequestError(Exception):
-
-    def __init__(self, reqid, msg):
-        super().__init__(msg)
-        self.reqid = reqid
-
-
-class RequestNotStagedError(UnstagingRequestError):
-
-    def __init__(self, reqid, curid=None):
-        msg = f'{reqid} is not currently staged'
-        if curid:
-            msg = f'{msg} ({curid} is)'
-        super().__init__(reqid, msg)
-        self.curid = curid
-
-
-def _read_staged(pfiles):
-    link = pfiles.requests.current
-    try:
-        reqdir = os.readlink(link)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        if os.path.islink(link):
-            raise  # re-raise
-        exc = RequestDirError(None, link, 'malformed', 'target is not a link')
-        try:
-            exc.reqid = _check_reqdir(link, pfiles, StagedRequestDirError)
-        except StagedRequestDirError:
-            raise exc
-        raise exc
-    else:
-        return _check_reqdir(reqdir, pfiles, StagedRequestDirError)
-
-
-def _check_staged_request(reqid, pfiles):
-    # Check the request status.
-    reqfs = pfiles.resolve_request(reqid)
-    try:
-        status = Result.read_status(str(reqfs.result.metadata))
-    except _utils.MissingMetadataError:
-        raise StagedRequestMissingStatusError(reqid, None)
-    except _utils.InvalidMetadataError:
-        raise StagedRequestInvalidMetadataError(reqid, None)
-    else:
-        if status in Result.ACTIVE and status != 'pending':
-            if not _utils.PIDFile(str(reqfs.pidfile)).read(orphaned='ignore'):
-                raise StagedRequestNotRunningError(reqid, status)
-        elif status in Result.FINISHED:
-            raise StagedRequestAlreadyFinishedError(reqid, status)
-        else:  # created, pending
-            raise StagedRequestUnexpectedStatusError(reqid, status)
-    # XXX Do other checks?
-
-
-def _set_staged(reqid, reqdir, pfiles):
-    try:
-        os.symlink(reqdir, pfiles.requests.current)
-    except FileExistsError:
-        try:
-            curid = _read_staged(pfiles)
-        except StagedRequestError as exc:
-            # One was already set but the link is invalid.
-            _clear_staged(pfiles, exc)
-        else:
-            if curid == reqid:
-                # XXX Fail?
-                logger.warn(f'{reqid} is already set as the current job')
-                return
-            elif curid:
-                # Clear it if it is no longer valid.
-                try:
-                    _check_staged_request(curid, pfiles)
-                except StagedRequestError as exc:
-                    _clear_staged(pfiles, exc)
-                else:
-                    raise RequestAlreadyStagedError(reqid, curid)
-        logger.info('trying again')
-        # XXX Guard against infinite recursion?
-        return _set_staged(reqid, reqdir, pfiles)
-
-
-def _clear_staged(pfiles, exc=None):
-    if exc is not None:
-        if isinstance(exc, StagedRequestInvalidMetadataError):
-            log = logger.error
-        else:
-            log = logger.warn
-        reqid = getattr(exc, 'reqid', None)
-        reason = getattr(exc, 'reason', None) or 'broken'
-        if not reason.startswith(('is', 'was', 'has')):
-            reason = f'is {reason}'
-        log(f'request {reqid or "???"} {reason} ({exc}); unsetting as the current job...')
-    os.unlink(pfiles.requests.current)
-
-
-# These are the higher-level helpers:
-
-def _get_staged_request(pfiles):
-    try:
-        curid = _read_staged(pfiles)
-    except StagedRequestError as exc:
-        _clear_staged(pfiles, exc)
-        return None
-    if curid:
-        try:
-            _check_staged_request(curid, pfiles)
-        except StagedRequestError as exc:
-            _clear_staged(pfiles, exc)
-            curid = None
-    return curid
-
-
-def _stage_request(reqid, pfiles):
-    jobfs = pfiles.resolve_request(reqid)
-    status = Result.read_status(jobfs.result.metadata, fail=False)
-    if status is not Result.STATUS.PENDING:
-        raise RequestNotPendingError(reqid, status)
-    _set_staged(reqid, jobfs.request, pfiles)
-
-
-def _unstage_request(reqid, pfiles):
-    reqid = RequestID.from_raw(reqid)
-    try:
-        curid = _read_staged(pfiles)
-    except StagedRequestError as exc:
-        # One was already set but the link is invalid.
-        _clear_staged(pfiles, exc)
-        raise RequestNotStagedError(reqid)
-    else:
-        if curid == reqid:
-            # It's a match!
-            _clear_staged(pfiles)
-        else:
-            if curid:
-                # Clear it if it is no longer valid.
-                try:
-                    _check_staged_request(curid, pfiles)
-                except StagedRequestError as exc:
-                    _clear_staged(pfiles, exc)
-            raise RequestNotStagedError(reqid)
 
 
 ##################################

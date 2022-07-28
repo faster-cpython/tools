@@ -71,6 +71,29 @@ def resolve_job_kind(kind):
 ##################################
 # job files
 
+class RequestDirError(Exception):
+    def __init__(self, reqid, reqdir, reason, msg):
+        super().__init__(f'{reason} ({msg} - {reqdir})')
+        self.reqid = reqid
+        self.reqdir = reqdir
+        self.reason = reason
+        self.msg = msg
+
+
+def check_reqdir(reqdir, pfiles, cls=RequestDirError):
+    requests, reqidstr = os.path.split(reqdir)
+    if requests != pfiles.requests.root:
+        raise cls(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
+    reqid = RequestID.parse(reqidstr)
+    if not reqid:
+        raise cls(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
+    if not os.path.exists(reqdir):
+        raise cls(reqid, reqdir, 'missing', 'target request dir missing')
+    if not os.path.isdir(reqdir):
+        raise cls(reqid, reqdir, 'malformed', 'target is not a directory')
+    return reqid
+
+
 class JobFS(types.SimpleNamespace):
     """File locations for a single requested job, which apply in all contexts.
 

@@ -6,13 +6,14 @@ import sys
 import traceback
 
 from . import (
-    NoRunningJobError, RequestAlreadyStagedError,
+    NoRunningJobError,
     JobsConfig, Jobs,
     sort_jobs, select_jobs,
 )
 from ._job import (
     JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
 )
+from ._current import RequestAlreadyStagedError
 from .requests import RequestID, Result
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
