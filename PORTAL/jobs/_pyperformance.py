@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 ##################################
 # pyperformance helpers
 
+class BenchmarkSuiteInfo(
+        namedtuple('BenchmarkSuiteInfo', 'name url reldir')):
+    """A single benchmark suite."""
+
+
 class Benchmarks:
 
     REPOS = os.path.join(_utils.HOME, 'repos')
@@ -36,12 +41,15 @@ class Benchmarks:
             'reldir': 'benchmarks',
         },
     }
+    for _suitename in SUITES:
+        SUITES[_suitename] = BenchmarkSuiteInfo(_suitename, **SUITES[_suitename])
+    del _suitename
 
     @classmethod
     def _load_suite(cls, suite):
         info = cls.SUITES[suite]
-        url = info['url']
-        reldir = info['reldir']
+        url = info.url
+        reldir = info.reldir
         reporoot = os.path.join(cls.REPOS,
                                 os.path.basename(url))
         if not os.path.exists(reporoot):
