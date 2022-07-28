@@ -30,8 +30,8 @@ class JobKind:
 
     REQFS_FIELDS = [
         'job_script',
-        'portal_script',
-        'ssh_okay',
+        'portal_script',  # from _job.JobFS
+        'ssh_okay',  # from _job.JobFS
     ]
     RESFS_FIELDS = [
         'pidfile',
