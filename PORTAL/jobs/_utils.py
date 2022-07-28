@@ -2748,6 +2748,10 @@ class Config(types.SimpleNamespace):
             if subincludes:
                 yield from cls._load_includes(subincludes, seen)
 
+    @classmethod
+    def from_jsonable(cls, data):
+        return cls(**data)
+
     def __init__(self, **kwargs):
         for name in list(kwargs):
             value = kwargs[name]

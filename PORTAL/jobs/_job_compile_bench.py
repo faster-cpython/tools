@@ -3,8 +3,7 @@ import logging
 import os.path
 import textwrap
 
-from . import JobKind
-from . import _utils, _pyperformance
+from . import _utils, _pyperformance, _common
 from .requests import Request, Result
 
 
@@ -312,7 +311,7 @@ def build_compile_script(req, bfiles, fake=None):
     elif exitcode != '':
         exitcode = _utils.ensure_int(exitcode, min=0)
         logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
-    python = 'python3.9'  # On the bench host.
+    python = 'python3.9'  # On the job worker.
     numjobs = 20
 
     _utils.check_shell_str(str(req.id) if req.id else '')
@@ -348,7 +347,7 @@ def build_compile_script(req, bfiles, fake=None):
     return textwrap.dedent(f'''
         #!/usr/bin/env bash
 
-        # This script runs only on the bench host.
+        # This script runs only on the job worker.
 
         # The commands in this script are deliberately explicit
         # so you can copy-and-paste them selectively.
@@ -509,17 +508,17 @@ def build_compile_script(req, bfiles, fake=None):
     '''[1:-1])
 
 
-class CompileBenchKind(JobKind):
+class CompileBenchKind(_common.JobKind):
 
     NAME = 'compile-bench'
 
     TYPICAL_DURATION_SECS = 40 * 60
 
-    REQFS_FIELDS = JobKind.REQFS_FIELDS + [
+    REQFS_FIELDS = _common.JobKind.REQFS_FIELDS + [
         'pyperformance_manifest',
         'pyperformance_config',
     ]
-    RESFS_FIELDS = JobKind.RESFS_FIELDS + [
+    RESFS_FIELDS = _common.JobKind.RESFS_FIELDS + [
         'pyperformance_log',
         'pyperformance_results',
     ]
@@ -533,7 +532,7 @@ class CompileBenchKind(JobKind):
         fs.pyperformance_config = f'{fs}/pyperformance.ini'
 
     def set_work_fs(self, fs, context):
-        if context == 'bench':
+        if context == 'job-worker':
             # other directories needed by the job
             fs.venv = f'{fs}/pyperformance-venv'
             fs.scratch_dir = f'{fs}/pyperformance-scratch'

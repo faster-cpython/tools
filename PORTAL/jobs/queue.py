@@ -2,7 +2,8 @@ import json
 import logging
 import types
 
-from . import _utils, JobError, JobsFS, RequestID
+from . import _utils, _common, _job
+from .requests import RequestID
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class JobQueueEmptyError(JobQueueError):
     MSG = 'job queue is empty'
 
 
-class QueuedJobError(JobError, JobQueueError):
+class QueuedJobError(_job.JobError, JobQueueError):
     MSG = 'some problem with job {reqid}'
 
 
@@ -40,6 +41,22 @@ class JobNotQueuedError(QueuedJobError):
 
 class JobAlreadyQueuedError(QueuedJobError):
     MSG = 'job {reqid} is already in the queue'
+
+
+class JobQueueFS(_utils.FSTree):
+    """The file structure of the job queue data."""
+
+    def __init__(self, datadir):
+        super().__init__(str(datadir))
+        self.data = f'{self.root}/queue.json'
+        self.lock = f'{self.root}/queue.lock'
+        self.log = f'{self.root}/queue.log'
+
+    def __str__(self):
+        return self.data
+
+    def __fspath__(self):
+        return self.data
 
 
 class JobQueueData(types.SimpleNamespace):
@@ -87,19 +104,25 @@ class JobQueue:
 
     @classmethod
     def from_config(cls, cfg):
-        fs = JobsFS(self.cfg.data_dir)
-        return cls.from_jobsfs(fs)
+        jobsfs = _common.JobsFS(cfg.data_dir)
+        return cls.from_fstree(jobsfs)
 
     @classmethod
     def from_fstree(cls, fs):
         if isinstance(fs, str):
-            fs = JobsFS(fs)
-        elif not isinstance(fs, JobsFS):
-            raise TypeError(f'expected JobsFS, got {fs!r}')
+            queuefs = JobQueueFS(fs)
+        elif isinstance(fs, JobQueueFS):
+            queuefs = fs
+        elif isinstance(fs, _common.JobsFS):
+            queuefs = JobQueueFS(fs.requests)
+        elif hasattr(fs, 'queue') and isinstance(fs.queue, JobQueueFS):
+            queuefs = fs.queue
+        else:
+            raise TypeError(f'expected JobQueueFS, got {fs!r}')
         self = cls(
-            datafile=fs.queue.data,
-            lockfile=fs.queue.lock,
-            logfile=fs.queue.log,
+            datafile=queuefs.data,
+            lockfile=queuefs.lock,
+            logfile=queuefs.log,
         )
         return self
 
