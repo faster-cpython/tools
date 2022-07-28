@@ -56,22 +56,27 @@ class JobsConfig(_utils.TopConfig):
         return self.worker.ssh
 
 
-class JobsFS(_common.JobsFS):
-    """The file structure of the jobs data."""
-
-    context = 'portal'
-
-    JOBFS = _job.JobFS
+class PortalFS(_utils.FSTree):
 
     def __init__(self, root='~/BENCH'):
         super().__init__(root)
-        self.requests.current = _current.symlink_from_jobsfs(self)
-        self.queue = _queue.JobQueueFS(self.requests)
+
+        self.jobs = _common.JobsFS(self.root)
+        self.jobs.context = 'portal'
+        self.jobs.JOBFS = _job.JobFS
+
+        self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
+
+        self.queue = _queue.JobQueueFS(self.jobs.requests)
+
+    @property
+    def currentjob(self):
+        return self.jobs.requests.current
 
 
 class Jobs:
 
-    FS = JobsFS
+    FS = PortalFS
 
     def __init__(self, cfg, *, devmode=False):
         self._cfg = cfg
@@ -97,18 +102,18 @@ class Jobs:
     @property
     def fs(self):
         """Files on the portal host."""
-        return self._fs.copy()
+        return self._fs.jobs.copy()
 
     @property
     def queue(self):
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self._fs)
+            self._queue = _queue.JobQueue.from_fstree(self._fs.queue)
             return self._queue
 
     def iter_all(self):
-        for name in os.listdir(str(self._fs.requests)):
+        for name in os.listdir(str(self._fs.jobs.requests)):
             reqid = RequestID.parse(name)
             if not reqid:
                 continue
@@ -117,14 +122,14 @@ class Jobs:
     def _get(self, reqid):
         return _job.Job(
             reqid,
-            self._fs.resolve_request(reqid),
+            self._fs.jobs.resolve_request(reqid),
             self._workers.resolve_job(reqid),
             self._cfg,
             self._store,
         )
 
     def get_current(self):
-        reqid = _current.get_staged_request(self._fs)
+        reqid = _current.get_staged_request(self._fs.jobs)
         if not reqid:
             return None
         return self._get(reqid)
@@ -166,7 +171,7 @@ class Jobs:
                     pass
                 yield _pyperformance.PyperfResultsFile(
                     filename,
-                    resultsroot=self._fs.results.root,
+                    resultsroot=self._fs.jobs.results.root,
                 )
 
     def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
@@ -178,14 +183,14 @@ class Jobs:
 
     def activate(self, reqid):
         logger.debug('# staging request')
-        _current.stage_request(reqid, self._fs)
+        _current.stage_request(reqid, self._fs.jobs)
         logger.debug('# done staging request')
         job = self._get(reqid)
         job.set_status('activated')
         return job
 
     def wait_until_job_started(self, job=None, *, timeout=True):
-        current = _current.get_staged_request(self._fs)
+        current = _current.get_staged_request(self._fs.jobs)
         if isinstance(job, _job.Job):
             reqid = job.reqid
         else:
@@ -269,7 +274,7 @@ class Jobs:
 
         logger.info('# unstaging request %s', reqid)
         try:
-            _current.unstage_request(job.reqid, self._fs)
+            _current.unstage_request(job.reqid, self._fs.jobs)
         except _current.RequestNotStagedError:
             pass
         logger.info('# done unstaging request')
@@ -278,7 +283,7 @@ class Jobs:
     def finish_successful(self, reqid):
         logger.info('# unstaging request %s', reqid)
         try:
-            _current.unstage_request(reqid, self._fs)
+            _current.unstage_request(reqid, self._fs.jobs)
         except _current.RequestNotStagedError:
             pass
         logger.info('# done unstaging request')
