@@ -21,8 +21,20 @@ logger = logging.getLogger(__name__)
 # pyperformance helpers
 
 class BenchmarkSuiteInfo(
-        namedtuple('BenchmarkSuiteInfo', 'name url reldir')):
+        namedtuple('BenchmarkSuiteInfo', 'name url reldir show_results')):
     """A single benchmark suite."""
+
+    def __new__(cls, name, url, reldir, show_results=False):
+        return super().__new__(
+            cls,
+            name=name,
+            url=url,
+            reldir=reldir,
+            show_results=show_results,
+        )
+
+    def __hash__(self):
+        return hash(self.name)
 
 
 class Benchmarks:
@@ -35,10 +47,12 @@ class Benchmarks:
         PYPERFORMANCE: {
             'url': 'https://github.com/python/pyperformance',
             'reldir': 'pyperformance/data-files/benchmarks',
+            'show_results': True,
         },
         PYSTON: {
             'url': 'https://github.com/pyston/python-macrobenchmarks',
             'reldir': 'benchmarks',
+            'show_results': True,
         },
     }
     for _suitename in SUITES:
@@ -2609,6 +2623,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
         filename = self._raw.resolve('README.md')
+        logger.debug('# writing results table to %s', filename)
         with open(filename) as infile:
             text = infile.read()
         try:
@@ -2656,13 +2671,18 @@ class PyperfResultsRepo(PyperfResultsStorage):
             by_suite[suite].append(row)
 
         for suite, rows in sorted(by_suite.items()):
+            hidden = not Benchmarks.SUITES[suite].show_results
             yield ''
+            if hidden:
+                yield '<!--'
             yield f'{suite or "???"}:'
             yield ''
             yield render_row(columns)
             yield render_row(['---'] * len(columns))
             for row in rows:
                 yield render_row(row)
+            if hidden:
+                yield '-->'
         yield ''
 
     def _upload(self, reltarget):
