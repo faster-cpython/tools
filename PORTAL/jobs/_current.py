@@ -103,8 +103,9 @@ def get_staged_request(pfiles):
         _clear_staged(pfiles, exc)
         return None
     if curid:
+        reqfs = pfiles.resolve_request(curid)
         try:
-            _check_staged_request(curid, pfiles)
+            _check_staged_request(curid, reqfs)
         except StagedRequestError as exc:
             _clear_staged(pfiles, exc)
             curid = None
@@ -134,8 +135,9 @@ def unstage_request(reqid, pfiles):
         else:
             if curid:
                 # Clear it if it is no longer valid.
+                reqfs = pfiles.resolve_request(curid)
                 try:
-                    _check_staged_request(curid, pfiles)
+                    _check_staged_request(curid, reqfs)
                 except StagedRequestError as exc:
                     _clear_staged(pfiles, exc)
             raise RequestNotStagedError(reqid)
@@ -160,9 +162,8 @@ def _read_staged(pfiles):
         return _common.check_reqdir(reqdir, pfiles, StagedRequestDirError)
 
 
-def _check_staged_request(reqid, pfiles):
+def _check_staged_request(reqid, reqfs):
     # Check the request status.
-    reqfs = pfiles.resolve_request(reqid)
     try:
         status = Result.read_status(str(reqfs.result.metadata))
     except _utils.MissingMetadataError:
@@ -196,8 +197,9 @@ def _set_staged(reqid, reqdir, pfiles):
                 return
             elif curid:
                 # Clear it if it is no longer valid.
+                reqfs = pfiles.resolve_request(curid)
                 try:
-                    _check_staged_request(curid, pfiles)
+                    _check_staged_request(curid, reqfs)
                 except StagedRequestError as exc:
                     _clear_staged(pfiles, exc)
                 else:
