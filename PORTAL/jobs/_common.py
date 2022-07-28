@@ -6,6 +6,9 @@ from . import _utils
 from .requests import RequestID, Request, Result
 
 
+PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
+SYS_PATH_ENTRY = os.path.dirname(PKG_ROOT)
+
 logger = logging.getLogger(__name__)
 
 

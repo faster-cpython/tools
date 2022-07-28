@@ -2,7 +2,8 @@ import json
 import logging
 import types
 
-from . import _utils, JobError, JobsFS, RequestID
+from . import _utils, _job, JobsFS
+from .requests import RequestID
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class JobQueueEmptyError(JobQueueError):
     MSG = 'job queue is empty'
 
 
-class QueuedJobError(JobError, JobQueueError):
+class QueuedJobError(_job.JobError, JobQueueError):
     MSG = 'some problem with job {reqid}'
 
 
