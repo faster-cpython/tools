@@ -843,6 +843,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('-v', '--verbose', action='count', default=0)
     common.add_argument('-q', '--quiet', action='count', default=0)
+    common.add_argument(
+        '--worker', dest='worker', default='linux',
+        help='The name of the worker machine to use. (Default: "linux")'
+    )
     if add_hidden:
         common.add_argument('--config', dest='cfgfile', metavar='FILE',
                             help='(default: ~benchmarking/BENCH/jobs.json))')
@@ -855,6 +859,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
         cfgfile = None
         logfile = None
     verbosity = max(0, VERBOSITY + args.verbose - args.quiet)
+    worker = args.worker
 
     ##########
     # Create the top-level parser.
@@ -971,6 +976,7 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     if add_hidden:
         ns.pop('cfgfile')
         ns.pop('logfile')
+    ns.pop('worker')
     ns.pop('verbose')
     ns.pop('quiet')
 
@@ -982,10 +988,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
 
     user = ns.pop('user', None)
 
-    return cmd, ns, cfgfile, user, verbosity, logfile, devmode
+    return cmd, ns, cfgfile, worker, user, verbosity, logfile, devmode
 
 
-def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
+def main(cmd, worker, cmd_kwargs, cfgfile=None, user=None, devmode=False):
     try:
         run_cmd = COMMANDS[cmd]
     except KeyError:
@@ -1007,7 +1013,7 @@ def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
 
     # Load the config.
     if not cfgfile:
-        cfgfile = JobsConfig.find_config()
+        cfgfile = JobsConfig.find_config(worker=worker)
     logger.debug('')
     logger.debug('# loading config from %s', cfgfile)
     cfg = JobsConfig.load(cfgfile)
@@ -1066,6 +1072,6 @@ def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
 
 
 if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args()
+    cmd, cmd_kwargs, cfgfile, worker, user, verbosity, logfile, devmode = parse_args()
     configure_root_logger(verbosity, logfile)
-    main(cmd, cmd_kwargs, cfgfile, user, devmode)
+    main(cmd, worker, cmd_kwargs, cfgfile, user, devmode)

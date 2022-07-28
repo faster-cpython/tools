@@ -73,7 +73,7 @@ def resolve_job_kind(kind):
 
 class JobsConfig(_utils.TopConfig):
 
-    FIELDS = ['worker_user', 'bench_ssh', 'data_dir']
+    FIELDS = ['worker_name', 'worker_user', 'bench_ssh', 'data_dir']
     OPTIONAL = ['data_dir']
 
     FILE = 'jobs.json'
@@ -82,19 +82,21 @@ class JobsConfig(_utils.TopConfig):
     ]
 
     def __init__(self,
+                 worker_name,
                  worker_user,
                  bench_ssh,
                  data_dir=None,
                  **ignored
                  ):
+        if not worker_name:
+            raise ValueError('missing worker_name')
         if not worker_user:
             raise ValueError('missing worker_user')
         bench_ssh = _utils.SSHConnectionConfig.from_raw(bench_ssh)
-        if data_dir:
-            data_dir = os.path.abspath(os.path.expanduser(data_dir))
-        else:
-            data_dir = f'/home/{worker_user}/BENCH'  # This matches DATA_ROOT.
+        if not data_dir:
+            data_dir = f'~{worker_user}/BENCH'
         super().__init__(
+            worker_name=worker_name,
             worker_user=worker_user,
             bench_ssh=bench_ssh,
             data_dir=data_dir or None,
@@ -103,6 +105,12 @@ class JobsConfig(_utils.TopConfig):
     @property
     def ssh(self):
         return self.bench_ssh
+
+    @classmethod
+    def find_config(cls, worker=None, cfgdirs=None):
+        if worker is not None:
+            cfgdirs = [f"/home/benchmarking/BENCH/WORKERS/{worker}"]
+        return super().find_config(cfgdirs)
 
 
 ##################################
@@ -122,12 +130,13 @@ class JobFS(types.SimpleNamespace):
             request=requestfs,
             result=resultfs,
             work=workfs,
+            worker_name=jobsfs.worker_name,
             reqid=reqid,
             context=jobsfs.context,
         )
         return self
 
-    def __init__(self, request, result, work, reqid=None, context='portal'):
+    def __init__(self, request, result, work, worker_name, reqid=None, context='portal'):
         request = _utils.FSTree.from_raw(request, name='request')
         work = _utils.FSTree.from_raw(work, name='work')
         result = _utils.FSTree.from_raw(result, name='result')
@@ -168,6 +177,7 @@ class JobFS(types.SimpleNamespace):
             request=request,
             work=work,
             result=result,
+            worker_name=worker_name
         )
 
         jobkind = resolve_job_kind(reqid.kind)
@@ -189,7 +199,7 @@ class JobFS(types.SimpleNamespace):
         root, requests = os.path.split(dirname)
         if requests != 'REQUESTS':
             raise NotImplementedError
-        return JobsFS(root)
+        return JobsFS(self.worker_name, root)
 
     @property
     def requestsroot(self):
@@ -249,19 +259,25 @@ class JobsFS(_utils.FSTree):
     JOBFS = JobFS
 
     @classmethod
-    def from_user(cls, user, context='portal'):
-        return cls(f'/home/{user}/BENCH', context)
+    def from_user(cls, worker_name, user, context='portal'):
+        return cls(worker_name, f'~{user}/BENCH', context)
 
-    def __init__(self, root='~/BENCH', context='portal'):
+    def __init__(self, worker_name, root='~/BENCH', context='portal'):
         if not root:
             root = '~/BENCH'
-        super().__init__(root)
 
         if not context:
             context = 'portal'
         elif context not in ('portal', 'bench'):
             raise ValueError(f'unsupported context {context!r}')
         self.context = context
+
+        if context == 'portal':
+            root = os.path.abspath(os.path.expanduser(root))
+
+        super().__init__(root)
+
+        self.worker_name = worker_name
 
         self.requests = _utils.FSTree(f'{root}/REQUESTS')
         if context == 'portal':
@@ -271,10 +287,11 @@ class JobsFS(_utils.FSTree):
         self.results = _utils.FSTree(self.requests.root)
 
         if context == 'portal':
-            self.queue = _utils.FSTree(f'{self.requests}/queue.json')
-            self.queue.data = f'{self.requests}/queue.json'
-            self.queue.lock = f'{self.requests}/queue.lock'
-            self.queue.log = f'{self.requests}/queue.log'
+            self.queue = _utils.FSTree(f'{root}/QUEUES/{worker_name}')
+            assert os.path.isdir(self.queue)
+            self.queue.data = f'{self.queue}/queue.json'
+            self.queue.lock = f'{self.queue}/queue.lock'
+            self.queue.log = f'{self.queue}/queue.log'
         elif context == 'bench':
             # the local git repositories used by the job
             self.repos = _utils.FSTree(f'{self}/repositories')
@@ -291,7 +308,7 @@ class JobsFS(_utils.FSTree):
         return self.JOBFS.from_jobsfs(self, reqid)
 
     def copy(self):
-        return type(self)(self.root, self.context)
+        return type(self)(self.worker_name, self.root, self.context)
 
 
 class RequestDirError(Exception):
@@ -324,7 +341,7 @@ class Worker:
 
     @classmethod
     def from_config(cls, cfg, JobsFS=JobsFS):
-        fs = JobsFS.from_user(cfg.worker_user, 'bench')
+        fs = JobsFS.from_user(cfg.worker_name, cfg.worker_user, 'bench')
         ssh = _utils.SSHClient.from_config(cfg.ssh)
         return cls(fs, ssh)
 
@@ -599,7 +616,7 @@ class Job:
             pvalue = _utils.quote_shell_str(pvalue)
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
-            pushfiles.append((bvalue, pvalue))
+            pushfiles.append((pvalue, bvalue))
         pushfiles = (ssh.push(s, t) for s, t in pushfiles)
         pushfiles = '\n                '.join(pushfiles)
 
@@ -1037,7 +1054,7 @@ class Jobs:
     def __init__(self, cfg, *, devmode=False):
         self._cfg = cfg
         self._devmode = devmode
-        self._fs = self.FS(cfg.data_dir)
+        self._fs = self.FS(cfg.worker_name, cfg.data_dir)
         self._worker = Worker.from_config(cfg, self.FS)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
 
@@ -1065,7 +1082,7 @@ class Jobs:
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self._fs)
+            self._queue = _queue.JobQueue.from_fstree(self._cfg, self._fs)
             return self._queue
 
     def iter_all(self):
