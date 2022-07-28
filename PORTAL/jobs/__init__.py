@@ -4,6 +4,7 @@ import os.path
 import sys
 
 from . import _utils, _pyperformance, _common, _workers, _job, _current
+from . import queue as _queue
 from .requests import RequestID, Request
 
 # top-level exports
@@ -344,9 +345,3 @@ def select_jobs(jobs, criteria=None):
     if not isinstance(jobs, (list, tuple)):
         jobs = list(jobs)
     yield from jobs[selection]
-
-
-##################################
-# avoid circular imports
-
-from . import queue as _queue

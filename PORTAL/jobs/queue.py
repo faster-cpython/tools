@@ -2,7 +2,7 @@ import json
 import logging
 import types
 
-from . import _utils, _job, JobsFS
+from . import _utils, _job
 from .requests import RequestID
 
 
@@ -88,11 +88,13 @@ class JobQueue:
 
     @classmethod
     def from_config(cls, cfg):
+        from . import JobsFS
         fs = JobsFS(self.cfg.data_dir)
         return cls.from_jobsfs(fs)
 
     @classmethod
     def from_fstree(cls, fs):
+        from . import JobsFS
         if isinstance(fs, str):
             fs = JobsFS(fs)
         elif not isinstance(fs, JobsFS):
