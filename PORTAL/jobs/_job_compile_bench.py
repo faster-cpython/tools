@@ -3,8 +3,7 @@ import logging
 import os.path
 import textwrap
 
-from . import JobKind
-from . import _utils, _pyperformance
+from . import _utils, _pyperformance, _common
 from .requests import Request, Result
 
 
@@ -509,17 +508,17 @@ def build_compile_script(req, bfiles, fake=None):
     '''[1:-1])
 
 
-class CompileBenchKind(JobKind):
+class CompileBenchKind(_common.JobKind):
 
     NAME = 'compile-bench'
 
     TYPICAL_DURATION_SECS = 40 * 60
 
-    REQFS_FIELDS = JobKind.REQFS_FIELDS + [
+    REQFS_FIELDS = _common.JobKind.REQFS_FIELDS + [
         'pyperformance_manifest',
         'pyperformance_config',
     ]
-    RESFS_FIELDS = JobKind.RESFS_FIELDS + [
+    RESFS_FIELDS = _common.JobKind.RESFS_FIELDS + [
         'pyperformance_log',
         'pyperformance_results',
     ]

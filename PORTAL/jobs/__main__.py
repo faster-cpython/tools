@@ -9,9 +9,10 @@ from . import (
     NoRunningJobError, JobNeverStartedError,
     JobAlreadyFinishedError, JobFinishedError,
     RequestAlreadyStagedError,
-    JobsConfig, Jobs, RequestID, Result,
+    JobsConfig, Jobs,
     sort_jobs, select_jobs,
 )
+from .requests import RequestID, Result
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
