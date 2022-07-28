@@ -68,10 +68,7 @@ class JobsFS(_common.JobsFS):
 
         self.requests.current = f'{self.requests}/CURRENT'
 
-        self.queue = _utils.FSTree(f'{self.requests}/queue.json')
-        self.queue.data = f'{self.requests}/queue.json'
-        self.queue.lock = f'{self.requests}/queue.lock'
-        self.queue.log = f'{self.requests}/queue.log'
+        self.queue = _queue.JobQueueFS(self.requests)
 
 
 class Jobs:
