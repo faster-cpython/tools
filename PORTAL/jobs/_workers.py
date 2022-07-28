@@ -37,10 +37,6 @@ class WorkerJobFS(_common.JobFS):
 
     context = 'job-worker'
 
-    @classmethod
-    def _get_jobsfs(cls, root):
-        return WorkerJobsFS(root)
-
 
 class WorkerJobsFS(_common.JobsFS):
     """The file structure of the jobs data on a worker."""

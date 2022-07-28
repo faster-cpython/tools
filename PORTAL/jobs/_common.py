@@ -118,20 +118,6 @@ class JobFS(types.SimpleNamespace):
         self._jobs = jobsfs
         return self
 
-    @classmethod
-    def _jobsroot_from_reqdir(cls):
-        dirname, reqid = os.path.split(self.request)
-        if str(self.reqid) != reqid:
-            raise NotImplementedError
-        root, requests = os.path.split(dirname)
-        if requests != 'REQUESTS':
-            raise NotImplementedError
-        return root
-
-    @classmethod
-    def _get_jobsfs(cls, root):
-        return JobsFS(root)
-
     def __init__(self, request, result, work, reqid=None):
         request = _utils.FSTree.from_raw(request, name='request')
         work = _utils.FSTree.from_raw(work, name='work')
@@ -178,15 +164,6 @@ class JobFS(types.SimpleNamespace):
 
     def __fspath__(self):
         return str(self.request)
-
-    @property
-    def jobs(self):
-        try:
-            return self._jobs
-        except AttributeError:
-            root = self._jobsroot_from_reqdir(self.request)
-            self._jobs = self._get_jobsfs(root)
-            return self._jobs
 
     @property
     def requestsroot(self):

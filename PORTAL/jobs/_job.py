@@ -44,10 +44,6 @@ class JobFS(_common.JobFS):
 
     context = 'portal'
 
-    @classmethod
-    def _get_jobsfs(cls, root):
-        return JobsFS(root)
-
     def _custom_init(self):
         work = self.work
         work.pidfile = f'{work}/send.pid'  # overrides base
