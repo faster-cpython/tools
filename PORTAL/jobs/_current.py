@@ -5,7 +5,7 @@ import os
 import os.path
 
 from . import _utils, _common
-from .requests import RequestID
+from .requests import RequestID, Result
 
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ import textwrap
 import time
 
 from . import _utils, _common, _workers, _current
-from .requests import RequestID, Request
+from .requests import RequestID, Request, Result
 
 
 logger = logging.getLogger(__name__)
