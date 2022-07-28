@@ -73,7 +73,7 @@ alias bench-vi='bench-cwd vi -O -u $HOME/.vimrc'
 alias bench-view='bench-cwd view -O -u $HOME/.vimrc'
 
 {
-portal_config="$LOCAL_BENCH_DIR/portal.json"
+portal_config="$LOCAL_BENCH_DIR/jobs.json"
 BENCH_USER="$(bench jq -r '.send_user' $portal_config)"
 BENCH_HOST="$(bench jq -r '.send_host' $portal_config)"
 BENCH_PORT="$(bench jq -r '.send_port' $portal_config)"

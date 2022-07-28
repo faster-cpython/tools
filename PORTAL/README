@@ -12,7 +12,7 @@ Directory structure:
    |   |
    |   |- TEMPLATES/        - examples of requests (like in ~/.bench/REQUESTS)
    |   |
-   |   |- portal.json       - (private) the config file for request machinery on the portal host
+   |   |- jobs.json         - (private) the config file for request machinery on the portal host
    |   |- run-bench.py      - a convenience script for running the benchmark suite
    |   |- .bashrc-common.sh - a script sourced in other users' .bashrc files
 
