@@ -104,70 +104,75 @@ def symlink_from_jobsfs(jobsfs):
         return f'{jobsfs.requests}/CURRENT'
 
 
-def get_staged_request(pfiles):
+def get_staged_request(jobsfs, symlink=None):
+    if not symlink:
+        symlink = symlink_from_jobsfs(jobsfs)
     try:
-        curid = _read_staged(pfiles)
+        curid = _read_staged(symlink, jobsfs)
     except StagedRequestError as exc:
-        _clear_staged(pfiles, exc)
+        _clear_staged(symlink, exc)
         return None
     if curid:
-        reqfs = pfiles.resolve_request(curid)
+        jobfs = jobsfs.resolve_request(curid)
         try:
-            _check_staged_request(curid, reqfs)
+            _check_staged_request(curid, jobfs)
         except StagedRequestError as exc:
-            _clear_staged(pfiles, exc)
+            _clear_staged(symlink, exc)
             curid = None
     return curid
 
 
-def stage_request(reqid, pfiles):
-    jobfs = pfiles.resolve_request(reqid)
+def stage_request(reqid, jobsfs, symlink=None):
+    if not symlink:
+        symlink = symlink_from_jobsfs(jobsfs)
+    jobfs = jobsfs.resolve_request(reqid)
     status = Result.read_status(jobfs.result.metadata, fail=False)
     if status is not Result.STATUS.PENDING:
         raise RequestNotPendingError(reqid, status)
-    _set_staged(reqid, jobfs.request, pfiles)
+    _set_staged(reqid, jobfs.request, symlink, jobsfs)
 
 
-def unstage_request(reqid, pfiles):
+def unstage_request(reqid, jobsfs, symlink=None):
+    if not symlink:
+        symlink = symlink_from_jobsfs(jobsfs)
     reqid = RequestID.from_raw(reqid)
     try:
-        curid = _read_staged(pfiles)
+        curid = _read_staged(symlink, jobsfs)
     except StagedRequestError as exc:
         # One was already set but the link is invalid.
-        _clear_staged(pfiles, exc)
+        _clear_staged(symlink, exc)
         raise RequestNotStagedError(reqid)
     else:
         if curid == reqid:
             # It's a match!
-            _clear_staged(pfiles)
+            _clear_staged(symlink)
         else:
             if curid:
                 # Clear it if it is no longer valid.
-                reqfs = pfiles.resolve_request(curid)
+                jobfs = jobsfs.resolve_request(curid)
                 try:
-                    _check_staged_request(curid, reqfs)
+                    _check_staged_request(curid, jobfs)
                 except StagedRequestError as exc:
-                    _clear_staged(pfiles, exc)
+                    _clear_staged(symlink, exc)
             raise RequestNotStagedError(reqid)
 
 
-def _read_staged(pfiles):
-    link = pfiles.requests.current
+def _read_staged(symlink, jobsfs):
     try:
-        reqdir = os.readlink(link)
+        reqdir = os.readlink(symlink)
     except FileNotFoundError:
         return None
     except OSError:
-        if os.path.islink(link):
+        if os.path.islink(symlink):
             raise  # re-raise
-        exc = _common.RequestDirError(None, link, 'malformed', 'target is not a link')
+        exc = _common.RequestDirError(None, symlink, 'malformed', 'target is not a link')
         try:
-            exc.reqid = _common.check_reqdir(link, pfiles, StagedRequestDirError)
+            exc.reqid = _common.check_reqdir(symlink, jobsfs, StagedRequestDirError)
         except StagedRequestDirError:
             raise exc
         raise exc
     else:
-        return _common.check_reqdir(reqdir, pfiles, StagedRequestDirError)
+        return _common.check_reqdir(reqdir, jobsfs, StagedRequestDirError)
 
 
 def _check_staged_request(reqid, reqfs):
@@ -189,15 +194,15 @@ def _check_staged_request(reqid, reqfs):
     # XXX Do other checks?
 
 
-def _set_staged(reqid, reqdir, pfiles):
+def _set_staged(reqid, reqdir, symlink, jobsfs):
     try:
-        os.symlink(reqdir, pfiles.requests.current)
+        os.symlink(reqdir, symlink)
     except FileExistsError:
         try:
-            curid = _read_staged(pfiles)
+            curid = _read_staged(symlink, jobsfs)
         except StagedRequestError as exc:
             # One was already set but the link is invalid.
-            _clear_staged(pfiles, exc)
+            _clear_staged(symlink, exc)
         else:
             if curid == reqid:
                 # XXX Fail?
@@ -205,19 +210,19 @@ def _set_staged(reqid, reqdir, pfiles):
                 return
             elif curid:
                 # Clear it if it is no longer valid.
-                reqfs = pfiles.resolve_request(curid)
+                jobfs = jobsfs.resolve_request(curid)
                 try:
-                    _check_staged_request(curid, reqfs)
+                    _check_staged_request(curid, jobfs)
                 except StagedRequestError as exc:
-                    _clear_staged(pfiles, exc)
+                    _clear_staged(symlink, exc)
                 else:
                     raise RequestAlreadyStagedError(reqid, curid)
         logger.info('trying again')
         # XXX Guard against infinite recursion?
-        return _set_staged(reqid, reqdir, pfiles)
+        return _set_staged(reqid, reqdir, symlink, jobsfs)
 
 
-def _clear_staged(pfiles, exc=None):
+def _clear_staged(symlink, exc=None):
     if exc is not None:
         if isinstance(exc, StagedRequestInvalidMetadataError):
             log = logger.error
@@ -228,4 +233,4 @@ def _clear_staged(pfiles, exc=None):
         if not reason.startswith(('is', 'was', 'has')):
             reason = f'is {reason}'
         log(f'request {reqid or "???"} {reason} ({exc}); unsetting as the current job...')
-    os.unlink(pfiles.requests.current)
+    os.unlink(symlink)
