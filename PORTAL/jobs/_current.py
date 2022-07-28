@@ -96,6 +96,14 @@ class RequestNotStagedError(UnstagingRequestError):
         self.curid = curid
 
 
+def symlink_from_jobsfs(jobsfs):
+    jobsfs = _common.JobsFS.from_raw(jobsfs)
+    try:
+        return jobsfs.requests.current
+    except AttributeError:
+        return f'{jobsfs.requests}/CURRENT'
+
+
 def get_staged_request(pfiles):
     try:
         curid = _read_staged(pfiles)

@@ -65,9 +65,7 @@ class JobsFS(_common.JobsFS):
 
     def __init__(self, root='~/BENCH'):
         super().__init__(root)
-
-        self.requests.current = f'{self.requests}/CURRENT'
-
+        self.requests.current = _current.symlink_from_jobsfs(self)
         self.queue = _queue.JobQueueFS(self.requests)
 
 

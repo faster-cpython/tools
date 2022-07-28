@@ -245,6 +245,19 @@ class JobsFS(_utils.FSTree):
     def from_user(cls, user):
         return cls(f'/home/{user}/BENCH')
 
+    @classmethod
+    def from_raw(cls, raw):
+        if not raw:
+            raise ValueError('missing jobsfs')
+        elif isinstance(raw, JobsFS):
+            return raw
+        elif isinstance(raw, str):
+            if os.path.basename(raw) == 'REQUESTS':
+                raw = os.path.dirname(raw)
+            return cls(raw)
+        else:
+            raise TypeError(raw)
+
     def __init__(self, root='~/BENCH'):
         if not root:
             root = '~/BENCH'
