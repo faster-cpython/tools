@@ -1863,8 +1863,10 @@ class PyperfResultsIndex:
 #    add()
 #    ensure_means()
 
-    def __init__(self):
-        self._entries = []
+    def __init__(self, entries=None):
+        if entries is None:
+            entries = []
+        self._entries = entries
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -1979,6 +1981,23 @@ class PyperfResultsIndex:
     def as_rendered_rows(self, columns):
         for info in self._entries:
             yield info.as_rendered_row(columns), info
+
+    def summarized(self):
+        """
+        Returns a table with only the latest result from a given
+        suite/major.minor version.
+        """
+        entries = sorted(self._entries, key=lambda x: x.sortkey, reverse=True)
+        summarized = []
+        seen = set()
+        for info in entries:
+            suite = info.uploadid.suite
+            version = _utils.Version.from_raw(info.uploadid.version)
+            key = (suite, version.major, version.minor)
+            if key not in seen:
+                seen.add(key)
+                summarized.append(info)
+        return PyperfResultsIndex(summarized[::-1])
 
 
 ##################################
@@ -2606,7 +2625,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
         )
         added = list(added)  # Force the iterator to complete.
         index = self._resultsdir.load_index()
-        readme = self._update_table(index)
+        readme = self._update_table(index.summarized(), "README.md")
+        benchmark_results_readme = self._update_table(
+            index, "benchmark-results/README.md"
+        )
 
         logger.info('committing to the repo...')
         for info in added:
@@ -2620,11 +2642,11 @@ class PyperfResultsRepo(PyperfResultsStorage):
         if push:
             self._upload(self.datadir or '.')
 
-    def _update_table(self, index):
+    def _update_table(self, index, filename):
         table_lines = self._render_markdown(index)
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
-        filename = self._raw.resolve('README.md')
+        filename = self._raw.resolve(filename)
         logger.debug('# writing results table to %s', filename)
         with open(filename) as infile:
             text = infile.read()
