@@ -220,7 +220,7 @@ class JobsFS(_utils.FSTree):
 
     @classmethod
     def from_user(cls, user):
-        return cls(f'/home/{user}/BENCH')
+        return cls(f'~{user}/BENCH')
 
     @classmethod
     def from_raw(cls, raw):
@@ -235,7 +235,7 @@ class JobsFS(_utils.FSTree):
         else:
             raise TypeError(raw)
 
-    def __init__(self, root='~/BENCH'):
+    def __init__(self, root=None):
         if not root:
             root = '~/BENCH'
         super().__init__(root)

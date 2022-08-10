@@ -846,6 +846,10 @@ def parse_args(argv=sys.argv[1:], prog=sys.argv[0]):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('-v', '--verbose', action='count', default=0)
     common.add_argument('-q', '--quiet', action='count', default=0)
+    common.add_argument(
+        '--worker', default='linux',
+        help='The name of the worker machine to use. (Default: linux)'
+    )
     if add_hidden:
         common.add_argument('--config', dest='cfgfile', metavar='FILE',
                             help='(default: ~benchmarking/BENCH/jobs.json))')
@@ -1015,7 +1019,8 @@ def main(cmd, cmd_kwargs, cfgfile=None, user=None, devmode=False):
     logger.debug('# loading config from %s', cfgfile)
     cfg = JobsConfig.load(cfgfile)
 
-    jobs = Jobs(cfg, devmode=devmode)
+    jobs = Jobs(cmd_kwargs['worker'], cfg, devmode=devmode)
+    cmd_kwargs.pop('worker')
 
     if cmd != 'queue-info' and not cmd.startswith('internal-'):
         # In some cases the mechanism to run jobs from the queue may

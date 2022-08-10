@@ -945,8 +945,6 @@ class FSTree(types.SimpleNamespace):
     def __init__(self, root):
         if not root or root == '.':
             root = CWD
-        else:
-            root = os.path.abspath(os.path.expanduser(root))
         super().__init__(root=root)
 
     def __str__(self):
@@ -3568,14 +3566,15 @@ class SSHCommands:
 
     @classmethod
     def from_config(cls, cfg, **kwargs):
-        return cls(cfg.user, cfg.host, cfg.port, **kwargs)
+        return cls(cfg.user, cfg.host, cfg.port, cfg.agent, **kwargs)
 
-    def __init__(self, user, host, port, *, ssh=None, scp=None):
+    def __init__(self, user, host, port, agent, *, ssh=None, scp=None):
         self.user = check_shell_str(user)
         self.host = check_shell_str(host)
         self.port = int(port)
         if self.port < 1:
             raise ValueError(f'invalid port {self.port}')
+        self.agent = agent
 
         opts = []
         if self.host == 'localhost':
@@ -3601,7 +3600,7 @@ class SSHCommands:
 
     def run_shell(self, cmd, *, agent=None):
         conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+        return [self._ssh, *self._ssh_opts, conn, cmd]
 
     def push(self, source, target, *, agent=None):
         conn = f'{self.user}@{self.host}'
@@ -3624,7 +3623,7 @@ class SSHShellCommands(SSHCommands):
         return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
 
     def run_shell(self, cmd, *, agent=None):
-        return ' '.join(super().run_shell(cmd))
+        return ' '.join(super().run_shell(shlex.quote(cmd)))
 
     def push(self, source, target, *, agent=None):
         return ' '.join(super().push(source, target))
@@ -3650,11 +3649,11 @@ class SSHClient(SSHCommands):
 
     @property
     def commands(self):
-        return SSHCommands(self.user, self.host, self.port)
+        return SSHCommands(self.user, self.host, self.port, self.agent)
 
     @property
     def shell_commands(self):
-        return SSHShellCommands(self.user, self.host, self.port)
+        return SSHShellCommands(self.user, self.host, self.port, self.agent)
 
     def check(self, *, agent=None):
         return (self.run_shell('true', agent=agent).returncode == 0)

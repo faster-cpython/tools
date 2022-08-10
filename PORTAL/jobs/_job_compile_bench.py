@@ -39,7 +39,7 @@ class CompileBenchRequest(Request):
     PYSTON_BENCHMARKS = _utils.GitHubTarget.from_origin('pyston', 'python-macrobenchmarks')
 
     #pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
-    pyperformance = PYPERFORMANCE.copy('5b6142e')  # will be 1.0.5 release
+    pyperformance = PYPERFORMANCE.copy('684eafe')  # will be 1.0.6 release
     pyston_benchmarks = PYSTON_BENCHMARKS.copy('96e7bb3')  # main from 2022-01-21
     #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
@@ -326,9 +326,12 @@ def build_compile_script(req, bfiles, fake=None):
     maybe_branch = branch or ''
     ref = _utils.check_shell_str(req.pyperformance_ref)
 
-    cpython_repo = _utils.quote_shell_str(bfiles.repos.cpython)
-    pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
-    pyston_benchmarks_repo = _utils.quote_shell_str(bfiles.repos.pyston_benchmarks)
+    cpython_repo = bfiles.repos.cpython
+    pyperformance_repo = bfiles.repos.pyperformance
+    pyston_benchmarks_repo = bfiles.repos.pyston_benchmarks
+    _utils.check_shell_str(cpython_repo, allowspaces=False)
+    _utils.check_shell_str(pyperformance_repo, allowspaces=False)
+    _utils.check_shell_str(pyston_benchmarks_repo, allowspaces=False)
 
     bfiles = bfiles.resolve_request(req.id)
     _utils.check_shell_str(bfiles.work.pidfile)

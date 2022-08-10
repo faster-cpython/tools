@@ -200,8 +200,8 @@ class Job:
             user = '$user'
         else:
             user = _utils.check_shell_str(self._cfg.local_user)
-            _utils.check_shell_str(self._cfg.ssh.user)
-            _utils.check_shell_str(self._cfg.ssh.host)
+            _utils.check_shell_str(self._worker.ssh.user)
+            _utils.check_shell_str(self._worker.ssh.host)
             ssh = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
@@ -236,7 +236,7 @@ class Job:
             pvalue = _utils.quote_shell_str(pvalue)
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
-            pushfiles.append((bvalue, pvalue))
+            pushfiles.append((pvalue, bvalue))
         pushfiles = (ssh.push(s, t) for s, t in pushfiles)
         pushfiles = '\n                '.join(pushfiles)
 
@@ -334,7 +334,7 @@ class Job:
         '''[1:-1])
 
     def _get_ssh_agent(self):
-        agent = self._cfg.worker.ssh.agent
+        agent = self.worker.ssh.agent
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:

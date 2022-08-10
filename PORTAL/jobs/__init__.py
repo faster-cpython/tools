@@ -21,7 +21,7 @@ class NoRunningJobError(JobsError):
 class JobsConfig(_utils.TopConfig):
     """The jobs-related configuration used on the portal host."""
 
-    FIELDS = ['local_user', 'worker', 'data_dir']
+    FIELDS = ['local_user', 'workers', 'data_dir']
     OPTIONAL = ['data_dir']
 
     FILE = 'jobs.json'
@@ -31,34 +31,32 @@ class JobsConfig(_utils.TopConfig):
 
     def __init__(self,
                  local_user,
-                 worker,
+                 workers,
                  data_dir=None,
                  **ignored
                  ):
         if not local_user:
             raise ValueError('missing local_user')
-        if not worker:
-            raise ValueError('missing worker')
-        elif not isinstance(worker, _workers.WorkerConfig):
-            worker = _workers.WorkerConfig.from_jsonable(worker)
-        if data_dir:
-            data_dir = os.path.abspath(os.path.expanduser(data_dir))
-        else:
-            data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
+        if not workers:
+            raise ValueError('missing workers')
+        for worker_name, worker in workers.items():
+            if not isinstance(worker, _workers.WorkerConfig):
+                workers[worker_name] = _workers.WorkerConfig.from_jsonable(worker)
+
+        if not data_dir:
+            data_dir = f'~{local_user}/BENCH'  # This matches DATA_ROOT.
+        data_dir = os.path.abspath(os.path.expanduser(data_dir))
+
         super().__init__(
             local_user=local_user,
-            worker=worker,
+            workers=workers,
             data_dir=data_dir or None,
         )
-
-    @property
-    def ssh(self):
-        return self.worker.ssh
 
 
 class PortalFS(_utils.FSTree):
 
-    def __init__(self, root='~/BENCH'):
+    def __init__(self, worker_name, root):
         super().__init__(root)
 
         self.jobs = _common.JobsFS(self.root)
@@ -67,7 +65,7 @@ class PortalFS(_utils.FSTree):
 
         self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
 
-        self.queue = _queue.JobQueueFS(self.jobs.requests)
+        self.queue = _queue.JobQueueFS(f"{root}/QUEUES/{worker_name}")
 
     @property
     def currentjob(self):
@@ -78,11 +76,12 @@ class Jobs:
 
     FS = PortalFS
 
-    def __init__(self, cfg, *, devmode=False):
+    def __init__(self, worker_name, cfg, *, devmode=False):
         self._cfg = cfg
         self._devmode = devmode
-        self._fs = self.FS(cfg.data_dir)
-        self._workers = _workers.Workers.from_config(cfg)
+        self._fs = self.FS(worker_name, cfg.data_dir)
+        self._workers = _workers.Workers.from_config(cfg.workers)
+        self._worker = self._workers[worker_name]
         self._store = _pyperformance.FasterCPythonResults.from_remote()
 
     def __str__(self):
@@ -123,7 +122,7 @@ class Jobs:
         return _job.Job(
             reqid,
             self._fs.jobs.resolve_request(reqid),
-            self._workers.resolve_job(reqid),
+            self._worker.resolve_job(reqid),
             self._cfg,
             self._store,
         )

@@ -45,7 +45,7 @@ class WorkerJobsFS(_common.JobsFS):
 
     JOBFS = WorkerJobFS
 
-    def __init__(self, root='~/BENCH'):
+    def __init__(self, root=None):
         super().__init__(root)
 
         # the local git repositories used by the job
@@ -87,12 +87,13 @@ class Worker:
     """A single configured worker."""
 
     @classmethod
-    def from_config(cls, cfg, JobsFS=WorkerJobsFS):
+    def from_config(cls, name, cfg, JobsFS=WorkerJobsFS):
         fs = JobsFS.from_user(cfg.user)
         ssh = _utils.SSHClient.from_config(cfg.ssh)
-        return cls(fs, ssh)
+        return cls(name, fs, ssh)
 
-    def __init__(self, fs, ssh):
+    def __init__(self, name, fs, ssh):
+        self._name = name
         self._fs = fs
         self._ssh = ssh
 
@@ -103,6 +104,10 @@ class Worker:
 
     def __eq__(self, other):
         raise NotImplementedError
+
+    @property
+    def name(self):
+        return self._name
 
     @property
     def fs(self):
@@ -122,19 +127,21 @@ class Workers:
 
     @classmethod
     def from_config(cls, cfg, JobsFS=WorkerJobsFS):
-        worker = Worker.from_config(cfg.worker, JobsFS)
-        return cls(worker)
+        workers = {}
+        for worker_name, worker in cfg.items():
+            workers[worker_name] = Worker.from_config(worker_name, worker, JobsFS)
+        return cls(workers)
 
-    def __init__(self, worker):
-        self._worker = worker
-
-    def __repr__(self):
-        args = (f'{n}={getattr(self, "_"+n)!r}'
-                for n in 'worker'.split())
-        return f'{type(self).__name__}({"".join(args)})'
+    def __init__(self, workers):
+        self._workers = workers
 
     def __eq__(self, other):
         raise NotImplementedError
 
-    def resolve_job(self, reqid):
-        return self._worker.resolve_job(reqid)
+    def __getitem__(self, worker_name):
+        if worker_name not in self._workers:
+            raise ValueError(
+                f"Unknown worker '{worker_name}', "
+                f"must be one of {self._workers.keys()}"
+            )
+        return self._workers[worker_name]
