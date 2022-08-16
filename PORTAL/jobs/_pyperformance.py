@@ -2639,7 +2639,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
         for info in added:
             repo.add(info.filename)
         repo.add(self._resultsdir.indexfile)
-        repo.add(readme)
+        for readme in readmes:
+            repo.add(readme)
         msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
         repo.commit(msg)
         logger.info('...done committing')
