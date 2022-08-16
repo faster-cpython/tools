@@ -2625,10 +2625,15 @@ class PyperfResultsRepo(PyperfResultsStorage):
         )
         added = list(added)  # Force the iterator to complete.
         index = self._resultsdir.load_index()
-        readme = self._update_table(index.summarized(), "README.md")
-        benchmark_results_readme = self._update_table(
-            index, "benchmark-results/README.md"
-        )
+        if self.datadir:
+            readmes = [
+                self._update_table(index.summarized(), "README.md"),
+                self._update_table(index, os.path.join(self.datadir, "README.md"))
+            )
+        else:
+            readmes = [
+                self._update_table(index, "README.md"),
+            ]
 
         logger.info('committing to the repo...')
         for info in added:
