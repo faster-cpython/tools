@@ -2629,7 +2629,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             readmes = [
                 self._update_table(index.summarized(), "README.md"),
                 self._update_table(index, os.path.join(self.datadir, "README.md"))
-            )
+            ]
         else:
             readmes = [
                 self._update_table(index, "README.md"),
