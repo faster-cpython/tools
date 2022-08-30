@@ -56,7 +56,7 @@ class Benchmarks:
 
     PYPERFORMANCE = 'pyperformance'
     PYSTON = 'pyston'
-    _SUITES = {
+    _SUITES: Dict[str, Dict[str, Any]] = {
         PYPERFORMANCE: {
             'url': 'https://github.com/python/pyperformance',
             'reldir': 'pyperformance/data-files/benchmarks',

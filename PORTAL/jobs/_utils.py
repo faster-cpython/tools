@@ -16,7 +16,7 @@ import textwrap
 import time
 import types
 from typing import (
-    Any, Callable, Dict, Iterable, List, Literal, Mapping, Optional, Sequence,
+    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence,
     TextIO, Tuple, Type, Union
 )
 
@@ -118,7 +118,7 @@ def validate_int(
         value: Any,
         name: Optional[str] = None,
         *,
-        range: Optional[Literal['non-negative', 'positive']] = None,
+        range: Optional[str] = None,
         required: bool = True
 ) -> Optional[int]:
     def fail(value=value, name=name, range=range):
@@ -156,7 +156,7 @@ def normalize_int(
         value: Any,
         name: Optional[str] = None,
         *,
-        range: Optional[Literal['non-negative', 'positive']] = None,
+        range: Optional[str] = None,
         coerce: bool = False,
         required: bool = True,
 ) -> Optional[int]:
