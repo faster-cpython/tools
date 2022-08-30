@@ -1,0 +1,13 @@
+name: mypy
+on: [push, pull_request]
+
+jobs:
+  mypy:
+    strategy:
+      matrix:
+        python_version: ["3.7", "3.8", "3.9", "3.10"]
+    steps:
+      - uses: jpetrucciani/mypy-check@master
+        with:
+          path: 'PORTAL/jobs'
+          python_version: ${{ matrix.python_version }}

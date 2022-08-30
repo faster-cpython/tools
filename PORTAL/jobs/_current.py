@@ -3,9 +3,10 @@
 import logging
 import os
 import os.path
+from typing import Any, Optional
 
 from . import _utils, _common
-from .requests import RequestID, Result
+from .requests import RequestID, Result, ToRequestIDType
 
 
 logger = logging.getLogger(__name__)
@@ -13,22 +14,28 @@ logger = logging.getLogger(__name__)
 
 class StagedRequestError(Exception):
 
-    def __init__(self, reqid, msg):
+    def __init__(self, reqid: Optional[RequestID], msg: str):
         super().__init__(msg)
         self.reqid = reqid
 
 
 class StagedRequestDirError(StagedRequestError, _common.RequestDirError):
 
-    def __init__(self, reqid, reqdir, reason, msg):
+    def __init__(
+            self,
+            reqid: Optional[RequestID],
+            reqdir: Optional[str],
+            reason: str,
+            msg: str
+    ):
         _common.RequestDirError.__init__(self, reqid, reqdir, reason, msg)
 
 
 class StagedRequestStatusError(StagedRequestError):
 
-    reason = None
+    reason: Optional[str] = None
 
-    def __init__(self, reqid, status):
+    def __init__(self, reqid: RequestID, status: Optional[str]):
         assert self.reason
         super().__init__(reqid, self.reason)
         self.status = status
@@ -96,7 +103,7 @@ class RequestNotStagedError(UnstagingRequestError):
         self.curid = curid
 
 
-def symlink_from_jobsfs(jobsfs):
+def symlink_from_jobsfs(jobsfs: Any) -> str:
     jobsfs = _common.JobsFS.from_raw(jobsfs)
     try:
         return jobsfs.requests.current
@@ -104,7 +111,10 @@ def symlink_from_jobsfs(jobsfs):
         return f'{jobsfs.requests}/CURRENT'
 
 
-def get_staged_request(jobsfs, symlink=None):
+def get_staged_request(
+        jobsfs: Any,
+        symlink: Optional[str] = None
+) -> Optional[RequestID]:
     if not symlink:
         symlink = symlink_from_jobsfs(jobsfs)
     try:
@@ -122,7 +132,11 @@ def get_staged_request(jobsfs, symlink=None):
     return curid
 
 
-def stage_request(reqid, jobsfs, symlink=None):
+def stage_request(
+        reqid: ToRequestIDType,
+        jobsfs: _common.JobsFS,
+        symlink: Optional[str] = None
+) -> None:
     if not symlink:
         symlink = symlink_from_jobsfs(jobsfs)
     jobfs = jobsfs.resolve_request(reqid)
@@ -132,7 +146,11 @@ def stage_request(reqid, jobsfs, symlink=None):
     _set_staged(reqid, jobfs.request, symlink, jobsfs)
 
 
-def unstage_request(reqid, jobsfs, symlink=None):
+def unstage_request(
+        reqid: ToRequestIDType,
+        jobsfs: Any,
+        symlink: Optional[str] = None
+) -> None:
     if not symlink:
         symlink = symlink_from_jobsfs(jobsfs)
     reqid = RequestID.from_raw(reqid)
@@ -157,7 +175,9 @@ def unstage_request(reqid, jobsfs, symlink=None):
             raise RequestNotStagedError(reqid)
 
 
-def _read_staged(symlink, jobsfs):
+def _read_staged(
+        symlink: str, jobsfs: _common.JobsFS
+) -> Optional[RequestID]:
     try:
         reqdir = os.readlink(symlink)
     except FileNotFoundError:
@@ -175,7 +195,7 @@ def _read_staged(symlink, jobsfs):
         return _common.check_reqdir(reqdir, jobsfs, StagedRequestDirError)
 
 
-def _check_staged_request(reqid, reqfs):
+def _check_staged_request(reqid: RequestID, reqfs) -> None:
     # Check the request status.
     try:
         status = Result.read_status(str(reqfs.result.metadata))
@@ -194,7 +214,12 @@ def _check_staged_request(reqid, reqfs):
     # XXX Do other checks?
 
 
-def _set_staged(reqid, reqdir, symlink, jobsfs):
+def _set_staged(
+        reqid: ToRequestIDType,
+        reqdir: str,
+        symlink: str,
+        jobsfs: _common.JobsFS
+) -> None:
     try:
         os.symlink(reqdir, symlink)
     except FileExistsError:
@@ -222,7 +247,7 @@ def _set_staged(reqid, reqdir, symlink, jobsfs):
         return _set_staged(reqid, reqdir, symlink, jobsfs)
 
 
-def _clear_staged(symlink, exc=None):
+def _clear_staged(symlink: str, exc: Optional[Exception] = None) -> None:
     if exc is not None:
         if isinstance(exc, StagedRequestInvalidMetadataError):
             log = logger.error

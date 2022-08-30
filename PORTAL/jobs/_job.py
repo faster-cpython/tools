@@ -6,9 +6,11 @@ import subprocess
 import sys
 import textwrap
 import time
+from typing import Any, Iterable, Mapping, Optional
 
 from . import _utils, _common, _workers, _current
-from .requests import RequestID, Request, Result
+from .requests import RequestID, Request, Result, ToRequestIDType
+from . import JobsConfig
 
 
 logger = logging.getLogger(__name__)
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 class JobError(_common.JobsError):
     MSG = 'job {reqid} has a problem'
 
-    def __init__(self, reqid, msg=None):
+    def __init__(self, reqid: RequestID, msg: Optional[str] = None):
         msg = (msg or self.MSG).format(reqid=str(reqid))
         super().__init__(msg)
         self.reqid = reqid
@@ -51,18 +53,25 @@ class JobFS(_common.JobFS):
         work.ssh_okay = f'{work}/ssh.ok'
 
     @property
-    def portal_script(self):
+    def portal_script(self) -> str:
         return self.work.portal_script
 
     @property
-    def ssh_okay(self):
+    def ssh_okay(self) -> str:
         return self.work.ssh_okay
 
 
 class Job:
     """A single requested job."""
 
-    def __init__(self, reqid, fs, worker, cfg, store):
+    def __init__(
+            self,
+            reqid: ToRequestIDType,
+            fs: _utils.FSTree,
+            worker: _workers.JobWorker,
+            cfg: JobsConfig,
+            store: Any = None
+    ):
         if not reqid:
             raise ValueError('missing reqid')
         if not fs:
@@ -93,30 +102,30 @@ class Job:
         raise NotImplementedError
 
     @property
-    def reqid(self):
+    def reqid(self) -> RequestID:
         return self._reqid
 
     @property
-    def fs(self):
+    def fs(self) -> _utils.FSTree:
         return self._fs
 
     @property
-    def worker(self):
+    def worker(self) -> _workers.JobWorker:
         return self._worker
 
     @property
-    def cfg(self):
+    def cfg(self) -> JobsConfig:
         return self._cfg
 
     @property
-    def kind(self):
+    def kind(self) -> str:
         return self.reqid.kind
 
     @property
-    def request(self):
+    def request(self) -> Request:
         return Request(self._reqid, str(self._fs))
 
-    def load_request(self, *, fail=True):
+    def load_request(self, *, fail: bool = True) -> Request:
         req = self._kind.Request.load(
             self._fs.request.metadata,
             fs=self._fs.request,
@@ -124,7 +133,7 @@ class Job:
         )
         return req
 
-    def load_result(self, *, fail=True):
+    def load_result(self, *, fail: bool = True) -> Result:
         res = self._kind.Result.load(
             self._fs.result.metadata,
             fs=self._fs.result,
@@ -133,7 +142,7 @@ class Job:
         )
         return res
 
-    def get_status(self, *, fail=True):
+    def get_status(self, *, fail: bool = True) -> Optional[str]:
         try:
             return Result.read_status(self._fs.result.metadata)
         except FileNotFoundError:
@@ -152,13 +161,19 @@ class Job:
                 raise
             return None
 
-    def set_status(self, status):
+    def set_status(self, status: str) -> None:
         status = Result.resolve_status(status)
         result = self.load_result()
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
-    def _create(self, kind_kwargs, pushfsattrs, pullfsattrs, queue_log):
+    def _create(
+            self,
+            kind_kwargs: Mapping[str, Any],
+            pushfsattrs: Optional[_utils.FsAttrsType],
+            pullfsattrs: Optional[_utils.FsAttrsType],
+            queue_log: str
+    ):
         os.makedirs(self._fs.request.root, exist_ok=True)
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
@@ -185,9 +200,19 @@ class Job:
             outfile.write(script)
         os.chmod(self._fs.portal_script, 0o755)
 
-    def _build_send_script(self, queue_log, pushfsfields=None, pullfsfields=None, *,
-                           hidecfg=False,
-                           ):
+    def _build_send_script(
+            self,
+            queue_log: str,
+            pushfsfields: Optional[_utils.FsAttrsType] = None,
+            pullfsfields: Optional[_utils.FsAttrsType] = None,
+            *,
+            hidecfg: bool = False,
+    ) -> str:
+        if pushfsfields is None:
+            pushfsfields = []
+        if pullfsfields is None:
+            pullfsfields = []
+
         reqid = self.reqid
         pfiles = self._fs
         bfiles = self._worker.fs
@@ -199,7 +224,10 @@ class Job:
             ssh = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
             user = '$user'
         else:
-            user = _utils.check_shell_str(self._cfg.local_user)
+            cfg_user = _utils.check_shell_str(self._cfg.local_user)
+            if cfg_user is None:
+                raise ValueError("Couldn't find local_user")
+            user = cfg_user
             _utils.check_shell_str(self._cfg.ssh.user)
             _utils.check_shell_str(self._cfg.ssh.host)
             ssh = self._worker.ssh.shell_commands
@@ -237,8 +265,8 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pushfiles.append((bvalue, pvalue))
-        pushfiles = (ssh.push(s, t) for s, t in pushfiles)
-        pushfiles = '\n                '.join(pushfiles)
+        pushfiles_ssh = (ssh.push(s, t) for s, t in pushfiles)
+        pushfiles_str = '\n                '.join(pushfiles_ssh)
 
         pullfsfields = [
             ('result', 'metadata'),
@@ -254,12 +282,12 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pullfiles.append((bvalue, pvalue))
-        pullfiles = (ssh.pull(s, t) for s, t in pullfiles)
-        pullfiles = '\n                '.join(pullfiles)
+        pullfiles_ssh = (ssh.pull(s, t) for s, t in pullfiles)
+        pullfiles_str = '\n                '.join(pullfiles_ssh)
 
         #push = ssh.push
         #pull = ssh.pull
-        ssh = ssh.run_shell
+        ssh_run_shell = ssh.run_shell
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
@@ -293,25 +321,25 @@ class Job:
             ssh_port=$(jq -r '.worker.ssh_port' {cfgfile})
 
             exitcode=0
-            if {ssh(f'test -e {bfiles.request}')}; then
+            if {ssh_run_shell(f'test -e {bfiles.request}')}; then
                 >&2 echo "request {reqid} was already sent"
                 exitcode=1
             else
                 ( set -x
 
                 # Set up before running.
-                {ssh(f'mkdir -p {bfiles.request}')}
-                {ssh(f'mkdir -p {bfiles.work}')}
-                {ssh(f'mkdir -p {bfiles.result}')}
-                {pushfiles}
+                {ssh_run_shell(f'mkdir -p {bfiles.request}')}
+                {ssh_run_shell(f'mkdir -p {bfiles.work}')}
+                {ssh_run_shell(f'mkdir -p {bfiles.result}')}
+                {pushfiles_str}
 
                 # Run the request.
-                {ssh(bfiles.job_script)}
+                {ssh_run_shell(bfiles.job_script)}
                 exitcode=$?
 
                 # Finish up.
                 # XXX Push from the worker in run.sh instead of pulling here?
-                {pullfiles}
+                {pullfiles_str}
 
                 )
             fi
@@ -333,19 +361,25 @@ class Job:
             exit $exitcode
         '''[1:-1])
 
-    def _get_ssh_agent(self):
+    def _get_ssh_agent(self) -> _utils.SSHAgentInfo:
         agent = self._cfg.worker.ssh.agent
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:
-                agent = SSHAgentInfo.from_env_vars()
+                agent = _utils.SSHAgentInfo.from_env_vars()
         if agent:
             logger.debug(f'(using SSH agent at {agent.auth_sock})')
         else:
             logger.debug('(no SSH agent running)')
         return agent
 
-    def check_ssh(self, *, onunknown=None, agent=None, fail=True):
+    def check_ssh(
+            self,
+            *,
+            onunknown: Optional[str] = None,
+            agent: Optional[_utils.SSHAgentInfo] = None,
+            fail: bool = True
+    ) -> bool:
         filename = self._fs.ssh_okay
         if onunknown is None:
             save = False
@@ -388,7 +422,7 @@ class Job:
             raise ConnectionRefusedError('SSH failed (is your SSH agent running and up-to-date?)')
         return okay
 
-    def run(self, *, background=False):
+    def run(self, *, background: bool = False) -> int:
         agent = self._get_ssh_agent()
         env = agent.apply_env() if agent else None
         self.check_ssh(onunknown='save', agent=agent)
@@ -401,10 +435,10 @@ class Job:
             proc = subprocess.run([self._fs.portal_script], env=env)
             return proc.returncode
 
-    def get_pid(self):
-        return self._pidfile.read()
+    def get_pid(self) -> int:
+        return int(self._pidfile.read())
 
-    def kill(self):
+    def kill(self) -> None:
         pid = self.get_pid()
         if pid:
             logger.info('# killing PID %s', pid)
@@ -418,7 +452,12 @@ class Job:
         if text and text.isdigit():
             self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
-    def wait_until_started(self, timeout=None, *, checkssh=False):
+    def wait_until_started(
+            self,
+            timeout: Any = None,
+            *,
+            checkssh: bool = False
+    ) -> int:
         if not timeout or timeout < 0:
             timeout = None
         else:
@@ -444,7 +483,7 @@ class Job:
             pid = self.get_pid()
         return pid
 
-    def attach(self, lines=None):
+    def attach(self, lines: Optional[Iterable[str]] = None) -> None:
         pid = self.wait_until_started()
         try:
             if pid:
@@ -455,7 +494,12 @@ class Job:
             # XXX Prompt to cancel the job?
             return
 
-    def wait_until_finished(self, pid=None, *, timeout=True):
+    def wait_until_finished(
+            self,
+            pid: Optional[int] = None,
+            *,
+            timeout: Any = True
+    ) -> None:
         if timeout is True:
             # Default to double the typical.
             timeout = self._kind.TYPICAL_DURATION_SECS or None
@@ -480,33 +524,42 @@ class Job:
             assert status not in Result.ACTIVE, (self, status)
             raise JobNeverStartedError(self.reqid)
 
-    def cancel(self, *, ifstatus=None):
+    def cancel(self, *, ifstatus: Optional[str] = None) -> None:
         if ifstatus is not None:
-            if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
+            if self.get_status() not in (Result.STATUS.CREATED, ifstatus):
                 return
         self.kill()
         # XXX Try to download the results directly?
         self.set_status('canceled')
 
-    def close(self):
+    def close(self) -> None:
         result = self.load_result()
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
-    def upload_result(self, author=None, *, clean=True, push=True):
+    def upload_result(
+            self,
+            author: Optional[str] = None,
+            *,
+            clean: bool = True,
+            push: bool = True
+    ) -> None:
         res = self.load_result()
         # We upload directly.
-        self._store.add(
-            res.pyperf,
-            branch='main',
-            author=author,
-            compressed=False,
-            split=True,
-            clean=clean,
-            push=push,
-        )
+        if self._store is not None:
+            self._store.add(
+                res.pyperf,
+                branch='main',
+                author=author,
+                compressed=False,
+                split=True,
+                clean=clean,
+                push=push,
+            )
+        else:
+            raise ValueError("No store")
 
-    def as_row(self):  # XXX Move to JobSummary.
+    def as_row(self) -> _utils.TableRow:  # XXX Move to JobSummary.
         try:
             res = self.load_result()
         except FileNotFoundError:
@@ -521,10 +574,16 @@ class Job:
             end = finished
             if not end:
                 end, _ = _utils.get_utc_datetime()
-            elapsed = end - started
-        date = (started, self.reqid.date)
-        if not any(date):
+            if end is not None:
+                elapsed = end - started
+            else:
+                elapsed = None
+        date_options = (started, self.reqid.date)
+        date: Any
+        if not any(date_options):
             date = None
+        else:
+            date = date_options
         fullref = ref = remote = branch = tag = commit = None
         req = self.load_request(fail=False)
         if req:
@@ -584,7 +643,7 @@ class Job:
 
     # XXX Add as_summary().
 
-    def render(self, fmt=None):
+    def render(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:
             fmt = 'summary'
         reqfile = self._fs.request.metadata
@@ -601,7 +660,8 @@ class Job:
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
 
-    def _render_summary(self, fmt=None):
+
+    def _render_summary(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:
             fmt = 'verbose'
 

@@ -1,8 +1,10 @@
 import json
 import logging
 import types
+from typing import Any, Iterator, Mapping, Optional, Sequence, Tuple
 
 from . import _utils, _common, _job
+from . import JobsConfig
 from .requests import RequestID
 
 
@@ -15,7 +17,7 @@ logger = logging.getLogger(__name__)
 class JobQueueError(Exception):
     MSG = 'some problem with the job queue'
 
-    def __init__(self, msg=None):
+    def __init__(self, msg: Optional[str] = None):
         super().__init__(msg or self.MSG)
 
 
@@ -46,7 +48,7 @@ class JobAlreadyQueuedError(QueuedJobError):
 class JobQueueFS(_utils.FSTree):
     """The file structure of the job queue data."""
 
-    def __init__(self, datadir):
+    def __init__(self, datadir: _utils.FSTree):
         super().__init__(str(datadir))
         self.data = f'{self.root}/queue.json'
         self.lock = f'{self.root}/queue.lock'
@@ -61,7 +63,7 @@ class JobQueueFS(_utils.FSTree):
 
 class JobQueueData(types.SimpleNamespace):
 
-    def __init__(self, jobs, paused):
+    def __init__(self, jobs: Sequence[_job.Job], paused: bool):
         super().__init__(
             jobs=jobs,
             paused=paused,
@@ -82,14 +84,22 @@ class JobQueueData(types.SimpleNamespace):
 
 class JobQueueSnapshot(JobQueueData):
 
-    def __init__(self, jobs, paused, locked, datafile, lockfile, logfile):
+    def __init__(
+            self,
+            jobs: Sequence[_job.Job],
+            paused: bool,
+            locked: Tuple[Any, bool],
+            datafile: str,
+            lockfile: str,
+            logfile: str
+    ):
         super().__init__(tuple(jobs), paused)
         self.locked = locked
         self.datafile = datafile
         self.lockfile = lockfile
         self.logfile = logfile
 
-    def read_log(self):
+    def read_log(self) -> Iterator[_utils.LogSection]:
         try:
             logfile = open(self.logfile)
         except FileNotFoundError:
@@ -103,12 +113,12 @@ class JobQueue:
     # XXX Add maxsize.
 
     @classmethod
-    def from_config(cls, cfg):
+    def from_config(cls, cfg: JobsConfig) -> "JobQueue":
         jobsfs = _common.JobsFS(cfg.data_dir)
         return cls.from_fstree(jobsfs)
 
     @classmethod
-    def from_fstree(cls, fs):
+    def from_fstree(cls, fs: _utils.FSTree) -> "JobQueue":
         if isinstance(fs, str):
             queuefs = JobQueueFS(fs)
         elif isinstance(fs, JobQueueFS):
@@ -126,7 +136,7 @@ class JobQueue:
         )
         return self
 
-    def __init__(self, datafile, lockfile, logfile):
+    def __init__(self, datafile: str, lockfile: str, logfile: str):
         _utils.validate_str(datafile, 'datafile')
         _utils.validate_str(lockfile, 'lockfile')
         _utils.validate_str(logfile, 'logfile')
@@ -134,7 +144,7 @@ class JobQueue:
         self._datafile = datafile
         self._lock = _utils.LockFile(lockfile)
         self._logfile = logfile
-        self._data = None
+        self._data: Optional[JobQueueData] = None
 
     def __iter__(self):
         with self._lock:
@@ -151,7 +161,7 @@ class JobQueue:
             data = self._load()
         return data.jobs[idx]
 
-    def _load(self):
+    def _load(self) -> JobQueueData:
         text = _utils.read_file(self._datafile, fail=False)
         data = (json.loads(text) if text else None) or {}
         # Normalize.
@@ -175,42 +185,43 @@ class JobQueue:
         if fixed:
             with open(self._datafile, 'w') as outfile:
                 json.dump(data, outfile, indent=4)
-        data = self._data = JobQueueData(**data)
-        return data
+        job_queue_data = self._data = JobQueueData(**data)
+        return job_queue_data
 
-    def _save(self, data=None):
+    def _save(self, data: Optional[JobQueueData] = None) -> None:
+        dict_data: Mapping[str, Any]
         if data is None:
-            data = self._data
+            dict_data = dict(self._data or {})
         elif isinstance(data, types.SimpleNamespace):
             if data is not self._data:
                 raise NotImplementedError
-            data = dict(vars(data))
+            dict_data = dict(vars(data))
         self._data = None
-        if not data:
+        if not dict_data:
             # Nothing to save.
             return
         # Validate.
-        if 'paused' not in data or data['paused'] not in (True, False):
+        if 'paused' not in dict_data or dict_data['paused'] not in (True, False):
             raise NotImplementedError
-        if 'jobs' not in data:
+        if 'jobs' not in dict_data:
             raise NotImplementedError
-        elif any(not isinstance(v, RequestID) for v in data['jobs']):
+        elif any(not isinstance(v, RequestID) for v in dict_data['jobs']):
             raise NotImplementedError
         else:
-            data['jobs'] = [str(req) for req in data['jobs']]
+            dict_data['jobs'] = [str(req) for req in dict_data['jobs']]
         # Write to the queue file.
         with open(self._datafile, 'w') as outfile:
-            _utils.write_json(data, outfile)
+            _utils.write_json(dict_data, outfile)
 
     @property
-    def snapshot(self):
+    def snapshot(self) -> JobQueueSnapshot:
         data = self._load()
         try:
             pid = self._lock.read()
         except _utils.OrphanedPIDFileError as exc:
             locked = (exc.pid, False)
         except _utils.InvalidPIDFileError as exc:
-            locked = (exc.text, None)
+            locked = (exc.text, False)
         else:
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
@@ -222,12 +233,12 @@ class JobQueue:
         )
 
     @property
-    def paused(self):
+    def paused(self) -> bool:
         with self._lock:
             data = self._load()
             return data.paused
 
-    def pause(self):
+    def pause(self) -> None:
         with self._lock:
             data = self._load()
             if data.paused:
@@ -235,7 +246,7 @@ class JobQueue:
             data.paused = True
             self._save(data)
 
-    def unpause(self):
+    def unpause(self) -> None:
         with self._lock:
             data = self._load()
             if not data.paused:
@@ -243,7 +254,7 @@ class JobQueue:
             data.paused = False
             self._save(data)
 
-    def push(self, reqid):
+    def push(self, reqid: RequestID) -> int:
         with self._lock:
             data = self._load()
             if reqid in data.jobs:
@@ -253,7 +264,7 @@ class JobQueue:
             self._save(data)
         return len(data.jobs)
 
-    def pop(self, *, forceifpaused=False):
+    def pop(self, *, forceifpaused: bool = False) -> RequestID:
         with self._lock:
             data = self._load()
             if data.paused:
@@ -266,7 +277,7 @@ class JobQueue:
             self._save(data)
         return reqid
 
-    def unpop(self, reqid):
+    def unpop(self, reqid: RequestID) -> None:
         with self._lock:
             data = self._load()
             if data.jobs and data.jobs[0] == reqid:
@@ -275,7 +286,7 @@ class JobQueue:
             data.jobs.insert(0, reqid)
             self._save(data)
 
-    def move(self, reqid, position, relative=None):
+    def move(self, reqid: RequestID, position: int, relative: str) -> int:
         with self._lock:
             data = self._load()
             if reqid not in data.jobs:
@@ -296,7 +307,7 @@ class JobQueue:
             self._save(data)
         return idx + 1
 
-    def remove(self, reqid):
+    def remove(self, reqid: RequestID) -> None:
         with self._lock:
             data = self._load()
 
@@ -306,7 +317,7 @@ class JobQueue:
             data.jobs.remove(reqid)
             self._save(data)
 
-    def read_log(self):
+    def read_log(self) -> Iterator[_utils.LogSection]:
         try:
             logfile = open(self._logfile)
         except FileNotFoundError:

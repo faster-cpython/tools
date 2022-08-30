@@ -3,8 +3,12 @@ import datetime
 import json
 import re
 import types
+from typing import Any, Callable, Optional, Tuple, Union
 
 from . import _utils
+
+
+ToRequestIDType = Union[str, "RequestID"]
 
 
 class RequestID(namedtuple('RequestID', 'kind timestamp user')):
@@ -15,7 +19,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
     _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
 
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw: Any):
         if isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
@@ -30,7 +34,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
             return cls(*args)
 
     @classmethod
-    def parse(cls, idstr):
+    def parse(cls, idstr: str):
         kinds = '|'.join(cls._KIND_BY_VALUE)
         m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)$', idstr)
         if not m:
@@ -39,7 +43,12 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
         return cls(kind, int(timestamp), user)
 
     @classmethod
-    def generate(cls, cfg, user=None, kind=KIND.BENCHMARKS):
+    def generate(
+            cls,
+            cfg: int,
+            user: Optional[str] = None,
+            kind: str = KIND.BENCHMARKS
+    ) -> "RequestID":
         user = _utils.resolve_user(cfg, user)
         timestamp = int(_utils.utcnow())
         return cls(kind, timestamp, user)
@@ -83,7 +92,7 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
         return f'req-{self.kind}-{self.timestamp}-{self.user}'
 
     @property
-    def date(self):
+    def date(self) -> Optional[datetime.datetime]:
         dt, _ = _utils.get_utc_datetime(self.timestamp)
         return dt
 
@@ -102,7 +111,7 @@ class Request(_utils.Metadata):
     ]
 
     @classmethod
-    def read_kind(cls, metafile):
+    def read_kind(cls, metafile: str) -> Optional[str]:
         text = _utils.read_file(metafile, fail=False)
         if not text:
             return None
@@ -118,7 +127,13 @@ class Request(_utils.Metadata):
             raise ValueError(f'unsupported kind {kind!r}')
 
     @classmethod
-    def load(cls, reqfile, *, fs=None, **kwargs):
+    def load(  # type: ignore[override]
+            cls,
+            reqfile: str,
+            *,
+            fs=None,
+            **kwargs
+    ) -> Optional["Request"]:
         self = super().load(reqfile, **kwargs)
         if self is None:
             return None
@@ -126,10 +141,16 @@ class Request(_utils.Metadata):
             self._fs = fs
         return self
 
-    def __init__(self, id, datadir, *,
-                 # These are ignored (duplicated by id):
-                 kind=None, user=None, date=None,
-                 ):
+    def __init__(
+            self,
+            id: ToRequestIDType,
+            datadir: str,
+            *,
+            # These are ignored (duplicated by id):
+            kind=None,
+            user=None,
+            date=None,
+    ):
         if not id:
             raise ValueError('missing id')
         id = RequestID.from_raw(id)
@@ -148,33 +169,33 @@ class Request(_utils.Metadata):
         return str(self.id)
 
     @property
-    def reqid(self):
+    def reqid(self) -> str:
         return self.id
 
     @property
-    def reqdir(self):
+    def reqdir(self) -> str:
         return self.datadir
 
     @property
-    def kind(self):
+    def kind(self) -> str:
         return self.id.kind
 
     @property
-    def user(self):
+    def user(self) -> str:
         return self.id.user
 
     @property
-    def date(self):
+    def date(self) -> datetime.datetime:
         return self.id.date
 
     @property
-    def fs(self):
+    def fs(self) -> _utils.FSTree:
         try:
             return self._fs
         except AttributeError:
             raise NotImplementedError
 
-    def as_jsonable(self, *, withextra=False):
+    def as_jsonable(self, *, withextra: bool = False) -> dict:
         data = super().as_jsonable(withextra=withextra)
         data['id'] = str(data['id'])
         data['date'] = self.date.isoformat()
@@ -216,14 +237,19 @@ class Result(_utils.Metadata):
     CLOSED = 'closed'
 
     @classmethod
-    def resolve_status(cls, status):
+    def resolve_status(cls, status: str) -> str:
         try:
             return cls._STATUS_BY_VALUE[status]
         except KeyError:
             raise ValueError(f'unsupported status {status!r}')
 
     @classmethod
-    def read_status(cls, metafile, *, fail=True):
+    def read_status(
+            cls,
+            metafile: str,
+            *,
+            fail: bool = True
+    ) -> Optional[str]:
         missing = None
         text = _utils.read_file(metafile, fail=fail)
         if text is None:
@@ -320,41 +346,42 @@ class Result(_utils.Metadata):
             history=history,
         )
 
+        self._request: Optional[Request] = None
+        self._get_request: Optional[Callable[(str, str), Request]] = None
+        self._fs = Optional[_utils.FSTree] = None
+
     def __str__(self):
         return str(self.reqid)
 
     @property
-    def short(self):
+    def short(self) -> str:
         if not self.status:
             return f'<{self.reqid}: (created)>'
         return f'<{self.reqid}: {self.status}>'
 
     @property
-    def request(self):
-        try:
-            return self._request
-        except AttributeError:
+    def request(self) -> Request:
+        if self._request is None:
             get_request = getattr(self, '_get_request', Request)
             self._request = get_request(self.reqid, self.reqdir)
-            return self._request
+        return self._request
 
     @property
-    def fs(self):
-        try:
-            return self._fs
-        except AttributeError:
+    def fs(self) -> _utils.FSTree:
+        if self._fs is None:
             raise NotImplementedError
+        return self._fs
 
     @property
-    def host(self):
+    def host(self) -> str:
         # XXX This will need to support other hosts.
         return 'fc_linux'
 
     @property
-    def started(self):
+    def started(self) -> Tuple[Optional[datetime.datetime], Optional[str]]:
         history = list(self.history)
         if not history:
-            return None
+            return None, None
         last_st, last_date = history[-1]
         if last_st == Result.STATUS.ACTIVATED:
             return last_date, last_st
@@ -365,17 +392,17 @@ class Result(_utils.Metadata):
             return None, None
 
     @property
-    def finished(self):
+    def finished(self) -> Tuple[Optional[datetime.datetime], Optional[str]]:
         history = list(self.history)
         if not history:
-            return None
+            return None, None
         for st, date in reversed(history):
             if st in Result.FINISHED:
                 return date, st
         else:
             return None, None
 
-    def set_status(self, status):
+    def set_status(self, status: Optional[str]) -> None:
         if not status:
             raise ValueError('missing status')
         status = self.resolve_status(status)
@@ -389,7 +416,7 @@ class Result(_utils.Metadata):
         if status in self.FINISHED:
             self.close()
 
-    def close(self):
+    def close(self) -> None:
         if self.history[-1][0] is self.CLOSED:
             # XXX Fail?
             return
@@ -397,10 +424,10 @@ class Result(_utils.Metadata):
             (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
         )
 
-    def upload(self, req):
+    def upload(self, req: str) -> None:
         raise NotImplementedError
 
-    def as_jsonable(self, *, withextra=False):
+    def as_jsonable(self, *, withextra: bool = False) -> dict:
         data = super().as_jsonable(withextra=withextra)
         if self.status is None:
             data['status'] = self.STATUS.CREATED

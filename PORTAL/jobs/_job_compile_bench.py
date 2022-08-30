@@ -2,9 +2,12 @@ import configparser
 import logging
 import os.path
 import textwrap
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
+from . import _job
 from . import _utils, _pyperformance, _common
-from .requests import Request, Result
+from .requests import Request, RequestID, Result, ToRequestIDType
+from . import requests
 
 
 FAKE_DELAY = 3
@@ -45,7 +48,12 @@ class CompileBenchRequest(Request):
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
 
     @classmethod
-    def _extract_kwargs(cls, data, optional, filename):
+    def _extract_kwargs(
+            cls,
+            data: Any,
+            optional: List[str],
+            filename
+    ) -> Tuple[dict, Optional[dict]]:
         # This is a backward-compatibility shim.
         try:
             return super()._extract_kwargs(data, optional, filename)
@@ -59,19 +67,20 @@ class CompileBenchRequest(Request):
             kwargs.setdefault('ref', 'deadbeef')
             return kwargs, extra
 
-    def __init__(self,
-                 id,
-                 datadir,
-                 ref,
-                 pyperformance_ref=None,
-                 remote=None,
-                 revision=None,
-                 branch=None,
-                 benchmarks=None,
-                 optimize=True,
-                 debug=False,
-                 **kwargs
-                 ):
+    def __init__(
+            self,
+            id: ToRequestIDType,
+            datadir: str,
+            ref: Any,
+            pyperformance_ref: Optional[Any] = None,
+            remote: Optional[str] = None,
+            revision: Optional[str] = None,
+            branch: Optional[str] = None,
+            benchmarks: Optional[List[str]] = None,
+            optimize: bool = True,
+            debug: bool = False,
+            **kwargs
+    ):
         if remote and not _utils.looks_like_git_remote(remote):
             raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
@@ -110,7 +119,7 @@ class CompileBenchRequest(Request):
         self._impl = _utils.CPython()
 
     @property
-    def cpython(self):
+    def cpython(self) -> _utils.GitHubTarget:
         # XXX Pass self.ref directly?
         ref = str(self.ref)
         if self.remote and self.remote != 'origin':
@@ -119,7 +128,7 @@ class CompileBenchRequest(Request):
             return self.CPYTHON.copy(ref=ref)
 
     @property
-    def release(self):
+    def release(self) -> str:
         if self.remote == 'origin':
             if not self.branch:
                 release = 'main'
@@ -142,16 +151,15 @@ class CompileBenchRequest(Request):
         return release
 
     @property
-    def versionstr(self):
+    def versionstr(self) -> str:
         return _utils.CPythonVersion.render_extended(
             version=self.release,
             bits=64,
             commit=self.ref.commit[:10],
         )
-        return f'{version} ({bits}-bit) revision {commit}'
 
     @property
-    def result(self):
+    def result(self) -> "CompileBenchResult":
         return CompileBenchResult(self.id, self.reqdir)
 
 
@@ -167,7 +175,12 @@ class CompileBenchResult(Result):
     ]
 
     @classmethod
-    def _extract_kwargs(cls, data, optional, filename):
+    def _extract_kwargs(
+            cls,
+            data: Any,
+            optional: List[str],
+            filename: str
+    ) -> Tuple[dict, Optional[dict]]:
         # This is a backward-compatibility shim.
         try:
             return super()._extract_kwargs(data, optional, filename)
@@ -178,21 +191,25 @@ class CompileBenchResult(Result):
             kwargs.setdefault('history', None)
             return kwargs, extra
 
-    def __init__(self, reqid, reqdir, *,
-                 status=None,
-                 #pyperformance_results=None,
-                 #pyperformance_results_orig=None,
-                 **kwargs
-                 ):
+    def __init__(
+            self,
+            reqid: ToRequestIDType,
+            reqdir: str,
+            *,
+            status: Optional[str] = None,
+            #pyperformance_results=None,
+            #pyperformance_results_orig=None,
+            **kwargs
+    ):
         super().__init__(reqid, reqdir, status, **kwargs)
         #self.pyperformance_results = pyperformance_results
         #self.pyperformance_results_orig = pyperformance_results_orig
 
+        self._pyperf: Optional[_pyperformance.PyperfResults] = None
+
     @property
-    def pyperf(self):
-        try:
-            return self._pyperf
-        except AttributeError:
+    def pyperf(self) -> _pyperformance.PyperfResults:
+        if self._pyperf is None:
             filename = self.fs.pyperformance_results
             resfile = _pyperformance.PyperfResultsFile(
                 filename,
@@ -212,20 +229,27 @@ class CompileBenchResult(Result):
                 resfile.write(results)
 
             self._pyperf = results
-            return self._pyperf
+        return self._pyperf
 
 
-def resolve_compile_bench_request(reqid, workdir, remote, revision, branch,
-                                  benchmarks,
-                                  *,
-                                  optimize,
-                                  debug,
-                                  ):
+def resolve_compile_bench_request(
+        reqid: ToRequestIDType,
+        workdir: str,
+        remote: str,
+        revision: str,
+        branch: str,
+        benchmarks: Optional[Union[str, Iterable[str]]],
+        *,
+        optimize: bool,
+        debug: bool,
+) -> CompileBenchRequest:
     if isinstance(benchmarks, str):
-        benchmarks = benchmarks.replace(',', ' ').split()
-    if benchmarks:
-        benchmarks = (b.strip() for b in benchmarks)
-        benchmarks = [b for b in benchmarks if b]
+        benchmarks_seq = benchmarks.replace(',', ' ').split()
+    elif benchmarks is None:
+        benchmarks_seq = []
+    else:
+        benchmarks_seq = list(benchmarks)
+    benchmarks_list = [b.strip() for b in benchmarks_seq if b]
 
     ref = _utils.GitRef.resolve(revision, branch, remote)
     if not ref:
@@ -243,14 +267,17 @@ def resolve_compile_bench_request(reqid, workdir, remote, revision, branch,
         remote=remote or None,
         revision=revision or None,
         branch=branch or None,
-        benchmarks=benchmarks or None,
+        benchmarks=benchmarks_list or None,
         optimize=bool(optimize),
         debug=bool(debug),
     )
     return meta
 
 
-def build_pyperformance_manifest(req, bfiles):
+def build_pyperformance_manifest(
+        req: CompileBenchRequest,
+        bfiles: _utils.FSTree
+) -> str:
     return textwrap.dedent(f'''
         [includes]
         <default>
@@ -258,7 +285,10 @@ def build_pyperformance_manifest(req, bfiles):
     '''[1:-1])
 
 
-def build_pyperformance_config(req, bfiles):
+def build_pyperformance_config(
+        req: CompileBenchRequest,
+        bfiles: _utils.FSTree
+) -> configparser.ConfigParser:
     cpython = bfiles.repos.cpython
     bfiles = bfiles.resolve_request(req.id)
     cfg = configparser.ConfigParser()
@@ -289,8 +319,12 @@ def build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def build_compile_script(req, bfiles, fake=None):
-    fakedelay = FAKE_DELAY
+def build_compile_script(
+        req: CompileBenchRequest,
+        bfiles: _utils.FSTree,
+        fake: Optional[Any] = None
+) -> str:
+    fakedelay: Optional[int] = FAKE_DELAY
     if fake is False or fake is None:
         fake = (None, None)
     elif fake is True:
@@ -526,12 +560,19 @@ class CompileBenchKind(_common.JobKind):
     Request = CompileBenchRequest
     Result = CompileBenchResult
 
-    def set_request_fs(self, fs, context):
+    def set_request_fs(
+            self,
+            fs: _utils.FSTree, context: Optional[str]
+    ) -> None:
         fs.pyperformance_manifest = f'{fs}/benchmarks.manifest'
         #fs.pyperformance_config = f'{fs}/compile.ini'
         fs.pyperformance_config = f'{fs}/pyperformance.ini'
 
-    def set_work_fs(self, fs, context):
+    def set_work_fs(
+            self,
+            fs: _utils.FSTree,
+            context: Optional[str]
+    ) -> None:
         if context == 'job-worker':
             # other directories needed by the job
             fs.venv = f'{fs}/pyperformance-venv'
@@ -540,13 +581,25 @@ class CompileBenchKind(_common.JobKind):
             # XXX Is this right?
             fs.pyperformance_results_glob = f'{fs}/*.json.gz'
 
-    def set_result_fs(self, fs, context):
+    def set_result_fs(
+            self,
+            fs: _utils.FSTree,
+            context: Optional[str]
+    ) -> None:
         #fs.pyperformance_log = f'{fs}/run.log'
         fs.pyperformance_log = f'{fs}/pyperformance.log'
         #fs.pyperformance_results = f'{fs}/results-data.json.gz'
         fs.pyperformance_results = f'{fs}/pyperformance-results.json.gz'
 
-    def create(self, reqid, jobfs, workerfs, *, _fake=None, **req_kwargs):
+    def create(  # type: ignore[override]
+            self,
+            reqid: ToRequestIDType,
+            jobfs: _job.JobFS,
+            workerfs: _utils.FSTree,
+            *,
+            _fake: Optional[Any] = None,
+            **req_kwargs
+    ) -> Tuple[CompileBenchRequest, str]:
         req = resolve_compile_bench_request(
             reqid,
             jobfs.work.root,
@@ -567,7 +620,7 @@ class CompileBenchKind(_common.JobKind):
         script = build_compile_script(req, workerfs, _fake)
         return req, script
 
-    def as_row(self, req):
+    def as_row(self, req: requests.Request) -> Tuple[str, str, str, str, str, str]:
         ref = req.ref
         assert not isinstance(ref, str), repr(ref)
         return ref.full, ref, ref.remote, ref.branch, ref.tag, ref.commit
