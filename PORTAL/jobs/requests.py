@@ -5,6 +5,7 @@ import re
 import types
 from typing import Any, Callable, Optional, Tuple, Union
 
+from . import _common
 from . import _utils
 
 
@@ -131,7 +132,7 @@ class Request(_utils.Metadata):
             cls,
             reqfile: str,
             *,
-            fs=None,
+            fs: Optional[_common.JobFS] = None,
             **kwargs
     ) -> Optional["Request"]:
         self = super().load(reqfile, **kwargs)
@@ -153,7 +154,7 @@ class Request(_utils.Metadata):
     ):
         if not id:
             raise ValueError('missing id')
-        id = RequestID.from_raw(id)
+        reqid = RequestID.from_raw(id)
 
         if not datadir:
             raise ValueError('missing datadir')
@@ -161,7 +162,7 @@ class Request(_utils.Metadata):
             raise TypeError(f'expected dirname for datadir, got {datadir!r}')
 
         super().__init__(
-            id=id,
+            id=reqid,
             datadir=datadir,
         )
 
@@ -169,7 +170,7 @@ class Request(_utils.Metadata):
         return str(self.id)
 
     @property
-    def reqid(self) -> str:
+    def reqid(self) -> RequestID:
         return self.id
 
     @property
@@ -189,7 +190,7 @@ class Request(_utils.Metadata):
         return self.id.date
 
     @property
-    def fs(self) -> _utils.FSTree:
+    def fs(self) -> _common.JobFS:
         try:
             return self._fs
         except AttributeError:
@@ -348,7 +349,7 @@ class Result(_utils.Metadata):
 
         self._request: Optional[Request] = None
         self._get_request: Optional[Callable[(str, str), Request]] = None
-        self._fs = Optional[_utils.FSTree] = None
+        self._fs = Optional[_common.JobFS] = None
 
     def __str__(self):
         return str(self.reqid)
@@ -367,7 +368,7 @@ class Result(_utils.Metadata):
         return self._request
 
     @property
-    def fs(self) -> _utils.FSTree:
+    def fs(self) -> _common.JobFS:
         if self._fs is None:
             raise NotImplementedError
         return self._fs
@@ -378,7 +379,9 @@ class Result(_utils.Metadata):
         return 'fc_linux'
 
     @property
-    def started(self) -> Tuple[Optional[datetime.datetime], Optional[str]]:
+    def started(
+            self
+    ) -> Union[Tuple[datetime.datetime, str], Tuple[None, None]]:
         history = list(self.history)
         if not history:
             return None, None
@@ -392,7 +395,9 @@ class Result(_utils.Metadata):
             return None, None
 
     @property
-    def finished(self) -> Tuple[Optional[datetime.datetime], Optional[str]]:
+    def finished(
+            self
+    ) -> Union[Tuple[datetime.datetime, str], Tuple[None, None]]:
         history = list(self.history)
         if not history:
             return None, None
@@ -423,9 +428,6 @@ class Result(_utils.Metadata):
         self.history.append(
             (self.CLOSED, datetime.datetime.now(datetime.timezone.utc)),
         )
-
-    def upload(self, req: str) -> None:
-        raise NotImplementedError
 
     def as_jsonable(self, *, withextra: bool = False) -> dict:
         data = super().as_jsonable(withextra=withextra)

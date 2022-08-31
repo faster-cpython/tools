@@ -3,10 +3,10 @@
 import logging
 import os
 import os.path
-from typing import Any, Optional
+from typing import Optional
 
 from . import _utils, _common
-from .requests import RequestID, Result, ToRequestIDType
+from .requests import RequestID, Result
 
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class RequestNotStagedError(UnstagingRequestError):
         self.curid = curid
 
 
-def symlink_from_jobsfs(jobsfs: Any) -> str:
+def symlink_from_jobsfs(jobsfs: _common.JobsFS) -> str:
     jobsfs = _common.JobsFS.from_raw(jobsfs)
     try:
         return jobsfs.requests.current
@@ -112,7 +112,7 @@ def symlink_from_jobsfs(jobsfs: Any) -> str:
 
 
 def get_staged_request(
-        jobsfs: Any,
+        jobsfs: _common.JobsFS,
         symlink: Optional[str] = None
 ) -> Optional[RequestID]:
     if not symlink:
@@ -133,7 +133,7 @@ def get_staged_request(
 
 
 def stage_request(
-        reqid: ToRequestIDType,
+        reqid: RequestID,
         jobsfs: _common.JobsFS,
         symlink: Optional[str] = None
 ) -> None:
@@ -147,8 +147,8 @@ def stage_request(
 
 
 def unstage_request(
-        reqid: ToRequestIDType,
-        jobsfs: Any,
+        reqid: RequestID,
+        jobsfs: _common.JobsFS,
         symlink: Optional[str] = None
 ) -> None:
     if not symlink:
@@ -195,7 +195,10 @@ def _read_staged(
         return _common.check_reqdir(reqdir, jobsfs, StagedRequestDirError)
 
 
-def _check_staged_request(reqid: RequestID, reqfs) -> None:
+def _check_staged_request(
+        reqid: RequestID,
+        reqfs: _common.JobFS
+) -> None:
     # Check the request status.
     try:
         status = Result.read_status(str(reqfs.result.metadata))
@@ -215,7 +218,7 @@ def _check_staged_request(reqid: RequestID, reqfs) -> None:
 
 
 def _set_staged(
-        reqid: ToRequestIDType,
+        reqid: RequestID,
         reqdir: str,
         symlink: str,
         jobsfs: _common.JobsFS

@@ -1,7 +1,9 @@
 import json
 import logging
 import types
-from typing import Any, Iterator, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any, Iterator, Mapping, Optional, Sequence, Tuple, Union
+)
 
 from . import _utils, _common, _job
 from . import JobsConfig
@@ -48,7 +50,7 @@ class JobAlreadyQueuedError(QueuedJobError):
 class JobQueueFS(_utils.FSTree):
     """The file structure of the job queue data."""
 
-    def __init__(self, datadir: _utils.FSTree):
+    def __init__(self, datadir: Union[str, _utils.FSTree]):
         super().__init__(str(datadir))
         self.data = f'{self.root}/queue.json'
         self.lock = f'{self.root}/queue.lock'
@@ -63,7 +65,7 @@ class JobQueueFS(_utils.FSTree):
 
 class JobQueueData(types.SimpleNamespace):
 
-    def __init__(self, jobs: Sequence[_job.Job], paused: bool):
+    def __init__(self, jobs: Sequence[RequestID], paused: bool):
         super().__init__(
             jobs=jobs,
             paused=paused,
@@ -83,12 +85,17 @@ class JobQueueData(types.SimpleNamespace):
 
 
 class JobQueueSnapshot(JobQueueData):
+    LockedType = Union[
+        Tuple[int, bool],
+        Tuple[None, bool],
+        Tuple[str, None]
+    ]
 
     def __init__(
             self,
-            jobs: Sequence[_job.Job],
+            jobs: Sequence[RequestID],
             paused: bool,
-            locked: Tuple[Any, bool],
+            locked: "JobQueueSnapshot.LockedType",
             datafile: str,
             lockfile: str,
             logfile: str
@@ -118,7 +125,8 @@ class JobQueue:
         return cls.from_fstree(jobsfs)
 
     @classmethod
-    def from_fstree(cls, fs: _utils.FSTree) -> "JobQueue":
+    def from_fstree(cls, fs: _common.JobsFS) -> "JobQueue":
+        queuefs: _utils.FSTree
         if isinstance(fs, str):
             queuefs = JobQueueFS(fs)
         elif isinstance(fs, JobQueueFS):
@@ -185,43 +193,37 @@ class JobQueue:
         if fixed:
             with open(self._datafile, 'w') as outfile:
                 json.dump(data, outfile, indent=4)
-        job_queue_data = self._data = JobQueueData(**data)
-        return job_queue_data
+        self._data = JobQueueData(**data)
+        return self._data
 
-    def _save(self, data: Optional[JobQueueData] = None) -> None:
-        dict_data: Mapping[str, Any]
-        if data is None:
-            dict_data = dict(self._data or {})
-        elif isinstance(data, types.SimpleNamespace):
-            if data is not self._data:
-                raise NotImplementedError
-            dict_data = dict(vars(data))
+    def _save(self, data: JobQueueData) -> None:
         self._data = None
-        if not dict_data:
+        if not data:
             # Nothing to save.
             return
         # Validate.
-        if 'paused' not in dict_data or dict_data['paused'] not in (True, False):
+        if 'paused' not in data or data['paused'] not in (True, False):
             raise NotImplementedError
-        if 'jobs' not in dict_data:
+        if 'jobs' not in data:
             raise NotImplementedError
-        elif any(not isinstance(v, RequestID) for v in dict_data['jobs']):
+        elif any(not isinstance(v, RequestID) for v in data['jobs']):
             raise NotImplementedError
         else:
-            dict_data['jobs'] = [str(req) for req in dict_data['jobs']]
+            data['jobs'] = [str(req) for req in data['jobs']]
         # Write to the queue file.
         with open(self._datafile, 'w') as outfile:
-            _utils.write_json(dict_data, outfile)
+            _utils.write_json(data, outfile)
 
     @property
     def snapshot(self) -> JobQueueSnapshot:
         data = self._load()
+        locked: JobQueueSnapshot.LockedType
         try:
             pid = self._lock.read()
         except _utils.OrphanedPIDFileError as exc:
             locked = (exc.pid, False)
         except _utils.InvalidPIDFileError as exc:
-            locked = (exc.text, False)
+            locked = (exc.text, None)
         else:
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
