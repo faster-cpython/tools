@@ -59,7 +59,7 @@ class WorkerJobsFS(_common.JobsFS):
 class JobWorker:
     """A worker assigned to run a requested job."""
 
-    def __init__(self, worker: "Worker", fs: WorkerJobsFS):
+    def __init__(self, worker: "Worker", fs: WorkerJobFS):
         self._worker = worker
         self._fs = fs
 
@@ -72,7 +72,7 @@ class JobWorker:
         raise NotImplementedError
 
     @property
-    def fs(self) -> WorkerJobsFS:
+    def fs(self) -> WorkerJobFS:
         return self._fs
 
     @property

@@ -176,7 +176,8 @@ def unstage_request(
 
 
 def _read_staged(
-        symlink: str, jobsfs: _common.JobsFS
+        symlink: str,
+        jobsfs: _common.JobsFS
 ) -> Optional[RequestID]:
     try:
         reqdir = os.readlink(symlink)

@@ -1,8 +1,9 @@
 import json
 import logging
+import sys
 import types
 from typing import (
-    Any, Iterator, Mapping, Optional, Sequence, Tuple, Union
+    Iterator, Optional, Sequence, Tuple, Union
 )
 
 from . import _utils, _common, _job
@@ -12,6 +13,20 @@ from .requests import RequestID
 
 logger = logging.getLogger(__name__)
 
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+    LockInfoType = Union[
+        Tuple[int, bool],
+        Tuple[int, Literal[False]],
+        Tuple[str, None]
+    ]
+else:
+    LockInfoType = Union[
+        Tuple[int, bool],
+        Tuple[None, bool],
+        Tuple[str, None]
+    ]
 
 ##################################
 # the job queue
@@ -85,17 +100,11 @@ class JobQueueData(types.SimpleNamespace):
 
 
 class JobQueueSnapshot(JobQueueData):
-    LockedType = Union[
-        Tuple[int, bool],
-        Tuple[None, bool],
-        Tuple[str, None]
-    ]
-
     def __init__(
             self,
             jobs: Sequence[RequestID],
             paused: bool,
-            locked: "JobQueueSnapshot.LockedType",
+            locked: LockInfoType,
             datafile: str,
             lockfile: str,
             logfile: str
@@ -196,7 +205,9 @@ class JobQueue:
         self._data = JobQueueData(**data)
         return self._data
 
-    def _save(self, data: JobQueueData) -> None:
+    def _save(self, queuedata: JobQueueData) -> None:
+        assert queuedata is self._data, (queuedata, self._data)
+        data = dict(vars(queuedata))
         self._data = None
         if not data:
             # Nothing to save.
@@ -217,7 +228,7 @@ class JobQueue:
     @property
     def snapshot(self) -> JobQueueSnapshot:
         data = self._load()
-        locked: JobQueueSnapshot.LockedType
+        locked: LockInfoType
         try:
             pid = self._lock.read()
         except _utils.OrphanedPIDFileError as exc:

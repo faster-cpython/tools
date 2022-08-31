@@ -16,8 +16,8 @@ import textwrap
 import time
 import types
 from typing import (
-    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence,
-    TextIO, Tuple, Type, Union
+    Any, Callable, Iterable, List, Mapping, Optional, Sequence, TextIO, Tuple,
+    Type, Union
 )
 
 
