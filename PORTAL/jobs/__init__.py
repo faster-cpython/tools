@@ -35,7 +35,7 @@ class JobsConfig(_utils.TopConfig):
 
     def __init__(self,
                  local_user: str,
-                 worker: str,
+                 worker: Optional[Union[str, _workers.WorkerConfig]],
                  data_dir: Optional[str] = None,
                  **ignored
                  ):
@@ -44,14 +44,16 @@ class JobsConfig(_utils.TopConfig):
         if not worker:
             raise ValueError('missing worker')
         elif not isinstance(worker, _workers.WorkerConfig):
-            worker = _workers.WorkerConfig.from_jsonable(worker)
+            worker_resolved = _workers.WorkerConfig.from_jsonable(worker)
+        else:
+            worker_resolved = worker
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
             data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
             local_user=local_user,
-            worker=worker,
+            worker=worker_resolved,
             data_dir=data_dir or None,
         )
 
