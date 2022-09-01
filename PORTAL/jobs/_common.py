@@ -51,7 +51,7 @@ class JobKind:
     def set_request_fs(
             self,
             fs: _utils.FSTree,
-            context: Optional[str]
+            context: str
     ) -> None:
         raise NotImplementedError
 
@@ -63,9 +63,9 @@ class JobKind:
 
     def create(
             self,
-            reqid: str,
+            reqid: ToRequestIDType,
             jobfs: _job.JobFS,
-            workerfs: _utils.FSTree,
+            workerfs: _workers.WorkerJobsFS,
             **req_kwargs
     ):
         raise NotImplementedError
@@ -100,7 +100,7 @@ class RequestDirError(Exception):
         self.msg = msg
 
 
-def check_reqdir(reqdir: str, pfiles: _utils.FSTree, cls=RequestDirError) -> RequestID:
+def check_reqdir(reqdir: str, pfiles: "JobsFS", cls=RequestDirError) -> RequestID:
     requests, reqidstr = os.path.split(reqdir)
     if requests != pfiles.requests.root:
         raise cls(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
@@ -114,21 +114,41 @@ def check_reqdir(reqdir: str, pfiles: _utils.FSTree, cls=RequestDirError) -> Req
     return reqid
 
 
+class JobRequestFS(_utils.FSTree):
+    def __init__(self, root: str):
+        super().__init__(root)
+        self.requestroot = os.path.dirname(root)
+        self.metadata = f'{self.root}/request.json'
+
+
+class JobResultFS(_utils.FSTree):
+    def __init__(self, root: str):
+        super().__init__(root)
+        self.resultroot = os.path.dirname(root)
+        self.metadata = f'{self.root}/results.json'
+
+
+class JobWorkFS(_utils.FSTree):
+    def __init__(self, root: str):
+        super().__init__(root)
+        self.job_script = f'{self.root}/run.sh'
+        self.pidfile = f'{self.root}/job.pid'
+        self.logfile = f'{self.root}/job.log'
+
+
 class JobFS(types.SimpleNamespace):
     """File locations for a single requested job, which apply in all contexts.
 
     This serves as the base class for context-specific subclasses.
     """
 
-    context: Optional[str] = None
+    context: Optional[str] = None  # required in subclasses
 
     @classmethod
     def from_jobsfs(cls, jobsfs: "JobsFS", reqid: ToRequestIDType) -> "JobFS":
-        requestfs = _utils.FSTree(f'{jobsfs.requests}/{reqid}')
-        requestfs.requestsroot = jobsfs.requests.root
-        resultfs = _utils.FSTree(f'{jobsfs.results}/{reqid}')
-        resultfs.resultsroot = jobsfs.results.root
-        workfs = _utils.FSTree(f'{jobsfs.work}/{reqid}')
+        requestfs = JobRequestFS.from_raw(f"{jobsfs.requests}/{reqid}")
+        resultfs = JobResultFS.from_raw(f"{jobsfs.results}/{reqid}")
+        workfs = JobWorkFS.from_raw(f"{jobsfs.work}/{reqid}")
         self = cls(
             request=requestfs,
             result=resultfs,
@@ -140,14 +160,15 @@ class JobFS(types.SimpleNamespace):
 
     def __init__(
             self,
-            request: _utils.FSTree,
-            result: _utils.FSTree,
-            work: _utils.FSTree,
+            request: Union[str, JobRequestFS],
+            result: Union[str, JobResultFS],
+            work: Union[str, JobWorkFS],
             reqid: Optional[ToRequestIDType] = None
     ):
-        request = _utils.FSTree.from_raw(request, name='request')
-        work = _utils.FSTree.from_raw(work, name='work')
-        result = _utils.FSTree.from_raw(result, name='result')
+        request_fs = JobRequestFS.from_raw(request)
+        result_fs = JobResultFS.from_raw(result)
+        work_fs = JobWorkFS.from_raw(work)
+        
         if not reqid:
             reqid = os.path.basename(request)
             reqid_obj = RequestID.from_raw(reqid)
@@ -159,28 +180,22 @@ class JobFS(types.SimpleNamespace):
             if not reqid_obj:
                 raise ValueError(f'unsupported reqid {orig!r}')
 
-        # the request
-        request.metadata = f'{request}/request.json'
-        # the job
-        work.job_script = f'{work}/run.sh'
-        work.pidfile = f'{work}/job.pid'
-        work.logfile = f'{work}/job.log'
-        # the results
-        result.metadata = f'{result}/results.json'
-
         super().__init__(
             reqid=reqid,
-            request=request,
-            work=work,
-            result=result,
+            request=request_fs,
+            work=work_fs,
+            result=result_fs,
         )
 
         self._custom_init()
 
+        if self.context is None:
+            raise ValueError(f"No context set on {self}")
+
         jobkind = resolve_job_kind(reqid_obj.kind)
-        jobkind.set_request_fs(request, self.context)
-        jobkind.set_work_fs(work, self.context)
-        jobkind.set_result_fs(result, self.context)
+        jobkind.set_request_fs(request_fs, self.context)
+        jobkind.set_work_fs(work_fs, self.context)
+        jobkind.set_result_fs(result_fs, self.context)
 
     def _custom_init(self) -> None:
         pass
@@ -229,9 +244,9 @@ class JobFS(types.SimpleNamespace):
         # XXX This may not work, since it doesn't do a deep copy of the first
         # three arguments
         return type(self)(
-            _utils.FSTree(str(self.request)),
-            _utils.FSTree(str(self.work)),
-            _utils.FSTree(str(self.result)),
+            str(self.request),
+            str(self.result),
+            str(self.work),
             self.reqid,
         )
 
@@ -242,7 +257,7 @@ class JobsFS(_utils.FSTree):
     This serves as the base class for context-specific subclasses.
     """
 
-    context: Optional[str] = None
+    context: Optional[str] = None  # required in subclasses
 
     JOBFS = JobFS
 

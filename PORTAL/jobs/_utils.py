@@ -29,6 +29,8 @@ sudo --login --user <username> ssh-import-id gh:<username>
 
 FsAttrsType = List[Union[Tuple[str, str], str]]
 Numeric = Union[int, float, decimal.Decimal]
+SuiteType = Union[None, str, "Sentinel"]
+SuitesType = Any  # This is a recursive iterable of SuiteType
 
 
 USER: str = os.environ.get('USER', '').strip()
@@ -415,7 +417,7 @@ class TableRow:
 
     def __init__(
             self,
-            data: Mapping[str, str],
+            data: Mapping[str, Any],
             render_value: Callable[[str], str]
     ):
         self.data = data

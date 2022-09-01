@@ -3,16 +3,16 @@ import os
 import os.path
 import sys
 from typing import (
-    Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence,
-    Tuple, Type, Union
+    Any, Callable, Iterable, Iterator, Mapping, Optional, Sequence, Tuple,
+    Type, Union
 )
 
 from . import _utils, _pyperformance, _common, _workers, _job, _current
-from . import queue as _queue
-from .requests import RequestID, Request, ToRequestIDType
+from . import queue as queue_mod
+from .requests import RequestID, ToRequestIDType
 
 # top-level exports
-from ._common import JobsError, PKG_ROOT
+from ._common import JobsError
 
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class PortalFS(_utils.FSTree):
 
         self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
 
-        self.queue = _queue.JobQueueFS(self.jobs.requests)
+        self.queue = queue_mod.JobQueueFS(self.jobs.requests)
 
     @property
     def currentjob(self) -> str:
@@ -85,7 +85,8 @@ class PortalFS(_utils.FSTree):
 
 class Jobs:
 
-    FS: Type[_utils.FSTree] = PortalFS
+    FS: Type[PortalFS] = PortalFS
+    _queue: Optional[queue_mod.JobQueue] = None
 
     def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
@@ -93,7 +94,6 @@ class Jobs:
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
-        self._queue: Optional[_queue.JobQueue] = None
 
     def __str__(self):
         return self._fs.root
@@ -115,9 +115,9 @@ class Jobs:
         return self._fs.jobs.copy()
 
     @property
-    def queue(self) -> _queue.JobQueue:
+    def queue(self) -> queue_mod.JobQueue:
         if self._queue is None:
-            self._queue = _queue.JobQueue.from_fstree(self._fs.queue)
+            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue)
         return self._queue
 
     def iter_all(self) -> Iterator[_job.Job]:
@@ -162,8 +162,10 @@ class Jobs:
         return reqid
 
     def match_results(
-            self, specifier: Any, suites: Optional[Any] = None
-    ) -> Iterator[Optional[Any]]:
+            self,
+            specifier: Any,
+            suites: _utils.SuitesType = None
+    ) -> Iterator[_pyperformance.PyperfResultsFile]:
         matched = list(self._store.match(specifier, suites=suites))
         if matched:
             yield from matched
@@ -174,7 +176,7 @@ class Jobs:
             self,
             specifier: Union[str, RequestID],
             suites: Optional[Any]
-    ) -> Iterator[Optional[Any]]:
+    ) -> Iterator[_pyperformance.PyperfResultsFile]:
         if isinstance(specifier, str):
             job = self.get(specifier)
             if job:
@@ -212,24 +214,22 @@ class Jobs:
             self,
             job: Optional[Union[_job.Job, RequestID]] = None,
             *,
-            timeout: bool = True
+            timeout: Union[int, bool] = True
     ) -> Tuple[_job.Job, int]:
         current = _current.get_staged_request(self._fs.jobs)
         if isinstance(job, _job.Job):
             reqid = job.reqid
         else:
-            if not job:
-                if not current:
-                    raise NoRunningJobError
-                reqid = current
-            else:
-                reqid = job
-            job = self._get(reqid)
+            reqid_source = job or current
+            if not reqid_source:
+                raise NoRunningJobError
+            job = self._get(reqid_source)
+            reqid = job.reqid
         if timeout is True:
             # Calculate the timeout.
             if current:
                 if reqid == current:
-                    timeout_time = 0
+                    timeout = 0
                 else:
                     try:
                         jobkind = _common.resolve_job_kind(reqid.kind)
@@ -237,25 +237,27 @@ class Jobs:
                         raise NotImplementedError(reqid)
                     expected = jobkind.TYPICAL_DURATION_SECS or 0
                     # We could subtract the elapsed time, but it isn't worth it.
-                    timeout_time = expected
-            if timeout_time:
+                    timeout = expected
+            if timeout:
+                if timeout is True:
+                    timeout = 0
                 # Add the expected time for everything in the queue before the job.
                 for i, queued in enumerate(self.queue.snapshot):
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
-                        timeout_time *= 2
+                        timeout *= 2
                         break
                     try:
                         jobkind = _common.resolve_job_kind(queued.kind)
                     except KeyError:
                         raise NotImplementedError(queued)
                     expected = jobkind.TYPICAL_DURATION_SECS or 0
-                    timeout_time += expected
+                    timeout += expected
                 else:
                     # Either it hasn't been queued or it already finished.
-                    timeout_time = 0
+                    timeout = 0
         # Wait!
-        pid = job.wait_until_started(timeout_time)
+        pid = job.wait_until_started(timeout)
         return job, pid
 
     def ensure_next(self) -> None:
@@ -332,6 +334,7 @@ ToJobsType = Union[Jobs, Sequence[_job.Job]]
 def sort_jobs(
         jobs: ToJobsType,
         sortby: Optional[Union[str, Sequence[str]]] = None,
+        # sortby must be one of the keys in _SORT
         *,
         ascending: bool = False
 ) -> Sequence[_job.Job]:
@@ -356,7 +359,10 @@ def sort_jobs(
     return jobs
 
 
-def select_job(jobs, criteria=None):
+def select_job(
+        jobs: ToJobsType,
+        criteria: Optional[Union[str, Sequence[str]]] = None
+) -> Iterator[_job.Job]:
     raise NotImplementedError
 
 
@@ -372,12 +378,12 @@ def select_jobs(
         yield from jobs
         return
     if isinstance(criteria, str):
-        criteria_seq = [criteria]
+        criteria = [criteria]
     else:
-        criteria_seq = list(criteria)
-    if len(criteria_seq) > 1:
+        criteria = list(criteria)
+    if len(criteria) > 1:
         raise NotImplementedError(criteria)
-    selection = _utils.get_slice(criteria_seq[0])
+    selection = _utils.get_slice(criteria[0])
     if not isinstance(jobs, (list, tuple)):
         jobs = list(jobs)
     yield from jobs[selection]

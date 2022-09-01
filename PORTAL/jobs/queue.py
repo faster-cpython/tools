@@ -134,7 +134,10 @@ class JobQueue:
         return cls.from_fstree(jobsfs)
 
     @classmethod
-    def from_fstree(cls, fs: _common.JobsFS) -> "JobQueue":
+    def from_fstree(
+            cls,
+            fs: Union[str, JobQueueFS, _common.JobsFS]
+    ) -> "JobQueue":
         queuefs: _utils.FSTree
         if isinstance(fs, str):
             queuefs = JobQueueFS(fs)
@@ -142,8 +145,6 @@ class JobQueue:
             queuefs = fs
         elif isinstance(fs, _common.JobsFS):
             queuefs = JobQueueFS(fs.requests)
-        elif hasattr(fs, 'queue') and isinstance(fs.queue, JobQueueFS):
-            queuefs = fs.queue
         else:
             raise TypeError(f'expected JobQueueFS, got {fs!r}')
         self = cls(

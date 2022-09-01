@@ -18,7 +18,7 @@ from ._job import (
     Job, JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
 )
 from ._current import RequestAlreadyStagedError
-from .requests import RequestID, Result
+from .requests import RequestID, Result, ToRequestIDType
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
@@ -43,9 +43,8 @@ def cmd_list(
         columns: Optional[str] = None
 ) -> None:
 #    requests = (RequestID.parse(n) for n in os.listdir(jobs.fs.requests.root))
-    alljobs = list(jobs.iter_all())
+    alljobs = sort_jobs(list(jobs.iter_all()))
     total = len(alljobs)
-    alljobs = list(sort_jobs(alljobs))
     selected = list(select_jobs(alljobs, selections))
 
     colspecs = [
@@ -84,8 +83,7 @@ def cmd_list(
     logger.info('')
 
     current = jobs.get_current()
-    current_reqid = current.reqid if current else 'none'
-    logger.info(f'Currently running: {current_reqid}')
+    logger.info(f'Currently running: {current if current else "none"}')
     logger.info('')
 
     queue = jobs.queue.snapshot
@@ -194,8 +192,8 @@ def _cmd_run(jobs: Jobs, reqid: RequestID) -> Job:
         logger.error('could not stage request')
         logger.info('')
         job_lookup = jobs.get(reqid)
-        if job_lookup is not None:
-            job_lookup.set_status('failed')
+        assert job_lookup is not None
+        job_lookup.set_status('failed')
         raise  # re-raise
     else:
         job.run(background=True)
@@ -248,6 +246,7 @@ def cmd_cancel(
                 job = jobs.cancel_current(current.reqid, ifstatus=_status)
             except NoRunningJobError:
                 logger.warn('job just finished')
+                return
         else:
             cmd_queue_remove(jobs, reqid)
             job = jobs.get(reqid)
@@ -260,9 +259,8 @@ def cmd_cancel(
     logger.info('Results:')
     # XXX Show something better?
 
-    if job:
-        for line in job.render(fmt='resfile'):
-            logger.info(line)
+    for line in job.render(fmt='resfile'):
+        logger.info(line)
 
     if current:
         jobs.ensure_next()
@@ -305,7 +303,7 @@ def cmd_upload(
 
 def cmd_compare(
         jobs: Jobs,
-        res1: Any,
+        res1: ToRequestIDType,
         others: List[Any],
         *,
         meanonly: bool = False,
@@ -316,7 +314,7 @@ def cmd_compare(
     if not matched:
         logger.error(f'no results matched {res1!r}')
         sys.exit(1)
-    res1, = matched
+    res1_results, = matched
     for _ in range(len(others)):
         spec = others.pop(0)
         matched = list(jobs.match_results(spec, suites=suites))
@@ -325,7 +323,9 @@ def cmd_compare(
             sys.exit(1)
         others.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    compared = res1.compare(others)
+    compared = res1_results.compare(others)
+    if compared is None:
+        raise RuntimeError("Could not get comparison")
     table = compared.table
     fmt = 'meanonly' if meanonly else 'raw'
     for line in table.render(fmt):

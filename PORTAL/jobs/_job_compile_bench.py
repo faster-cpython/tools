@@ -5,7 +5,7 @@ import textwrap
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 from . import _job
-from . import _utils, _pyperformance, _common
+from . import _utils, _pyperformance, _common, _workers
 from .requests import Request, RequestID, Result, ToRequestIDType
 from . import requests
 
@@ -591,11 +591,11 @@ class CompileBenchKind(_common.JobKind):
         #fs.pyperformance_results = f'{fs}/results-data.json.gz'
         fs.pyperformance_results = f'{fs}/pyperformance-results.json.gz'
 
-    def create(  # type: ignore[override]
+    def create(
             self,
             reqid: ToRequestIDType,
             jobfs: _job.JobFS,
-            workerfs: _utils.FSTree,
+            workerfs: _workers.WorkerJobsFS,
             *,
             _fake: Optional[Any] = None,
             **req_kwargs

@@ -67,13 +67,11 @@ class Job:
     def __init__(
             self,
             reqid: ToRequestIDType,
-            fs: _utils.FSTree,
+            fs: _common.JobFS,
             worker: _workers.JobWorker,
             cfg: JobsConfig,
             store: Any = None
     ):
-        if not reqid:
-            raise ValueError('missing reqid')
         if not fs:
             raise ValueError('missing fs')
         elif not isinstance(fs, JobFS):
@@ -82,7 +80,10 @@ class Job:
             raise ValueError('missing worker')
         elif not isinstance(worker, _workers.JobWorker):
             raise TypeError(f'expected JobWorker for worker, got {worker!r}')
-        self._reqid = RequestID.from_raw(reqid)
+        resolved_reqid = RequestID.from_raw(reqid)
+        if not resolved_reqid:
+            raise ValueError('missing reqid')
+        self._reqid = resolved_reqid
         self._fs = fs
         self._worker = worker
         self._cfg = cfg
@@ -106,7 +107,7 @@ class Job:
         return self._reqid
 
     @property
-    def fs(self) -> _utils.FSTree:
+    def fs(self) -> _common.JobFS:
         return self._fs
 
     @property
@@ -208,11 +209,6 @@ class Job:
             *,
             hidecfg: bool = False,
     ) -> str:
-        if pushfsfields is None:
-            pushfsfields = []
-        if pullfsfields is None:
-            pullfsfields = []
-
         reqid = self.reqid
         pfiles = self._fs
         bfiles = self._worker.fs
@@ -221,7 +217,7 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            ssh = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
+            sshcmds = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
             user = '$user'
         else:
             cfg_user = _utils.check_shell_str(self._cfg.local_user)
@@ -230,7 +226,7 @@ class Job:
             user = cfg_user
             _utils.check_shell_str(self._cfg.ssh.user)
             _utils.check_shell_str(self._cfg.ssh.host)
-            ssh = self._worker.ssh.shell_commands
+            sshcmds = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
 
@@ -244,7 +240,7 @@ class Job:
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
-        ensure_user = ssh.ensure_user(user, agent=False)
+        ensure_user = sshcmds.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
         pushfsfields = [
@@ -253,7 +249,7 @@ class Job:
             ('request', 'metadata'),
             ('work', 'job_script'),
             ('result', 'metadata'),
-            *pushfsfields,
+            *(pushfsfields or [])
         ]
         pushfiles = []
         for field in pushfsfields or ():
@@ -265,12 +261,13 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pushfiles.append((bvalue, pvalue))
-        pushfiles_ssh = (ssh.push(s, t) for s, t in pushfiles)
-        pushfiles_str = '\n                '.join(pushfiles_ssh)
+        pushfiles_str = '\n                '.join(
+            sshcmds.push(s, t) for s, t in pushfiles
+        )
 
         pullfsfields = [
             ('result', 'metadata'),
-            *pullfsfields,
+            *(pullfsfields or []),
         ]
         pullfiles = []
         for field in pullfsfields or ():
@@ -282,12 +279,13 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pullfiles.append((bvalue, pvalue))
-        pullfiles_ssh = (ssh.pull(s, t) for s, t in pullfiles)
-        pullfiles_str = '\n                '.join(pullfiles_ssh)
+        pullfiles_str = '\n                '.join(
+            sshcmds.pull(s, t) for s, t in pullfiles
+        )
 
         #push = ssh.push
         #pull = ssh.pull
-        ssh_run_shell = ssh.run_shell
+        ssh = sshcmds.run_shell
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
@@ -321,20 +319,20 @@ class Job:
             ssh_port=$(jq -r '.worker.ssh_port' {cfgfile})
 
             exitcode=0
-            if {ssh_run_shell(f'test -e {bfiles.request}')}; then
+            if {ssh(f'test -e {bfiles.request}')}; then
                 >&2 echo "request {reqid} was already sent"
                 exitcode=1
             else
                 ( set -x
 
                 # Set up before running.
-                {ssh_run_shell(f'mkdir -p {bfiles.request}')}
-                {ssh_run_shell(f'mkdir -p {bfiles.work}')}
-                {ssh_run_shell(f'mkdir -p {bfiles.result}')}
+                {ssh(f'mkdir -p {bfiles.request}')}
+                {ssh(f'mkdir -p {bfiles.work}')}
+                {ssh(f'mkdir -p {bfiles.result}')}
                 {pushfiles_str}
 
                 # Run the request.
-                {ssh_run_shell(bfiles.job_script)}
+                {ssh(bfiles.job_script)}
                 exitcode=$?
 
                 # Finish up.
@@ -436,7 +434,7 @@ class Job:
             return proc.returncode
 
     def get_pid(self) -> int:
-        return int(self._pidfile.read())
+        return self._pidfile.read()
 
     def kill(self) -> None:
         pid = self.get_pid()
@@ -577,13 +575,10 @@ class Job:
             if end is not None:
                 elapsed = end - started
             else:
+                # TODO: Handle this situation better
                 elapsed = None
         date_options = (started, self.reqid.date)
-        date: Any
-        if not any(date_options):
-            date = None
-        else:
-            date = date_options
+        date = any(date_options) and date_options or None
         fullref = ref = remote = branch = tag = commit = None
         req = self.load_request(fail=False)
         if req:
