@@ -16,8 +16,8 @@ import textwrap
 import time
 import types
 from typing import (
-    Any, Callable, Iterable, List, Mapping, Optional, Sequence, TextIO, Tuple,
-    Type, Union
+    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, TextIO,
+    Tuple, Type, Union
 )
 
 
@@ -28,16 +28,13 @@ sudo --login --user <username> ssh-import-id gh:<username>
 
 
 FsAttrsType = List[Union[Tuple[str, str], str]]
-Numeric = Union[int, float, decimal.Decimal]
-SuiteType = Union[None, str, "Sentinel"]
-SuitesType = Any  # This is a recursive iterable of SuiteType
 
 
-USER: str = os.environ.get('USER', '').strip()
-SUDO_USER: str = os.environ.get('SUDO_USER', '').strip()
-HOME: str = os.path.expanduser('~')
-CWD: str = os.getcwd()
-PID: int = os.getpid()
+USER = os.environ.get('USER', '').strip()
+SUDO_USER = os.environ.get('SUDO_USER', '').strip()
+HOME = os.path.expanduser('~')
+CWD = os.getcwd()
+PID = os.getpid()
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +137,11 @@ def validate_int(
         elif range == 'non-negative':
             if value < 0:
                 fail()
+            return value
         elif range == 'positive':
             if value <= 0:
                 fail()
+            return value
         else:
             raise NotImplementedError(f'unsupported range {range!r}')
     elif not value:
@@ -151,8 +150,7 @@ def validate_int(
         raise ValueError(f'missing {name}' if name else 'missing')
     else:
         fail()
-    return None
-
+    return None  # unreachable
 
 def normalize_int(
         value: Any,
@@ -192,10 +190,8 @@ def validate_arg(
 # tables
 
 class ColumnSpec(namedtuple('ColumnSpec', 'name title width align')):
-    RawColumnSpec = Union['ColumnSpec', Tuple[str, Optional[str], int, Optional[str]]]
-
     @classmethod
-    def from_raw(cls, raw: 'RawColumnSpec'):
+    def from_raw(cls, raw: Any):
         if isinstance(raw, cls):
             return raw
         else:
@@ -211,7 +207,7 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
     @classmethod
     def from_columns(
             cls,
-            specs: Iterable[ColumnSpec.RawColumnSpec],
+            specs: Iterable[Any],
             names: Optional[Union[str, Iterable[str]]] = None,
             *,
             maxwidth: Optional[int] = None
@@ -242,7 +238,7 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
     @classmethod
     def _normalize_columns(
             cls,
-            specs: Iterable[ColumnSpec.RawColumnSpec],
+            specs: Iterable[Any],
             names: Optional[Union[str, Iterable[str]]],
             maxwidth: Optional[int]
     ) -> Tuple[List[Any], Optional[List[str]]]:
@@ -290,7 +286,7 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
                 # XXX Maybe drop other columns than just the tail?
                 # XXX Maybe combine some columns?
                 columns[i:] = []
-                if names_list is not None:
+                if names_list:
                     names_list[i:] = []
                 break
 
@@ -339,7 +335,7 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
     def render_rows(
             self,
             rows: Iterable["TableRow"],
-            periodic: Optional[Iterable[str]] = None,
+            periodic: Optional[Union[str, Iterable[str]]] = None,
             numrows: Optional[int] = None
     ) -> "RenderingRows":
         rendered_rows = self._render_rows(rows)
@@ -357,11 +353,12 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
 
 
 class RenderingRows:
+    pending: List[str]
 
     def __init__(
             self,
             rows: Iterable[str],
-            periodic: Optional[Any] = None,
+            periodic: Optional[Union[str, Iterable[str]]] = None,
             numrows: Optional[int] = None
     ):
         if not periodic:
@@ -378,7 +375,7 @@ class RenderingRows:
         self.numrows = numrows
 
         self.count = 0
-        self.pending: List[str] = []
+        self.pending = []
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -639,8 +636,8 @@ class ElapsedTimeWithUnits:
         return self
 
     def __init__(self, *args, **kwargs):
+        self._units: str
         self._elapsed = self._elapsed.normalize()
-        self._units: Optional[str] = None
         self._validate()
 
     def _validate(self):
@@ -2448,6 +2445,14 @@ class GitRefCandidates:
         return _branch, tag, commit, name
 
 
+ToGitRefType = Union[
+    "GitRef",
+    str,
+    Dict[str, str],
+    Tuple[str, str, str, str, str, str]
+]
+
+
 class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
 
     # XXX Use requested.orig.revision instead of requested.revision?
@@ -2459,12 +2464,12 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
     }
 
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw: ToGitRefType):
         if isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
             raise TypeError(raw)
-        elif hasattr(raw, 'items'):
+        elif isinstance(raw, dict):
             if raw.get('requested'):
                 raw['requested'] = GitRefRequest.from_raw(raw['requested'])
             return cls(**raw)
@@ -4637,6 +4642,8 @@ class Metadata(types.SimpleNamespace):
             fields = [f for f in vars(self) if not f.startswith('_')]
         elif withextra:
             fields.extend((getattr(self, '_extra', None) or {}).keys())
+        # TODO: Unused variable
+        optional = set(self.OPTIONAL or ())
         data = {}
         for field in fields:
             try:

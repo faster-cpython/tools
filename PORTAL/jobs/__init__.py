@@ -81,12 +81,15 @@ class PortalFS(_utils.FSTree):
     @property
     def currentjob(self) -> str:
         return self.jobs.requests.current
+    
+
+SuiteType = Union[None, str, _utils.Sentinel]
+SuitesType = Any  # This is a recursive iterable of SuiteType
 
 
 class Jobs:
 
     FS: Type[PortalFS] = PortalFS
-    _queue: Optional[queue_mod.JobQueue] = None
 
     def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
@@ -94,6 +97,7 @@ class Jobs:
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
+        self._queue: Optional[queue_mod.JobQueue] = None
 
     def __str__(self):
         return self._fs.root
@@ -164,7 +168,7 @@ class Jobs:
     def match_results(
             self,
             specifier: Any,
-            suites: _utils.SuitesType = None
+            suites: SuitesType = None
     ) -> Iterator[_pyperformance.PyperfResultsFile]:
         matched = list(self._store.match(specifier, suites=suites))
         if matched:
@@ -215,7 +219,7 @@ class Jobs:
             job: Optional[Union[_job.Job, RequestID]] = None,
             *,
             timeout: Union[int, bool] = True
-    ) -> Tuple[_job.Job, int]:
+    ) -> Tuple[_job.Job, Optional[int]]:
         current = _current.get_staged_request(self._fs.jobs)
         if isinstance(job, _job.Job):
             reqid = job.reqid

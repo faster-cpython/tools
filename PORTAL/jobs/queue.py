@@ -65,7 +65,10 @@ class JobAlreadyQueuedError(QueuedJobError):
 class JobQueueFS(_utils.FSTree):
     """The file structure of the job queue data."""
 
-    def __init__(self, datadir: Union[str, _utils.FSTree]):
+    def __init__(
+            self,
+            datadir: Union[str, _utils.FSTree]  # _common.JobsFS.requests
+    ):
         super().__init__(str(datadir))
         self.data = f'{self.root}/queue.json'
         self.lock = f'{self.root}/queue.lock'

@@ -71,8 +71,8 @@ class CompileBenchRequest(Request):
             self,
             id: ToRequestIDType,
             datadir: str,
-            ref: Any,
-            pyperformance_ref: Optional[Any] = None,
+            ref: _utils.ToGitRefType,
+            pyperformance_ref: Optional[_utils.ToGitRefType] = None,
             remote: Optional[str] = None,
             revision: Optional[str] = None,
             branch: Optional[str] = None,
@@ -95,24 +95,28 @@ class CompileBenchRequest(Request):
                 if ref and _utils.looks_like_git_commit(ref):
                     commit = ref
                 try:
-                    ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                    gitref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                    if gitref is None:
+                        raise ValueError
                 except ValueError:
                     # backward compatibility
                     GR = _utils.GitRef
-                    ref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
+                    gitref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
             else:
                 refstr = ref
-                ref = _utils.GitRef.resolve(revision, branch, remote)
-                if refstr not in (ref.commit, ref.branch, ref.tag, None):
+                gitref = _utils.GitRef.resolve(revision, branch, remote)
+                if gitref is None:
+                    raise ValueError("Could not resolve ref {ref}")
+                if refstr not in (gitref.commit, gitref.branch, gitref.tag, None):
                     raise ValueError(f'unexpected ref {refstr!r}')
         else:
-            ref = _utils.GitRef.from_raw(ref)
+            gitref = _utils.GitRef.from_raw(ref)
 
-        self.ref = ref
+        self.ref = gitref
         self.pyperformance_ref = pyperformance_ref or str(ref)
-        self.remote = ref.remote
+        self.remote = gitref.remote
         self.revision = revision
-        self.branch = ref.branch
+        self.branch = gitref.branch
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
@@ -276,7 +280,7 @@ def resolve_compile_bench_request(
 
 def build_pyperformance_manifest(
         req: CompileBenchRequest,
-        bfiles: _utils.FSTree
+        bfiles: _workers.WorkerJobsFS,
 ) -> str:
     return textwrap.dedent(f'''
         [includes]
@@ -287,14 +291,14 @@ def build_pyperformance_manifest(
 
 def build_pyperformance_config(
         req: CompileBenchRequest,
-        bfiles: _utils.FSTree
+        bfiles: _workers.WorkerJobsFS
 ) -> configparser.ConfigParser:
     cpython = bfiles.repos.cpython
-    bfiles = bfiles.resolve_request(req.id)
+    bfiles_jobfs = bfiles.resolve_request(req.id)
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
-    cfg['config']['json_dir'] = bfiles.result.root
+    cfg['config']['json_dir'] = bfiles_jobfs.result.root
     cfg['config']['debug'] = str(req.debug)
     # XXX pyperformance should be looking in [scm] for this.
     cfg['config']['git_remote'] = req.remote
@@ -305,13 +309,13 @@ def build_pyperformance_config(
     cfg['scm']['update'] = 'True'
 
     cfg['compile'] = {}
-    cfg['compile']['bench_dir'] = bfiles.work.scratch_dir
+    cfg['compile']['bench_dir'] = bfiles_jobfs.work.scratch_dir
     cfg['compile']['pgo'] = str(req.optimize)
     cfg['compile']['lto'] = str(req.optimize)
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
-    cfg['run_benchmark']['manifest'] = bfiles.request.pyperformance_manifest
+    cfg['run_benchmark']['manifest'] = bfiles_jobfs.request.pyperformance_manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
@@ -321,17 +325,19 @@ def build_pyperformance_config(
 
 def build_compile_script(
         req: CompileBenchRequest,
-        bfiles: _utils.FSTree,
+        bfiles: _workers.WorkerJobsFS,
         fake: Optional[Any] = None
 ) -> str:
+    exitcode: Optional[Union[str, int]]
     fakedelay: Optional[int] = FAKE_DELAY
     if fake is False or fake is None:
-        fake = (None, None)
+        exitcode, fakedelay = (None, None)
     elif fake is True:
-        fake = (0, None)
+        exitcode, fakedelay = (0, None)
     elif isinstance(fake, (int, str)):
-        fake = (fake, None)
-    exitcode, fakedelay = fake
+        exitcode, fakedelay = (fake, None)
+    else:
+        exitcode, fakedelay = (None, None)
     if fakedelay is None:
         fakedelay = FAKE_DELAY
     else:
@@ -364,15 +370,15 @@ def build_compile_script(
     pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
     pyston_benchmarks_repo = _utils.quote_shell_str(bfiles.repos.pyston_benchmarks)
 
-    bfiles = bfiles.resolve_request(req.id)
-    _utils.check_shell_str(bfiles.work.pidfile)
-    _utils.check_shell_str(bfiles.work.logfile)
-    _utils.check_shell_str(bfiles.work.scratch_dir)
-    _utils.check_shell_str(bfiles.request.pyperformance_config)
-    _utils.check_shell_str(bfiles.result.pyperformance_log)
-    _utils.check_shell_str(bfiles.result.metadata)
-    _utils.check_shell_str(bfiles.result.pyperformance_results)
-    _utils.check_shell_str(bfiles.work.pyperformance_results_glob)
+    _bfiles = bfiles.resolve_request(req.id)
+    _utils.check_shell_str(_bfiles.work.pidfile)
+    _utils.check_shell_str(_bfiles.work.logfile)
+    _utils.check_shell_str(_bfiles.work.scratch_dir)
+    _utils.check_shell_str(_bfiles.request.pyperformance_config)
+    _utils.check_shell_str(_bfiles.result.pyperformance_log)
+    _utils.check_shell_str(_bfiles.result.metadata)
+    _utils.check_shell_str(_bfiles.result.pyperformance_results)
+    _utils.check_shell_str(_bfiles.work.pyperformance_results_glob)
 
     _utils.check_shell_str(python)
 
@@ -389,18 +395,18 @@ def build_compile_script(
         #####################
         # Mark the result as running.
 
-        echo "$$" > {bfiles.work.pidfile}
+        echo "$$" > {_bfiles.work.pidfile}
 
-        status=$(jq -r '.status' {bfiles.result.metadata})
+        status=$(jq -r '.status' {_bfiles.result.metadata})
         if [ "$status" != 'activated' ]; then
             2>&1 echo "ERROR: expected activated status, got $status"
-            2>&1 echo "       (see {bfiles.result.metadata})"
+            2>&1 echo "       (see {_bfiles.result.metadata})"
             exit 1
         fi
 
         ( set -x
-        jq --arg date $(date -u -Iseconds) '.history += [["running", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-        mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+        jq --arg date $(date -u -Iseconds) '.history += [["running", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+        mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
         )
 
         #####################
@@ -475,25 +481,25 @@ def build_compile_script(
         # Run the benchmarks.
 
         ( set -x
-        mkdir -p {bfiles.work.scratch_dir}
+        mkdir -p {_bfiles.work.scratch_dir}
         )
 
         echo "running the benchmarks..."
-        echo "(logging to {bfiles.work.logfile})"
+        echo "(logging to {_bfiles.work.logfile})"
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
             sleep {fakedelay}
-            touch {bfiles.work.logfile}
-            touch {bfiles.request}/pyperformance-dummy-results.json.gz
+            touch {_bfiles.work.logfile}
+            touch {_bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
             ( set -x
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
-                {bfiles.request.pyperformance_config} \\
+                {_bfiles.request.pyperformance_config} \\
                 {ref} {maybe_branch} \\
-                2>&1 | tee {bfiles.work.logfile}
+                2>&1 | tee {_bfiles.work.logfile}
             )
             exitcode=$?
         fi
@@ -501,44 +507,44 @@ def build_compile_script(
         #####################
         # Record the results.
 
-        if [ -e {bfiles.work.logfile} ]; then
-            ln -s {bfiles.work.logfile} {bfiles.result.pyperformance_log}
+        if [ -e {_bfiles.work.logfile} ]; then
+            ln -s {_bfiles.work.logfile} {_bfiles.result.pyperformance_log}
         fi
 
-        results=$(2>/dev/null ls {bfiles.work.pyperformance_results_glob})
+        results=$(2>/dev/null ls {_bfiles.work.pyperformance_results_glob})
         results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
         if [ $exitcode -eq 0 -a -n "$results" ]; then
             ( set -x
-            jq '.status = "success"' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq '.status = "success"' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg results "$results" '.pyperformance_data_orig = $results' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg results "$results" '.pyperformance_data_orig = $results' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg date $(date -u -Iseconds) '.history += [["success", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg date $(date -u -Iseconds) '.history += [["success", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
             )
         else
             ( set -x
-            jq '.status = "failed"' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq '.status = "failed"' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg date $(date -u -Iseconds) '.history += [["failed", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg date $(date -u -Iseconds) '.history += [["failed", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
             )
         fi
 
         if [ -n "$results" -a -e "$results" ]; then
             ( set -x
-            ln -s $results {bfiles.result.pyperformance_results}
+            ln -s $results {_bfiles.result.pyperformance_results}
             )
         fi
 
         echo "...done!"
 
-        #rm -f {bfiles.work.pidfile}
+        #rm -f {_bfiles.work.pidfile}
     '''[1:-1])
 
 
@@ -562,7 +568,8 @@ class CompileBenchKind(_common.JobKind):
 
     def set_request_fs(
             self,
-            fs: _utils.FSTree, context: Optional[str]
+            fs: _common.JobRequestFS,
+            context: Optional[str]
     ) -> None:
         fs.pyperformance_manifest = f'{fs}/benchmarks.manifest'
         #fs.pyperformance_config = f'{fs}/compile.ini'
@@ -570,7 +577,7 @@ class CompileBenchKind(_common.JobKind):
 
     def set_work_fs(
             self,
-            fs: _utils.FSTree,
+            fs: _common.JobWorkFS,
             context: Optional[str]
     ) -> None:
         if context == 'job-worker':
@@ -583,7 +590,7 @@ class CompileBenchKind(_common.JobKind):
 
     def set_result_fs(
             self,
-            fs: _utils.FSTree,
+            fs: _common.JobResultFS,
             context: Optional[str]
     ) -> None:
         #fs.pyperformance_log = f'{fs}/run.log'

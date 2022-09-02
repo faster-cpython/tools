@@ -50,15 +50,23 @@ class JobKind:
 
     def set_request_fs(
             self,
-            fs: _utils.FSTree,
+            fs: "JobRequestFS",
             context: str
     ) -> None:
         raise NotImplementedError
 
-    def set_work_fs(self, fs: _utils.FSTree, context: Optional[str]) -> None:
+    def set_work_fs(
+            self,
+            fs: "JobWorkFS",
+            context: Optional[str]
+    ) -> None:
         raise NotImplementedError
 
-    def set_result_fs(self, fs: _utils.FSTree, context: Optional[str]) -> None:
+    def set_result_fs(
+            self,
+            fs: "JobResultFS",
+            context: Optional[str]
+    ) -> None:
         raise NotImplementedError
 
     def create(
@@ -241,8 +249,6 @@ class JobFS(types.SimpleNamespace):
         return value
 
     def copy(self) -> "JobFS":
-        # XXX This may not work, since it doesn't do a deep copy of the first
-        # three arguments
         return type(self)(
             str(self.request),
             str(self.result),

@@ -16,6 +16,7 @@ from typing import (
 )
 
 from . import _utils
+from . import SuiteType, SuitesType
 
 
 logger = logging.getLogger(__name__)
@@ -142,7 +143,7 @@ class Benchmarks:
             benchmarks: Iterable[str],
             default: Optional[str] = None
     ) -> Dict[str, Any]:
-        mapped: Dict[str, _utils.SuiteType] = {}
+        mapped: Dict[str, SuiteType] = {}
         by_bench = self.load('name')
         for bench in benchmarks:
             suite: Any
@@ -217,7 +218,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     EMPTY = _utils.Sentinel('empty')
     MULTI_SUITE = _utils.Sentinel('multi-suite')
     SUITES = set(Benchmarks.SUITES)
-    _SUITES: Dict[_utils.SuiteType, _utils.SuiteType]
+    _SUITES: Dict[SuiteType, SuiteType]
     _SUITES = {s: s for s in SUITES}
     _SUITES[SUITE_NOT_KNOWN] = SUITE_NOT_KNOWN
     _SUITES[EMPTY] = EMPTY
@@ -397,7 +398,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         return h.hexdigest()
 
     @classmethod
-    def normalize_suite(cls, suite: _utils.SuitesType) -> _utils.SuiteType:
+    def normalize_suite(cls, suite: SuitesType) -> SuiteType:
         if not suite:
             return cls.SUITE_NOT_KNOWN
 
@@ -428,7 +429,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             commit: str,
             host: Union[str, _utils.HostInfo],
             compatid: str,
-            suite: _utils.SuiteType = SUITE_NOT_KNOWN,
+            suite: SuiteType = SUITE_NOT_KNOWN,
     ):
         return super().__new__(
             cls,
@@ -1388,7 +1389,7 @@ class PyperfResults:
         self._metadata: Optional["PyperfResultsMetadata"] = None
         self._uploadid: Optional["PyperfUploadID"] = None
         self._by_bench: Optional[Mapping[str, Any]] = None
-        self._by_suite: Optional[Mapping[_utils.SuiteType, Any]] = None
+        self._by_suite: Optional[Mapping[SuiteType, Any]] = None
 
     def _copy(self) -> "PyperfResults":
         cls = type(self)
@@ -1463,7 +1464,7 @@ class PyperfResults:
         return self.uploadid.suite
 
     @property
-    def suites(self) -> Iterable[_utils.SuiteType]:
+    def suites(self) -> Iterable[SuiteType]:
         return sorted(self.by_suite)  # type: ignore[type-var] 
 
     @property
@@ -1473,13 +1474,13 @@ class PyperfResults:
         return self._by_bench
 
     @property
-    def by_suite(self) -> Mapping[_utils.SuiteType, Any]:
+    def by_suite(self) -> Mapping[SuiteType, Any]:
         if self._by_suite is None:
             self._by_suite = self._collate_suites()
         return self._by_suite
 
-    def _collate_suites(self) -> Mapping[_utils.SuiteType, Any]:
-        by_suite: Dict[_utils.SuiteType, Any] = {}
+    def _collate_suites(self) -> Mapping[SuiteType, Any]:
+        by_suite: Dict[SuiteType, Any] = {}
         names = [n for n, _ in self._iter_benchmarks()]
         if names:
             bench_suites = self.BENCHMARKS.get_suites(names, 'unknown')
@@ -1499,7 +1500,7 @@ class PyperfResults:
             name = self.get_benchmark_name(benchdata)
             yield name, benchdata
 
-    def split_benchmarks(self) -> Mapping[_utils.SuiteType, "PyperfResults"]:
+    def split_benchmarks(self) -> Mapping[SuiteType, "PyperfResults"]:
         """Return results collated by suite."""
         if self.suite is not PyperfUploadID.MULTI_SUITE:
             assert self.suite is not PyperfUploadID.SUITE_NOT_KNOWN
@@ -2019,7 +2020,7 @@ class PyperfResultsInfo(
     def match(
             self,
             specifier: str,
-            suites: Optional[_utils.SuitesType] = None,
+            suites: Optional[SuitesType] = None,
             *,
             checkexists=False
     ) -> bool:
@@ -2051,7 +2052,7 @@ class PyperfResultsInfo(
     def _match(
             self,
             specifier: str,
-            suites: Optional[_utils.SuitesType]
+            suites: Optional[SuitesType]
     ) -> bool:
         if self._match_filename(specifier):
             return True
@@ -2154,7 +2155,7 @@ class PyperfResultsIndex:
 
     def get_baseline(
             self,
-            suite: Optional[_utils.SuiteType] = None
+            suite: Optional[SuiteType] = None
     ) -> Optional[PyperfResultsInfo]:
         for entry in self._entries:
             if entry.uploadid.suite != suite:
@@ -2185,7 +2186,7 @@ class PyperfResultsIndex:
     def match(
             self,
             specifier: Optional[str],
-            suites: Optional[_utils.SuitesType] = None,
+            suites: Optional[SuitesType] = None,
             *,
             checkexists: bool = False
     ) -> Iterator[PyperfResultsInfo]:
@@ -2239,7 +2240,7 @@ class PyperfResultsIndex:
     ) -> List[Tuple[PyperfResultsInfo, PyperfResultsInfo]]:
         requested = _utils.Version.from_raw(baseline).full if baseline else None
 
-        by_suite: Dict[_utils.SuiteType, List[Any]] = {}
+        by_suite: Dict[SuiteType, List[Any]] = {}
         baselines = {}
         entry_indices = {}
         for i, info in enumerate(self._entries):
@@ -2790,7 +2791,7 @@ class PyperfResultsDir:
     def match(
             self,
             specifier: str,
-            suites: Optional[_utils.SuitesType] = None,
+            suites: Optional[SuitesType] = None,
             *,
             checkexists: bool = True
     ) -> Iterator[PyperfResultsInfo]:
@@ -3015,7 +3016,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
     def match(
             self,
             specifier: str,
-            suites: Optional[_utils.SuitesType] = None
+            suites: Optional[SuitesType] = None
     ) -> Iterator[PyperfResultsFile]:
         for info in self._resultsdir.match(specifier, suites):
             if info.resfile:
@@ -3109,7 +3110,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
         columns = 'date release commit host mean'.split()
 
         rows = index.as_rendered_rows(columns)
-        by_suite: Dict[_utils.SuiteType, List[List[str]]] = {}
+        by_suite: Dict[SuiteType, List[List[str]]] = {}
         for row, info in sorted(rows, key=(lambda r: r[1].sortkey)):
             suite = info.uploadid.suite
             if suite not in by_suite:

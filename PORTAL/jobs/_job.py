@@ -249,7 +249,7 @@ class Job:
             ('request', 'metadata'),
             ('work', 'job_script'),
             ('result', 'metadata'),
-            *(pushfsfields or [])
+            *(pushfsfields or []),
         ]
         pushfiles = []
         for field in pushfsfields or ():
@@ -433,7 +433,7 @@ class Job:
             proc = subprocess.run([self._fs.portal_script], env=env)
             return proc.returncode
 
-    def get_pid(self) -> int:
+    def get_pid(self) -> Optional[int]:
         return self._pidfile.read()
 
     def kill(self) -> None:
@@ -455,7 +455,7 @@ class Job:
             timeout: Any = None,
             *,
             checkssh: bool = False
-    ) -> int:
+    ) -> Optional[int]:
         if not timeout or timeout < 0:
             timeout = None
         else:
@@ -507,15 +507,18 @@ class Job:
             timeout = None
         if timeout:
             end = time.time() + timeout
+        else:
+            end = None
         if not pid:
             try:
                 pid = self.wait_until_started(timeout)
             except JobFinishedError:
                 return
-        while _utils.is_proc_running(pid):
-            if timeout and time.time() > end:
-                raise TimeoutError(f'timed out after {timeout} seconds')
-            time.sleep(0.1)
+        if pid is not None:
+            while _utils.is_proc_running(pid):
+                if timeout and (end is not None and time.time() > end):
+                    raise TimeoutError(f'timed out after {timeout} seconds')
+                time.sleep(0.1)
         # Make sure it finished.
         status = self.get_status()
         if status not in Result.FINISHED:

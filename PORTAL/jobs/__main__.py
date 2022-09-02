@@ -314,7 +314,7 @@ def cmd_compare(
     if not matched:
         logger.error(f'no results matched {res1!r}')
         sys.exit(1)
-    res1_results, = matched
+    res1_matched, = matched
     for _ in range(len(others)):
         spec = others.pop(0)
         matched = list(jobs.match_results(spec, suites=suites))
@@ -323,7 +323,7 @@ def cmd_compare(
             sys.exit(1)
         others.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    compared = res1_results.compare(others)
+    compared = res1_matched.compare(others)
     if compared is None:
         raise RuntimeError("Could not get comparison")
     table = compared.table
