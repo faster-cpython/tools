@@ -316,8 +316,8 @@ def cmd_compare(
         sys.exit(1)
     res1_matched, = matched
     others_matched = []
-    for _ in range(len(matched)):
-        spec = matched.pop(0)
+    for _ in range(len(others)):
+        spec = others.pop(0)
         matched = list(jobs.match_results(spec, suites=suites))
         if not matched:
             logger.error(f'no results matched {spec!r}')
