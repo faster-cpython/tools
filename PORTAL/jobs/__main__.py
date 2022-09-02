@@ -303,8 +303,8 @@ def cmd_upload(
 
 def cmd_compare(
         jobs: Jobs,
-        res1: ToRequestIDType,
-        others: List[Any],
+        res1: str,
+        others: List[str],
         *,
         meanonly: bool = False,
         pyston: bool = False
@@ -315,15 +315,16 @@ def cmd_compare(
         logger.error(f'no results matched {res1!r}')
         sys.exit(1)
     res1_matched, = matched
-    for _ in range(len(others)):
-        spec = others.pop(0)
+    others_matched = []
+    for _ in range(len(matched)):
+        spec = matched.pop(0)
         matched = list(jobs.match_results(spec, suites=suites))
         if not matched:
             logger.error(f'no results matched {spec!r}')
             sys.exit(1)
-        others.extend(matched)
+        others_matched.extend(matched)
     #others = [*jobs.match_results(r) for r in others]
-    compared = res1_matched.compare(others)
+    compared = res1_matched.compare(others_matched)
     if compared is None:
         raise RuntimeError("Could not get comparison")
     table = compared.table

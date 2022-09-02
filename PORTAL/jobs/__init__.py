@@ -197,8 +197,8 @@ class Jobs:
             self,
             reqid: RequestID,
             kind_kwargs: Optional[Mapping[str, Any]] = None,
-            pushfsattrs: Optional[_utils.FsAttrsType] = None,
-            pullfsattrs: Optional[_utils.FsAttrsType] = None
+            pushfsattrs: Optional[_common.FsAttrsType] = None,
+            pullfsattrs: Optional[_common.FsAttrsType] = None
     ) -> _job.Job:
         if kind_kwargs is None:
             kind_kwargs = {}

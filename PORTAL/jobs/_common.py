@@ -1,7 +1,7 @@
 import logging
 import os.path
 import types
-from typing import Any, Optional, Type, Union
+from typing import Any, List, Optional, Tuple, Type, Union
 
 from . import _utils
 from .requests import RequestID, Request, Result, ToRequestIDType
@@ -12,6 +12,10 @@ from . import _workers
 
 PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
 SYS_PATH_ENTRY = os.path.dirname(PKG_ROOT)
+
+
+FsAttrsType = List[Union[Tuple[str, str], str]]
+
 
 logger = logging.getLogger(__name__)
 

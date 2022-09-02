@@ -171,8 +171,8 @@ class Job:
     def _create(
             self,
             kind_kwargs: Mapping[str, Any],
-            pushfsattrs: Optional[_utils.FsAttrsType],
-            pullfsattrs: Optional[_utils.FsAttrsType],
+            pushfsattrs: Optional[_common.FsAttrsType],
+            pullfsattrs: Optional[_common.FsAttrsType],
             queue_log: str
     ):
         os.makedirs(self._fs.request.root, exist_ok=True)
@@ -204,8 +204,8 @@ class Job:
     def _build_send_script(
             self,
             queue_log: str,
-            pushfsfields: Optional[_utils.FsAttrsType] = None,
-            pullfsfields: Optional[_utils.FsAttrsType] = None,
+            pushfsfields: Optional[_common.FsAttrsType] = None,
+            pullfsfields: Optional[_common.FsAttrsType] = None,
             *,
             hidecfg: bool = False,
     ) -> str:

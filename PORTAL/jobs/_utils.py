@@ -27,9 +27,6 @@ sudo --login --user <username> ssh-import-id gh:<username>
 '''
 
 
-FsAttrsType = List[Union[Tuple[str, str], str]]
-
-
 USER = os.environ.get('USER', '').strip()
 SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 HOME = os.path.expanduser('~')
@@ -535,6 +532,7 @@ class ElapsedTimeWithUnits:
          )
         '''
     REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+    _units: str
 
     @classmethod
     def parse(cls, elapsedstr, *, fail=False):
@@ -636,7 +634,6 @@ class ElapsedTimeWithUnits:
         return self
 
     def __init__(self, *args, **kwargs):
-        self._units: str
         self._elapsed = self._elapsed.normalize()
         self._validate()
 
