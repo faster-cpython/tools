@@ -81,10 +81,6 @@ class PortalFS(_utils.FSTree):
     @property
     def currentjob(self) -> str:
         return self.jobs.requests.current
-    
-
-SuiteType = Union[None, str, _utils.Sentinel]
-SuitesType = Any  # This is a recursive iterable of SuiteType
 
 
 class Jobs:
@@ -168,7 +164,7 @@ class Jobs:
     def match_results(
             self,
             specifier: Any,
-            suites: SuitesType = None
+            suites: _pyperformance.SuitesType = None
     ) -> Iterator[_pyperformance.PyperfResultsFile]:
         matched = list(self._store.match(specifier, suites=suites))
         if matched:

@@ -4639,7 +4639,8 @@ class Metadata(types.SimpleNamespace):
             fields = [f for f in vars(self) if not f.startswith('_')]
         elif withextra:
             fields.extend((getattr(self, '_extra', None) or {}).keys())
-        # TODO: Unused variable
+        # TODO: "optional" should be used in the loop to be smarter
+        # about how to handle AttributeError
         optional = set(self.OPTIONAL or ())
         data = {}
         for field in fields:

@@ -16,12 +16,13 @@ from typing import (
 )
 
 from . import _utils
-from . import SuiteType, SuitesType
 
 
 logger = logging.getLogger(__name__)
 
 
+SuiteType = Union[None, str, _utils.Sentinel]
+SuitesType = Any  # This is a recursive iterable of SuiteType
 
 
 ##################################
@@ -143,7 +144,7 @@ class Benchmarks:
             benchmarks: Iterable[str],
             default: Optional[str] = None
     ) -> Dict[str, Any]:
-        mapped: Dict[str, SuiteType] = {}
+        mapped = {}
         by_bench = self.load('name')
         for bench in benchmarks:
             suite: Any
@@ -184,7 +185,10 @@ class Benchmarks:
         else:
             return None
 
-    def load(self, key: str = 'name') -> Dict[str, List[str]]:
+    def load(
+            self,
+            key: str = 'name'
+    ) -> Union[Dict[str, List[str]], Dict[str, str]]:
         """Return the per-suite lists of benchmarks."""
         by_suite = self._load()
         if key == 'suite':
@@ -480,7 +484,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     ) -> Iterable[str]:
         dirnames: List[str] = []
         if dirname is True:
-            if self._dirname is not None:
+            if self._dirname:
                 dirnames = [self._dirname]
         elif dirname:
             if isinstance(dirname, str):
@@ -492,7 +496,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
         prefixes: List[Optional[str]] = [None]
         if prefix is True:
-            if self._prefix is not None:
+            if self._prefix:
                 prefixes = [self._prefix]
         elif prefix:
             if isinstance(prefix, str):
@@ -504,7 +508,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
         suffixes: List[Optional[str]] = [None]
         if suffix is True:
-            if hasattr(self, '_suffix') and self._suffix:
+            if self._suffix:
                 suffixes = [self._suffix]
         elif suffix:
             if isinstance(suffix, str):
@@ -520,8 +524,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             for prefix in prefixes:
                 filename = f'{prefix or ""}{name}{suffix or ""}'
                 if dirnames:
-                    for dirname_element in dirnames:
-                        yield os.path.join(dirname_element, filename)
+                    yield from (os.path.join(d, filename) for d in dirnames)
                 else:
                     yield filename
 
@@ -562,12 +565,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     def _match_version(self, version: Union[str, _utils.Version]) -> bool:
         if isinstance(version, str):
             version_obj = _utils.Version.parse(version)
-            if not version:
+            if not version_obj:
                 return False
+            version = version_obj
         elif not isinstance(version, _utils.Version):
             return False
-        else:
-            version_obj = version
         # XXX Treat missing micro/release as wildcard?
         return version_obj.full == self.version.full
 
@@ -784,7 +786,7 @@ class _PyperfComparison:
             return False
         return True
 
-    def _as_hashable(self) -> Tuple:
+    def _as_hashable(self) -> Tuple[Any, Tuple]:
         return (
             self._source,
             tuple(sorted(self._byname.items())) if self._byname else (),
@@ -1178,7 +1180,7 @@ class PyperfTable:
 
 class _PyperfTableRowBase(tuple):
     _raw: Optional[str] = None
-    _header: Optional[List[str]] = None
+    _header: Optional["_PyperfTableRowBase"] = None
 
     @classmethod
     def parse(
@@ -1257,7 +1259,7 @@ class PyperfTableHeader(_PyperfTableRowBase):
             filenames: Optional[Iterable[str]] = None,
             *,
             fail: bool = False
-    ):
+    ) -> Optional["_PyperfTableRowBase"]:
         self = super().parse(line, fail=fail)
         if not self:
             return None
@@ -1278,56 +1280,61 @@ class PyperfTableHeader(_PyperfTableRowBase):
     def rowdiv(self) -> str:
         return '+-' + '-+-'.join('-' * len(v) for v in self) + '-+'
 
-    # TYPE: BROKEN
-    # @property
-    # def indexpersource(self) -> Dict[str, Iterable[int]]:
-    #     return dict(zip(self.sources, range(len(self.sources))))
+    @property
+    def indexpersource(self) -> Dict[str, Iterable[int]]:
+        return dict(
+            zip(  # type: ignore[call-overload]
+                self.sources, range(len(self.sources))  # type: ignore[arg-type]
+            )
+        ) 
 
 
 class PyperfTableRow(_PyperfTableRowBase):
-
     @classmethod
     def subclass_from_header(
             cls,
-            header: None
-    ) -> "PyperfTableRow":
+            header: _PyperfTableRowBase
+    ):
         if cls is not PyperfTableRow:
             raise TypeError('not supported for subclasses')
         if not header:
             raise ValueError('missing header')
         class _PyperfTableRow(PyperfTableRow):
             @classmethod
-            def parse(cls, line, *, _header=header, fail=False):
-                return super().parse(line, _header, fail=fail)
+            def parse(  # type: ignore[override]
+                    cls,
+                    line: str,
+                    _header: _PyperfTableRowBase = header,
+                    fail: bool = False
+            ) -> Optional["_PyperfTableRowBase"]:
+                return super().parse(line, header=_header, fail=fail)
         return _PyperfTableRow
 
     @classmethod
-    def parse(
+    def parse(  # type: ignore[override]
             cls,
             line: str,
-            header: Optional[List[str]] = None,
+            header: _PyperfTableRowBase,
             fail: bool = False
-    ):
+    ) -> Optional["_PyperfTableRowBase"]:
         self = super().parse(line, fail=fail)
         if not self:
             return None
-        if header is not None and len(self) != len(header):
+        if len(self) != len(header):
             raise ValueError(f'expected {len(header)} values, got {tuple(self)}')
         self._header = header
         return self
 
     @property
-    def header(self) -> Optional[List[str]]:
+    def header(self) -> Optional[_PyperfTableRowBase]:
         return self._header
 
-    # TYPE: BROKEN
-    # @property
-    # def valuesdict(self):
-    #     return dict(zip(self.header.sources, self.values))
+    @property
+    def valuesdict(self):
+        return dict(zip(self.header.sources, self.values))
 
-    # TYPE: BROKEN
-    # def look_up(self, source):
-    #     return self.valuesdict[source]
+    def look_up(self, source):
+        return self.valuesdict[source]
 
 
 ##################################
@@ -1338,7 +1345,7 @@ class PyperfResults:
     BENCHMARKS = Benchmarks()
 
     @classmethod
-    def get_metadata_raw(cls, data) -> Mapping[str, str]:
+    def get_metadata_raw(cls, data) -> MutableMapping[str, str]:
         return data['metadata']
 
     @classmethod
@@ -1428,13 +1435,11 @@ class PyperfResults:
         return self._data['version']
 
     @property
-    def resfile(self) -> Optional["PyperfResultsFile"]:
+    def resfile(self) -> "PyperfResultsFile":
         return self._resfile
 
     @property
     def filename(self) -> str:
-        if self._resfile is None:
-            raise ValueError
         return self._resfile.filename
 
     @property
@@ -1465,7 +1470,7 @@ class PyperfResults:
 
     @property
     def suites(self) -> Iterable[SuiteType]:
-        return sorted(self.by_suite)  # type: ignore[type-var] 
+        return sorted(self.by_suite)  # type: ignore[type-var]
 
     @property
     def by_bench(self) -> Mapping[str, Any]:
@@ -1527,7 +1532,7 @@ class PyperfResults:
             filename: str,
             resultsroot: Optional[str] = None,
             *,
-            compressed: bool = False 
+            compressed: bool = False
     ) -> "PyperfResults":
         if self._resfile is None:
             raise ValueError
@@ -1675,8 +1680,8 @@ class PyperfResultsMetadata:
             cls,
             data: List[Mapping[str, Any]],
             topdata: Mapping[str, Any]
-    ) -> MutableMapping[str, Any]:
-        metadata: MutableMapping[str, Any] = {}
+    ) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
         for bench in data:
             for key, value in bench['metadata'].items():
                 if key not in cls.EXPECTED:
@@ -1706,8 +1711,8 @@ class PyperfResultsMetadata:
         self._python_implementation: Optional[
             _utils.PythonImplementation
         ] = None
-        self._pyversion: Optional[None] = None 
-        self._host: Optional[_utils.HostInfo] = None 
+        self._pyversion: Optional[None] = None
+        self._host: Optional[_utils.HostInfo] = None
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -1744,8 +1749,8 @@ class PyperfResultsMetadata:
             text = self._data.get('python_version')
             impl = self.python_implementation
             parsed = impl.parse_version(text)
-            if not parsed and isinstance(impl.VERSION, _utils.CPythonVersion):
-                parsed = impl.VERSION.parse_extended(text)
+            if not parsed and hasattr(impl.VERSION, "parse_extended"):
+                parsed = impl.VERSION.parse_extended(text)  # type: ignore[attr-defined]
                 if parsed:
                     parsed, _, _ = parsed
                 else:
@@ -1960,7 +1965,7 @@ class PyperfResultsInfo(
         if self._resultsroot is None:
             if not self.filename:
                 return None
-            self._resultsroot = os.path.dirname(self.filename)
+            return os.path.dirname(self.filename)
         return self._resultsroot
 
     @property
@@ -2335,9 +2340,9 @@ class PyperfResultsFile:
     _SUFFIXES = (SUFFIX, COMPRESSED_SUFFIX)
 
     @classmethod
-    def from_raw(cls, raw: Any) -> Optional["PyperfResultsFile"]:
+    def from_raw(cls, raw: Any) -> "PyperfResultsFile":
         if not raw:
-            return None
+            raise ValueError(raw)
         elif isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
@@ -2781,7 +2786,7 @@ class PyperfResultsDir:
     def get(
             self,
             uploadid: Any,
-            default: Optional[None] = None,
+            default: Optional[PyperfResultsInfo] = None,
             *,
             checkexists: bool = True
     ) -> Optional[PyperfResultsInfo]:
@@ -2858,7 +2863,7 @@ class PyperfResultsDir:
             logger.info(f'...as {resfile.relfile}...')
             #copied = suite_results.copy_to(resfile, self._root)
             copied.append(
-                suite_results.copy_to(resfile.filename, self._root)
+                suite_results.copy_to(resfile, self._root)  # type: ignore[arg-type]
             )
             logger.info('...done adding')
 
