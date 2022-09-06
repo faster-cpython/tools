@@ -178,6 +178,8 @@ class CompileBenchResult(Result):
         'pyperformance_results_orig',
     ]
 
+    _pyperf: _pyperformance.PyperfResults
+
     @classmethod
     def _extract_kwargs(
             cls,
@@ -209,11 +211,11 @@ class CompileBenchResult(Result):
         #self.pyperformance_results = pyperformance_results
         #self.pyperformance_results_orig = pyperformance_results_orig
 
-        self._pyperf: Optional[_pyperformance.PyperfResults] = None
-
     @property
     def pyperf(self) -> _pyperformance.PyperfResults:
-        if self._pyperf is None:
+        try:
+            return self._pyperf
+        except AttributeError:
             filename = self.fs.pyperformance_results
             resfile = _pyperformance.PyperfResultsFile(
                 filename,

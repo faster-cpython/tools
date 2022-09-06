@@ -86,6 +86,7 @@ class PortalFS(_utils.FSTree):
 class Jobs:
 
     FS: Type[PortalFS] = PortalFS
+    _queue: queue_mod.JobQueue
 
     def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
@@ -93,7 +94,6 @@ class Jobs:
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
         self._store = _pyperformance.FasterCPythonResults.from_remote()
-        self._queue: Optional[queue_mod.JobQueue] = None
 
     def __str__(self):
         return self._fs.root
@@ -115,10 +115,12 @@ class Jobs:
         return self._fs.jobs.copy()
 
     @property
-    def queue(self) -> queue_mod.JobQueue:
-        if self._queue is None:
-            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue)
-        return self._queue
+    def queue(self):
+        try:
+            return self._queue
+        except AttributeError:
+            self._queue = _queue.JobQueue.from_fstree(self._fs.queue)
+            return self._queue
 
     def iter_all(self) -> Iterator[_job.Job]:
         for name in os.listdir(str(self._fs.jobs.requests)):

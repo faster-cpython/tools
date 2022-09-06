@@ -4417,7 +4417,7 @@ class PythonImplementation:
     def name(self):
         return self._name
 
-    def parse_version(self, version, *, requirestr=True):
+    def parse_version(self, version, *, requirestr=True) -> Version:
         try:
             return self.VERSION.parse(version)
         except TypeError:

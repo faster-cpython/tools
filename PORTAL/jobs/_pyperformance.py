@@ -250,10 +250,10 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
         $
     ''', re.VERBOSE)
 
-    _name: Optional[str] = None
+    _name: str
     _prefix: Optional[str] = None
     _suffix: Optional[str] = None
-    _filename: Optional[str] = None
+    _filename: str
     _dirname: Optional[str] = None
 
     @classmethod
@@ -450,7 +450,9 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
     @property
     def name(self) -> str:
-        if self._name is None:
+        try:
+            return self._name
+        except AttributeError:
             impl, version, commit, host, compatid, suite = self
             if isinstance(host, _utils.HostInfo):
                 host = host.id
@@ -458,7 +460,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             if suite in self.SUITES:
                 name = f'{name}-{suite}'
             self._name = name
-        return self._name
+            return name
 
     @property
     def implementation(self) -> str:
@@ -466,9 +468,11 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
 
     @property
     def filename(self) -> str:
-        if self._filename is None:
-            self._filename, *_ = self.resolve_filenames()
-        return self._filename
+        try:
+            return self._filename
+        except AttributeError:
+            filename, *_ = self.resolve_filenames()
+            return filename
 
     @property
     def sortkey(self) -> Tuple:
@@ -892,6 +896,8 @@ class PyperfComparison(_PyperfComparison):
 class PyperfComparisons:
     """The baseline and comparisons for a set of results."""
 
+    _table: "PyperfTable"
+
     @classmethod
     def parse_table(
             cls,
@@ -941,7 +947,6 @@ class PyperfComparisons:
             _bysource[source] = PyperfComparison(baseline, source, mean, byname)
         self._baseline = baseline
         self._bysource = _bysource
-        self._table: Optional["PyperfTable"] = None
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -956,9 +961,10 @@ class PyperfComparisons:
 
     @property
     def table(self) -> "PyperfTable":
-        if self._table is None:
+        try:
+            return self._table
+        except AttributeError:
             raise NotImplementedError
-        return self._table
 
 
 class PyperfTableParserError(ValueError):
@@ -1013,6 +1019,8 @@ class PyperfTableRowInvalidLineError(PyperfTableRowParserError):
 class PyperfTable:
 
     FORMATS = ['raw', 'meanonly']
+
+    _mean_row: "PyperfTableRow"
 
     @classmethod
     def parse(
@@ -1126,7 +1134,6 @@ class PyperfTable:
             raise ValueError(f'unsupported header {header}')
         self.header = header
         self.rows = rows
-        self._mean_row: Optional["PyperfTableRow"] = None
         self._text: Optional[str] = None
 
     def __repr__(self):
@@ -1137,14 +1144,16 @@ class PyperfTable:
 
     @property
     def mean_row(self) -> "PyperfTableRow":
-        if self._mean_row is None:
+        try:
+            return self._mean_row
+        except AttributeError:
             for row in self.rows:
                 if row.name == 'Geometric mean':
                     break
             else:
                 row = None
             self._mean_row = row
-        return self._mean_row
+            return self._mean_row
 
     def render(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:
@@ -1181,6 +1190,10 @@ class PyperfTable:
 class _PyperfTableRowBase(tuple):
     _raw: Optional[str] = None
     _header: Optional["_PyperfTableRowBase"] = None
+    _name: str
+    _values: Tuple
+    _baseline: str
+    _others: Tuple
 
     @classmethod
     def parse(
@@ -1221,19 +1234,35 @@ class _PyperfTableRowBase(tuple):
 
     @property
     def name(self) -> str:
-        return self[0]
+        try:
+            return self._name
+        except AttributeError:
+            self._name = self[0]
+            return self._name
 
     @property
     def values(self) -> Tuple:
-        return self[1:]
+        try:
+            return self._values
+        except AttributeError:
+            self._values = self[1:]
+            return self._values
 
     @property
     def baseline(self) -> str:
-        return self[1]
+        try:
+            return self._baseline
+        except AttributeError:
+            self._baseline = self[1]
+            return self._baseline
 
     @property
     def others(self) -> Tuple:
-        return self[2:]
+        try:
+            return self._others
+        except AttributeError:
+            self._others = self[2:]
+            return self._others
 
     def render(self, fmt: Optional[str] = None) -> str:
         if not fmt:
@@ -1286,7 +1315,7 @@ class PyperfTableHeader(_PyperfTableRowBase):
             zip(  # type: ignore[call-overload]
                 self.sources, range(len(self.sources))  # type: ignore[arg-type]
             )
-        ) 
+        )
 
 
 class PyperfTableRow(_PyperfTableRowBase):
@@ -1344,6 +1373,11 @@ class PyperfResults:
 
     BENCHMARKS = Benchmarks()
 
+    _metadata: "PyperfResultsMetadata"
+    _uploadid: PyperfUploadID
+    _by_bench: Mapping[str, Any]
+    _by_suite: Mapping[SuiteType, Any]
+
     @classmethod
     def get_metadata_raw(cls, data) -> MutableMapping[str, str]:
         return data['metadata']
@@ -1393,10 +1427,6 @@ class PyperfResults:
         self._validate_data(data)
         self._data = data
         self._resfile = PyperfResultsFile.from_raw(resfile)
-        self._metadata: Optional["PyperfResultsMetadata"] = None
-        self._uploadid: Optional["PyperfUploadID"] = None
-        self._by_bench: Optional[Mapping[str, Any]] = None
-        self._by_suite: Optional[Mapping[SuiteType, Any]] = None
 
     def _copy(self) -> "PyperfResults":
         cls = type(self)
@@ -1426,9 +1456,11 @@ class PyperfResults:
 
     @property
     def metadata(self) -> "PyperfResultsMetadata":
-        if self._metadata is None:
+        try:
+            return self._metadata
+        except AttributeError:
             self._metadata = PyperfResultsMetadata.from_full_results(self._data)
-        return self._metadata
+            return self._metadata
 
     @property
     def version(self) -> str:
@@ -1451,9 +1483,9 @@ class PyperfResults:
 
     @property
     def uploadid(self) -> PyperfUploadID:
-        if self._uploadid is None:
-            if self._resfile is None:
-                raise ValueError
+        try:
+            return self._uploadid
+        except AttributeError:
             if self._resfile.uploadid:
                 # XXX Compare with what we get from the metadata?
                 self._uploadid = self._resfile.uploadid
@@ -1474,15 +1506,19 @@ class PyperfResults:
 
     @property
     def by_bench(self) -> Mapping[str, Any]:
-        if self._by_bench is None:
+        try:
+            return self._by_bench
+        except AttributeError:
             self._by_bench = dict(self._iter_benchmarks())
-        return self._by_bench
+            return self._by_bench
 
     @property
     def by_suite(self) -> Mapping[SuiteType, Any]:
-        if self._by_suite is None:
+        try:
+            return self._by_suite
+        except AttributeError:
             self._by_suite = self._collate_suites()
-        return self._by_suite
+            return self._by_suite
 
     def _collate_suites(self) -> Mapping[SuiteType, Any]:
         by_suite: Dict[SuiteType, Any] = {}
@@ -1550,9 +1586,12 @@ class PyperfResults:
 
 class PyperfResultsMetadata:
 
-    _topdata: Optional[Any] = None
-    _benchdata: Optional[Any] = None
-    _benchmarks: Optional[List[Any]] = None
+    _topdata: Optional[Any]
+    _benchdata: Optional[Any]
+    _benchmarks: Optional[List[Any]]
+    _python_implementation: _utils.PythonImplementation
+    _pyversion: _utils.Version
+    _host: _utils.HostInfo
 
     _EXPECTED_TOP = {
         "aslr",
@@ -1708,11 +1747,6 @@ class PyperfResultsMetadata:
     def __init__(self, data, version: Optional[str] = None):
         self._data = data
         self._version = version
-        self._python_implementation: Optional[
-            _utils.PythonImplementation
-        ] = None
-        self._pyversion: Optional[None] = None
-        self._host: Optional[_utils.HostInfo] = None
 
     def __eq__(self, other):
         raise NotImplementedError
@@ -1737,15 +1771,20 @@ class PyperfResultsMetadata:
 
     @property
     def python_implementation(self) -> _utils.PythonImplementation:
-        if self._python_implementation is None:
-            self._python_implementation = _utils.resolve_python_implementation(
+        try:
+            return self._python_implementation
+        except AttributeError:
+            impl = _utils.resolve_python_implementation(
                 self._data.get('python_implementation'),
             )
-        return self._python_implementation
+            self._python_implementation = impl
+            return self._python_implementation
 
     @property
-    def pyversion(self) -> None:
-        if self._pyversion is None:
+    def pyversion(self) -> _utils.Version:
+        try:
+            return self._pyversion
+        except AttributeError:
             text = self._data.get('python_version')
             impl = self.python_implementation
             parsed = impl.parse_version(text)
@@ -1759,7 +1798,7 @@ class PyperfResultsMetadata:
             if not parsed:
                 parsed = None
             self._pyversion = parsed
-        return self._pyversion
+            return parsed
 
     @property
     def build(self) -> List[str]:
@@ -1769,7 +1808,9 @@ class PyperfResultsMetadata:
 
     @property
     def host(self) -> _utils.HostInfo:
-        if self._host is None:
+        try:
+            return self._host
+        except AttributeError:
             self._host = _utils.HostInfo.from_metadata(
                 self._data.get('hostid'),
                 self._data['hostname'],
@@ -1781,7 +1822,7 @@ class PyperfResultsMetadata:
                 self._data.get('cpu_count'),
                 self._data.get('cpu_affinity'),
             )
-        return self._host
+            return self._host
 
     @property
     def compatid(self) -> str:
@@ -1799,6 +1840,11 @@ class PyperfResultsMetadata:
 
 class PyperfResultsInfo(
         namedtuple('PyperfResultsInfo', 'uploadid build filename compared')):
+
+    _resultsroot: str
+    _relfile: str
+    _resfile: "PyperfResultsFile"
+    _date: datetime.datetime
 
     @classmethod
     def from_results(
@@ -1926,11 +1972,6 @@ class PyperfResultsInfo(
 
     def __init__(self, *args, **kwargs):
         self._validate()
-        self._relfile: Optional[str] = None
-        self._resfile: Optional["PyperfResultsFile"] = None
-        self._resultsroot: Optional[str] = None
-        self._date = Optional[datetime.datetime] = None
-
 
     def _validate(self):
         if not self.uploadid:
@@ -1962,15 +2003,18 @@ class PyperfResultsInfo(
 
     @property
     def resultsroot(self) -> Optional[str]:
-        if self._resultsroot is None:
+        try:
+            return self._resultsroot
+        except AttributeError:
             if not self.filename:
                 return None
             return os.path.dirname(self.filename)
-        return self._resultsroot
 
     @property
     def relfile(self) -> Optional[str]:
-        if self._relfile is None:
+        try:
+            return self._relfile
+        except AttributeError:
             if not self.filename:
                 return None
             if not hasattr(self, '_resultsroot'):
@@ -1979,24 +2023,28 @@ class PyperfResultsInfo(
                 self.filename,
                 self._resultsroot
             )
-        return self._relfile
+            return self._relfile
 
     @property
     def resfile(self) -> Optional["PyperfResultsFile"]:
-        if self._resfile is None:
+        try:
+            return self._resfile
+        except AttributeError:
             if not self.filename:
                 return None
             self._resfile = PyperfResultsFile(self.filename, self.resultsroot)
-        return self._resfile
+            return self._resfile
 
     @property
     def date(self) -> Optional[datetime.datetime]:
-        if self._date is None:
+        try:
+            return self._date
+        except AttributeError:
             if self.resfile is None:
                 return None
             results = self.resfile.read()
             self._date = results.date
-        return self._date
+            return self._date
 
     @property
     def baseline(self) -> Optional[str]:

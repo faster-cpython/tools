@@ -237,6 +237,10 @@ class Result(_utils.Metadata):
     ])
     CLOSED = 'closed'
 
+    _request: Request
+    _fs: _common.JobFS
+    _get_request: Callable[[str, str], Request]
+
     @classmethod
     def resolve_status(cls, status: str) -> str:
         try:
@@ -347,10 +351,6 @@ class Result(_utils.Metadata):
             history=history,
         )
 
-        self._request: Optional[Request] = None
-        self._get_request: Optional[Callable[(str, str), Request]] = None
-        self._fs = Optional[_common.JobFS] = None
-
     def __str__(self):
         return str(self.reqid)
 
@@ -362,16 +362,19 @@ class Result(_utils.Metadata):
 
     @property
     def request(self) -> Request:
-        if self._request is None:
+        try:
+            return self._request
+        except AttributeError:
             get_request = getattr(self, '_get_request', Request)
             self._request = get_request(self.reqid, self.reqdir)
-        return self._request
+            return self._request
 
     @property
     def fs(self) -> _common.JobFS:
-        if self._fs is None:
+        try:
+            return self._fs
+        except AttributeError:
             raise NotImplementedError
-        return self._fs
 
     @property
     def host(self) -> str:
