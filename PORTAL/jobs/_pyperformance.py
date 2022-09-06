@@ -1897,7 +1897,7 @@ class PyperfResultsInfo(
     def from_values(
             cls,
             uploadid: Any,
-            build: Optional[Union[str, List[str]]] = None,
+            build: Optional[_utils.ListOrStrType] = None,
             filename: Optional[str] = None,
             compared: Optional[_PyperfComparison] = None,
             resultsroot: Optional[str] = None,
@@ -1936,7 +1936,7 @@ class PyperfResultsInfo(
     @classmethod
     def _normalize_build(
             cls,
-            build: Optional[Union[str, List[str]]]
+            build: Optional[_utils.ListOrStrType]
     ) -> Optional[List[str]]:
         if not build:
             return None
@@ -2646,7 +2646,7 @@ class PyperfResultsDir:
             self,
             relfile: str,
             uploadid: PyperfUploadID,
-            build: Optional[Union[str, List[str]]] = None,
+            build: Optional[_utils.ListOrStrType] = None,
             baseline: Optional[str] = None,
             mean: Optional[str] = None,
             *,

@@ -27,6 +27,9 @@ sudo --login --user <username> ssh-import-id gh:<username>
 '''
 
 
+ListOrStrType = Union[str, List[str]]
+
+
 USER = os.environ.get('USER', '').strip()
 SUDO_USER = os.environ.get('SUDO_USER', '').strip()
 HOME = os.path.expanduser('~')
