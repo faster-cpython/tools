@@ -143,11 +143,11 @@ class Benchmarks:
             self,
             benchmarks: Iterable[str],
             default: Optional[str] = None
-    ) -> Dict[str, Any]:
-        mapped = {}
+    ) -> Dict[str, Optional[str]]:
+        mapped: Dict[str, Optional[str]] = {}
+        suite: Any
         by_bench = self.load('name')
         for bench in benchmarks:
-            suite: Any
             try:
                 suite = by_bench[bench]
             except KeyError:
@@ -157,7 +157,10 @@ class Benchmarks:
                         break
                 else:
                     suite = default
-            mapped[bench] = suite
+            if isinstance(suite, (str, type(None))):
+                mapped[bench] = suite
+            else:
+                raise TypeError(f"Invalid suite type {type(suite)}")
         return mapped
 
     def get_suite(
@@ -571,9 +574,10 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
             version_obj = _utils.Version.parse(version)
             if not version_obj:
                 return False
-            version = version_obj
         elif not isinstance(version, _utils.Version):
             return False
+        else:
+            version_obj = version
         # XXX Treat missing micro/release as wildcard?
         return version_obj.full == self.version.full
 
@@ -745,7 +749,7 @@ class _PyperfComparison:
             return None
 
     @classmethod
-    def _parse_value(cls, valuestr: str) -> _utils.ElapsedTimeWithUnits:
+    def _parse_value(cls, valuestr: str) -> Any:
         return _utils.ElapsedTimeWithUnits.parse(valuestr, fail=True)
 
     def __init__(
@@ -758,7 +762,7 @@ class _PyperfComparison:
             raise ValueError(f'expected an absolute source, got {source!r}')
         # XXX Further validate source as a filename?
 
-        _byname: Dict[str, _utils.ElapsedTimeWithUnits] = {}
+        _byname: Dict[str, Any] = {}
         if byname:
             for name, value in byname.items():
                 assert name and isinstance(name, str), (name, value, byname)
@@ -801,7 +805,7 @@ class _PyperfComparison:
         return self._source
 
     @property
-    def byname(self) -> Dict[str, _utils.ElapsedTimeWithUnits]:
+    def byname(self) -> Dict[str, Any]:
         return dict(self._byname)
 
 
@@ -825,7 +829,7 @@ class PyperfComparison(_PyperfComparison):
                          'bench baseline baseresult source result comparison')
 
     @classmethod
-    def _parse_value(cls, valuestr: str):
+    def _parse_value(cls, valuestr: str) -> Any:
         return PyperfComparisonValue.parse(valuestr, fail=True)
 
     def __init__(
@@ -881,16 +885,18 @@ class PyperfComparison(_PyperfComparison):
     def mean(self) -> Optional[_utils.ElapsedTimeComparison]:
         return self._mean
 
-    # TYPE - BROKEN
-    # def look_up(self, name) -> "PyperfComparison.Summary":
-    #     return self.Summary(
-    #         name,
-    #         self._baseline.source,
-    #         self._baseline.byname[name],
-    #         self._source,
-    #         self._byname[name].elapsed,
-    #         self._byname[name].comparison,
-    #     )
+    def look_up(self, name) -> "PyperfComparison.Summary":
+        time = self._byname[name]
+        assert isinstance(time, PyperfComparisonValue)
+
+        return self.Summary(
+            name,
+            self._baseline.source,
+            self._baseline.byname[name],
+            self._source,
+            time.elapsed,
+            time.comparison,
+        )
 
 
 class PyperfComparisons:
@@ -1189,7 +1195,7 @@ class PyperfTable:
 
 class _PyperfTableRowBase(tuple):
     _raw: Optional[str] = None
-    _header: Optional["_PyperfTableRowBase"] = None
+    _header: "PyperfTableHeader"
     _name: str
     _values: Tuple
     _baseline: str
@@ -1201,7 +1207,7 @@ class _PyperfTableRowBase(tuple):
             line: str,
             *,
             fail: bool = False
-    ) -> Optional["_PyperfTableRowBase"]:
+    ):  # TODO: Use Self in Python 3.11 and later
         values = cls._parse(line, fail)
         if not values:
             return None
@@ -1288,7 +1294,7 @@ class PyperfTableHeader(_PyperfTableRowBase):
             filenames: Optional[Iterable[str]] = None,
             *,
             fail: bool = False
-    ) -> Optional["_PyperfTableRowBase"]:
+    ) -> Optional["PyperfTableHeader"]:
         self = super().parse(line, fail=fail)
         if not self:
             return None
@@ -1322,7 +1328,7 @@ class PyperfTableRow(_PyperfTableRowBase):
     @classmethod
     def subclass_from_header(
             cls,
-            header: _PyperfTableRowBase
+            header: PyperfTableHeader
     ):
         if cls is not PyperfTableRow:
             raise TypeError('not supported for subclasses')
@@ -1333,7 +1339,7 @@ class PyperfTableRow(_PyperfTableRowBase):
             def parse(  # type: ignore[override]
                     cls,
                     line: str,
-                    _header: _PyperfTableRowBase = header,
+                    _header: PyperfTableHeader = header,
                     fail: bool = False
             ) -> Optional["_PyperfTableRowBase"]:
                 return super().parse(line, header=_header, fail=fail)
@@ -1343,9 +1349,9 @@ class PyperfTableRow(_PyperfTableRowBase):
     def parse(  # type: ignore[override]
             cls,
             line: str,
-            header: _PyperfTableRowBase,
+            header: PyperfTableHeader,
             fail: bool = False
-    ) -> Optional["_PyperfTableRowBase"]:
+    ) -> Optional["PyperfTableRow"]:
         self = super().parse(line, fail=fail)
         if not self:
             return None
@@ -1355,7 +1361,7 @@ class PyperfTableRow(_PyperfTableRowBase):
         return self
 
     @property
-    def header(self) -> Optional[_PyperfTableRowBase]:
+    def header(self) -> PyperfTableHeader:
         return self._header
 
     @property
@@ -1526,12 +1532,12 @@ class PyperfResults:
         if names:
             bench_suites = self.BENCHMARKS.get_suites(names, 'unknown')
             for name, suite in bench_suites.items():
-                suite = PyperfUploadID.normalize_suite(suite)
-                if suite not in by_suite:
-                    by_suite[suite] = []
+                normalized_suite = PyperfUploadID.normalize_suite(suite)
+                if normalized_suite not in by_suite:
+                    by_suite[normalized_suite] = []
                 data = self.by_bench[name]
 #                by_suite[suite][name] = data
-                by_suite[suite].append(data)
+                by_suite[normalized_suite].append(data)
         else:
             logger.warn(f'empty results {self}')
         return by_suite
@@ -2161,9 +2167,8 @@ class PyperfResultsInfo(
                 rendered = self.baseline or ''
             elif column == 'mean':
                 if self.isbaseline:
-                    # TYPE: BROKEN
-                    # rendered = self.BASELINE_REF
-                    rendered = ''
+                    # TODO: This was self.BASELINE_REF, which isn't defined elsewhere
+                    rendered = PyperfComparisonValue.BASELINE
                 else:
                     rendered = str(self.mean) if self.mean else ''
             else:
@@ -2780,9 +2785,9 @@ class PyperfResultsDir:
         row = rowstr.split('\t')
         if len(row) != len(self.INDEX_FIELDS):
             raise ValueError(rowstr)
-        relfile, uploadid, build, baseline, mean = row
-        uploadid_resolved = PyperfUploadID.parse(uploadid)
-        if not uploadid_resolved:
+        relfile, uploadid_str, build, baseline, mean = row
+        uploadid = PyperfUploadID.parse(uploadid_str)
+        if not uploadid:
             raise ValueError(f'bad uploadid in {rowstr}')
         if not relfile:
             raise ValueError(f'missing relative path for {uploadid}')
@@ -2797,7 +2802,7 @@ class PyperfResultsDir:
             raise ValueError('missing baseline')
         return (
             relfile,
-            uploadid_resolved,
+            uploadid,
             build or None,
             baseline or None,
             mean or None
