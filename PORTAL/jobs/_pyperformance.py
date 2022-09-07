@@ -157,7 +157,7 @@ class Benchmarks:
                         break
                 else:
                     suite = default
-            if isinstance(suite, (str, type(None))):
+            if suite is None or isinstance(suite, str):
                 mapped[bench] = suite
             else:
                 raise TypeError(f"Invalid suite type {type(suite)}")
@@ -750,6 +750,7 @@ class _PyperfComparison:
 
     @classmethod
     def _parse_value(cls, valuestr: str) -> Any:
+        # Each subclass has a different return type for this function
         return _utils.ElapsedTimeWithUnits.parse(valuestr, fail=True)
 
     def __init__(
@@ -805,6 +806,7 @@ class _PyperfComparison:
         return self._source
 
     @property
+    # Dict values match the return type of _parse_value()
     def byname(self) -> Dict[str, Any]:
         return dict(self._byname)
 
@@ -829,8 +831,11 @@ class PyperfComparison(_PyperfComparison):
                          'bench baseline baseresult source result comparison')
 
     @classmethod
-    def _parse_value(cls, valuestr: str) -> Any:
-        return PyperfComparisonValue.parse(valuestr, fail=True)
+    def _parse_value(cls, valuestr: str) -> PyperfComparisonValue:
+        # Each subclass has a different return type for this function
+        result = PyperfComparisonValue.parse(valuestr, fail=True)
+        assert result is not None
+        return result
 
     def __init__(
             self,
@@ -886,16 +891,16 @@ class PyperfComparison(_PyperfComparison):
         return self._mean
 
     def look_up(self, name) -> "PyperfComparison.Summary":
-        time = self._byname[name]
-        assert isinstance(time, PyperfComparisonValue)
+        compared = self._byname[name]
+        assert isinstance(compared, PyperfComparisonValue)
 
         return self.Summary(
             name,
             self._baseline.source,
             self._baseline.byname[name],
             self._source,
-            time.elapsed,
-            time.comparison,
+            compared.elapsed,
+            compared.comparison,
         )
 
 
