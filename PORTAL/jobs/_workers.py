@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional, Type
+from typing import Any, Type
 
 from . import _utils, _common, requests, JobsConfig
 

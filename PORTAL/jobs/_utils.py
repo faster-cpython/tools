@@ -399,7 +399,7 @@ class RenderingRows:
     def render_count(
             self,
             total: Optional[int] = None,
-            label: str ='matched'
+            label: str = 'matched'
     ) -> Iterable[str]:
         if total is None:
             yield f'(total: {total})'
@@ -1814,8 +1814,8 @@ class GitRemotes:
 
     def __init__(self, repo):
         _repo = GitLocalRepo.from_raw(repo)
-        if not repo:
-            raise TypeError(repo)
+        if not _repo:
+            raise TypeError(_repo)
         self._repo = repo
 
     def _git(self, cmd, *args):
@@ -1868,9 +1868,9 @@ class GitBranches:
 
     def __init__(self, repo):
         _repo = GitLocalRepo.from_raw(repo)
-        if not repo:
+        if not _repo:
             raise TypeError(repo)
-        self._repo = repo
+        self._repo = _repo
 
     @property
     def current(self):

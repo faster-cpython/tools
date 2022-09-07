@@ -2227,7 +2227,8 @@ class PyperfResultsIndex:
                 return entry
         return None
 
-    def get(self,
+    def get(
+            self,
             uploadid: Any,
             default: Optional[PyperfResultsInfo] = None,
             *,

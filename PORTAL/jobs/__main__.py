@@ -18,7 +18,7 @@ from ._job import (
     Job, JobNeverStartedError, JobAlreadyFinishedError, JobFinishedError,
 )
 from ._current import RequestAlreadyStagedError
-from .requests import RequestID, Result, ToRequestIDType
+from .requests import RequestID, Result
 from .queue import (
     JobQueuePausedError, JobQueueNotPausedError, JobQueueEmptyError,
     JobNotQueuedError, JobAlreadyQueuedError,
@@ -556,7 +556,7 @@ def cmd_queue_move(
         jobs: Jobs,
         reqid: RequestID,
         position: int,
-        relative = None  # TYPE_TODO
+        relative: str = None
 ) -> None:
     position = int(position)
     if position <= 0:

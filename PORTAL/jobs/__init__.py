@@ -3,8 +3,7 @@ import os
 import os.path
 import sys
 from typing import (
-    Any, Callable, Iterable, Iterator, Mapping, Optional, Sequence, Tuple,
-    Type, Union
+    Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Type, Union
 )
 
 from . import _utils, _pyperformance, _common, _workers, _job, _current
@@ -37,7 +36,7 @@ class JobsConfig(_utils.TopConfig):
                  local_user: str,
                  worker: Optional[Union[str, _workers.WorkerConfig]],
                  data_dir: Optional[str] = None,
-                 **ignored
+                 **_
                  ):
         if not local_user:
             raise ValueError('missing local_user')
@@ -98,7 +97,7 @@ class Jobs:
     def __str__(self):
         return self._fs.root
 
-    def __eq__(self, other):
+    def __eq__(self, _other):
         raise NotImplementedError
 
     @property
@@ -119,7 +118,7 @@ class Jobs:
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self._fs.queue)
+            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue)
             return self._queue
 
     def iter_all(self) -> Iterator[_job.Job]:

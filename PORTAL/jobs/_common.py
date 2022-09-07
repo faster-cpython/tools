@@ -4,7 +4,7 @@ import types
 from typing import Any, List, Optional, Tuple, Type, Union
 
 from . import _utils
-from .requests import RequestID, Request, Result, ToRequestIDType
+from .requests import RequestID, ToRequestIDType
 from . import requests
 from . import _job
 from . import _workers
@@ -280,7 +280,7 @@ class JobsFS(_utils.FSTree):
             cls,
             raw: Optional[Union["JobsFS", str]],
             *,
-            name: Any=None
+            name: Any = None
     ) -> "JobsFS":
         if not raw:
             raise ValueError('missing jobsfs')
