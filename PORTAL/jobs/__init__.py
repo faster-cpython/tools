@@ -36,7 +36,7 @@ class JobsConfig(_utils.TopConfig):
                  local_user: str,
                  worker: Optional[Union[str, _workers.WorkerConfig]],
                  data_dir: Optional[str] = None,
-                 **_
+                 **ignored
                  ):
         if not local_user:
             raise ValueError('missing local_user')
