@@ -46,8 +46,8 @@ class JobKind:
         'logfile',
     ]
 
-    Request: Type[_utils.Metadata] = Request
-    Result: Type[_utils.Metadata] = Result
+    Request: Type[_utils.Metadata] = requests.Request
+    Result: Type[_utils.Metadata] = requests.Result
 
     #def __new__(cls, *args, **kwargs):
     #    raise TypeError(f'{cls.__name__} instances not supported')
