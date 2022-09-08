@@ -2,12 +2,15 @@ import configparser
 import logging
 import os.path
 import textwrap
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Iterable, List, Optional, Tuple, Union, TYPE_CHECKING
 
-from . import _job
-from . import _utils, _pyperformance, _common, _workers
+from . import _utils, _pyperformance, _common
 from .requests import Request, RequestID, Result, ToRequestIDType
 from . import requests
+
+
+if TYPE_CHECKING:
+    from . import _job, _workers
 
 
 FAKE_DELAY = 3
@@ -282,7 +285,7 @@ def resolve_compile_bench_request(
 
 def build_pyperformance_manifest(
         req: CompileBenchRequest,
-        bfiles: _workers.WorkerJobsFS,
+        bfiles: "_workers.WorkerJobsFS",
 ) -> str:
     return textwrap.dedent(f'''
         [includes]
@@ -293,7 +296,7 @@ def build_pyperformance_manifest(
 
 def build_pyperformance_config(
         req: CompileBenchRequest,
-        bfiles: _workers.WorkerJobsFS
+        bfiles: "_workers.WorkerJobsFS"
 ) -> configparser.ConfigParser:
     cpython = bfiles.repos.cpython
     bfiles_jobfs = bfiles.resolve_request(req.id)
@@ -327,7 +330,7 @@ def build_pyperformance_config(
 
 def build_compile_script(
         req: CompileBenchRequest,
-        bfiles: _workers.WorkerJobsFS,
+        bfiles: "_workers.WorkerJobsFS",
         fake: Optional[Any] = None
 ) -> str:
     exitcode: Optional[Union[str, int]]
@@ -603,8 +606,8 @@ class CompileBenchKind(_common.JobKind):
     def create(
             self,
             reqid: ToRequestIDType,
-            jobfs: _job.JobFS,
-            workerfs: _workers.WorkerJobsFS,
+            jobfs: "_job.JobFS",
+            workerfs: "_workers.WorkerJobsFS",
             *,
             _fake: Optional[Any] = None,
             **req_kwargs

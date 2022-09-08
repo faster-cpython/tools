@@ -3,12 +3,15 @@ import logging
 import sys
 import types
 from typing import (
-    Iterator, Optional, Sequence, Tuple, Union
+    Iterator, Optional, Sequence, Tuple, Union, TYPE_CHECKING
 )
 
 from . import _utils, _common, _job
-from . import JobsConfig
 from .requests import RequestID
+
+
+if TYPE_CHECKING:
+    from . import JobsConfig
 
 
 logger = logging.getLogger(__name__)
@@ -132,7 +135,7 @@ class JobQueue:
     # XXX Add maxsize.
 
     @classmethod
-    def from_config(cls, cfg: JobsConfig) -> "JobQueue":
+    def from_config(cls, cfg: "JobsConfig") -> "JobQueue":
         jobsfs = _common.JobsFS(cfg.data_dir)
         return cls.from_fstree(jobsfs)
 

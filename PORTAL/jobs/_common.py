@@ -1,13 +1,15 @@
 import logging
 import os.path
 import types
-from typing import Any, List, Optional, Tuple, Type, Union
+from typing import Any, List, Optional, Tuple, Type, Union, TYPE_CHECKING
 
 from . import _utils
-from .requests import RequestID, ToRequestIDType
 from . import requests
-from . import _job
-from . import _workers
+
+
+if TYPE_CHECKING:
+    from . import _job
+    from . import _workers
 
 
 PKG_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -75,9 +77,9 @@ class JobKind:
 
     def create(
             self,
-            reqid: ToRequestIDType,
-            jobfs: _job.JobFS,
-            workerfs: _workers.WorkerJobsFS,
+            reqid: requests.ToRequestIDType,
+            jobfs: "_job.JobFS",
+            workerfs: "_workers.WorkerJobsFS",
             **req_kwargs
     ):
         raise NotImplementedError
@@ -100,25 +102,29 @@ def resolve_job_kind(kind: str) -> JobKind:
 class RequestDirError(Exception):
     def __init__(
             self,
-            reqid: Optional[RequestID],
+            reqid: Optional[requests.RequestID],
             reqdir: Optional[str],
             reason: str,
             msg: str
     ):
         super().__init__(f'{reason} ({msg} - {reqdir})')
-        self.reqid: Optional[RequestID] = reqid
+        self.reqid: Optional[requests.RequestID] = reqid
         self.reqdir = reqdir
         self.reason = reason
         self.msg = msg
 
 
-def check_reqdir(reqdir: str, pfiles: "JobsFS", cls=RequestDirError) -> RequestID:
-    requests, reqidstr = os.path.split(reqdir)
-    if requests != pfiles.requests.root:
+def check_reqdir(
+        reqdir: str,
+        pfiles: "JobsFS",
+        cls=RequestDirError
+) -> requests.RequestID:
+    requests_str, reqid_str = os.path.split(reqdir)
+    if requests_str != pfiles.requests.root:
         raise cls(None, reqdir, 'invalid', 'target not in ~/BENCH/REQUESTS/')
-    reqid = RequestID.parse(reqidstr)
+    reqid = requests.RequestID.parse(reqid_str)
     if not reqid:
-        raise cls(None, reqdir, 'invalid', f'{reqidstr!r} not a request ID')
+        raise cls(None, reqdir, 'invalid', f'{reqid_str!r} not a request ID')
     if not os.path.exists(reqdir):
         raise cls(reqid, reqdir, 'missing', 'target request dir missing')
     if not os.path.isdir(reqdir):
@@ -157,7 +163,11 @@ class JobFS(types.SimpleNamespace):
     context: Optional[str] = None  # required in subclasses
 
     @classmethod
-    def from_jobsfs(cls, jobsfs: "JobsFS", reqid: ToRequestIDType) -> "JobFS":
+    def from_jobsfs(
+            cls,
+            jobsfs: "JobsFS",
+            reqid: requests.ToRequestIDType
+    ) -> "JobFS":
         requestfs = JobRequestFS.from_raw(f"{jobsfs.requests}/{reqid}")
         resultfs = JobResultFS.from_raw(f"{jobsfs.results}/{reqid}")
         workfs = JobWorkFS.from_raw(f"{jobsfs.work}/{reqid}")
@@ -175,7 +185,7 @@ class JobFS(types.SimpleNamespace):
             request: Union[str, JobRequestFS],
             result: Union[str, JobResultFS],
             work: Union[str, JobWorkFS],
-            reqid: Optional[ToRequestIDType] = None
+            reqid: Optional[requests.ToRequestIDType] = None
     ):
         request_fs = JobRequestFS.from_raw(request)
         result_fs = JobResultFS.from_raw(result)
@@ -183,12 +193,12 @@ class JobFS(types.SimpleNamespace):
         
         if not reqid:
             reqid = os.path.basename(request)
-            reqid_obj = RequestID.from_raw(reqid)
+            reqid_obj = requests.RequestID.from_raw(reqid)
             if not reqid_obj:
                 raise ValueError('missing reqid')
         else:
             orig = reqid
-            reqid_obj = RequestID.from_raw(reqid)
+            reqid_obj = requests.RequestID.from_raw(reqid)
             if not reqid_obj:
                 raise ValueError(f'unsupported reqid {orig!r}')
 
@@ -305,7 +315,7 @@ class JobsFS(_utils.FSTree):
     def __str__(self):
         return self.root
 
-    def resolve_request(self, reqid: ToRequestIDType) -> JobFS:
+    def resolve_request(self, reqid: requests.ToRequestIDType) -> JobFS:
         return self.JOBFS.from_jobsfs(self, reqid)
 
     def copy(self) -> "JobsFS":
