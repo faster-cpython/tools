@@ -1,7 +1,11 @@
 import logging
-from typing import Any, Type
+from typing import Any, Type, TYPE_CHECKING
 
-from . import _utils, _common, requests, JobsConfig
+from . import _utils, _common
+
+
+if TYPE_CHECKING:
+    from . import JobsConfig, requests
 
 
 logger = logging.getLogger(__name__)
@@ -119,7 +123,7 @@ class Worker:
 
     def resolve_job(
             self,
-            reqid: requests.ToRequestIDType
+            reqid: "requests.ToRequestIDType"
     ) -> JobWorker:
         fs = self._fs.resolve_request(reqid)
         return JobWorker(self, fs)
@@ -131,7 +135,7 @@ class Workers:
     @classmethod
     def from_config(
             cls,
-            cfg: JobsConfig,
+            cfg: "JobsConfig",
             JobsFS: Type[WorkerJobsFS] = WorkerJobsFS
     ) -> "Workers":
         worker = Worker.from_config(cfg.worker, JobsFS)
@@ -150,6 +154,6 @@ class Workers:
 
     def resolve_job(
             self,
-            reqid: requests.ToRequestIDType
+            reqid: "requests.ToRequestIDType"
     ) -> JobWorker:
         return self._worker.resolve_job(reqid)

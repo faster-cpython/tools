@@ -3,10 +3,13 @@ import datetime
 import json
 import re
 import types
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Tuple, Union, TYPE_CHECKING
 
-from . import _common
 from . import _utils
+
+
+if TYPE_CHECKING:
+    from . import _common
 
 
 ToRequestIDType = Union[str, "RequestID"]
@@ -132,7 +135,7 @@ class Request(_utils.Metadata):
             cls,
             reqfile: str,
             *,
-            fs: Optional[_common.JobFS] = None,
+            fs: Optional["_common.JobFS"] = None,
             **kwargs
     ) -> Optional["Request"]:
         self = super().load(reqfile, **kwargs)
@@ -190,7 +193,7 @@ class Request(_utils.Metadata):
         return self.id.date
 
     @property
-    def fs(self) -> _common.JobFS:
+    def fs(self) -> "_common.JobFS":
         try:
             return self._fs
         except AttributeError:
@@ -238,7 +241,7 @@ class Result(_utils.Metadata):
     CLOSED = 'closed'
 
     _request: Request
-    _fs: _common.JobFS
+    _fs: "_common.JobFS"
     _get_request: Callable[[str, str], Request]
 
     @classmethod
@@ -370,7 +373,7 @@ class Result(_utils.Metadata):
             return self._request
 
     @property
-    def fs(self) -> _common.JobFS:
+    def fs(self) -> "_common.JobFS":
         try:
             return self._fs
         except AttributeError:

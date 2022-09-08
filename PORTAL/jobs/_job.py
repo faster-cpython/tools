@@ -6,11 +6,14 @@ import subprocess
 import sys
 import textwrap
 import time
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, TYPE_CHECKING
 
 from . import _utils, _common, _workers, _current
 from .requests import RequestID, Request, Result, ToRequestIDType
-from . import JobsConfig
+
+
+if TYPE_CHECKING:
+    from . import JobsConfig
 
 
 logger = logging.getLogger(__name__)
@@ -69,7 +72,7 @@ class Job:
             reqid: ToRequestIDType,
             fs: _common.JobFS,
             worker: _workers.JobWorker,
-            cfg: JobsConfig,
+            cfg: "JobsConfig",
             store: Any = None
     ):
         if not fs:
@@ -115,7 +118,7 @@ class Job:
         return self._worker
 
     @property
-    def cfg(self) -> JobsConfig:
+    def cfg(self) -> "JobsConfig":
         return self._cfg
 
     @property
