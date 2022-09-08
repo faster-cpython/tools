@@ -15,12 +15,19 @@ import sys
 import textwrap
 import time
 import types
+from typing import (
+    Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, TextIO,
+    Tuple, Type, Union
+)
 
 
 '''
 sudo adduser --gecos '' --disabled-password <username>
 sudo --login --user <username> ssh-import-id gh:<username>
 '''
+
+
+ListOrStrType = Union[str, List[str]]
 
 
 USER = os.environ.get('USER', '').strip()
@@ -35,7 +42,7 @@ logger = logging.getLogger(__name__)
 ##################################
 # string utils
 
-def check_name(name, *, loose=False):
+def check_name(name: str, *, loose: bool = False) -> None:
     if not name:
         raise ValueError(name)
     orig = name
@@ -45,7 +52,13 @@ def check_name(name, *, loose=False):
         raise ValueError(orig)
 
 
-def check_str(valuestr, label=None, *, required=False, fail=False):
+def check_str(
+        valuestr: str,
+        label: Optional[str] = None,
+        *,
+        required: bool = False,
+        fail: bool = False
+) -> bool:
     if not valuestr:
         if required:
             if fail:
@@ -58,26 +71,31 @@ def check_str(valuestr, label=None, *, required=False, fail=False):
     return True
 
 
-def validate_str(value, argname=None, *, required=True):
+def validate_str(
+        value: str,
+        argname: Optional[str] = None,
+        *,
+        required: bool = True
+) -> None:
     validate_arg(value, str, argname, required=required)
 
 
 ##################################
 # int utils
 
-def ensure_int(raw, min=None):
+def ensure_int(raw: Any, min: Optional[int] = None) -> int:
     if isinstance(raw, int):
         value = raw
     elif isinstance(raw, str):
         value = int(raw)
     else:
         raise TypeError(raw)
-    if value < min:
+    if min is not None and value < min:
         raise ValueError(raw)
     return value
 
 
-def coerce_int(value, *, fail=None):
+def coerce_int(value: Any, *, fail: bool = False) -> Optional[int]:
     if isinstance(value, int):
         return value
     elif not value:
@@ -95,7 +113,13 @@ def coerce_int(value, *, fail=None):
     return None
 
 
-def validate_int(value, name=None, *, range=None, required=True):
+def validate_int(
+        value: Any,
+        name: Optional[str] = None,
+        *,
+        range: Optional[str] = None,
+        required: bool = True
+) -> Optional[int]:
     def fail(value=value, name=name, range=range):
         qualifier = 'an'
         if isinstance(value, int):
@@ -113,9 +137,11 @@ def validate_int(value, name=None, *, range=None, required=True):
         elif range == 'non-negative':
             if value < 0:
                 fail()
+            return value
         elif range == 'positive':
             if value <= 0:
                 fail()
+            return value
         else:
             raise NotImplementedError(f'unsupported range {range!r}')
     elif not value:
@@ -124,13 +150,16 @@ def validate_int(value, name=None, *, range=None, required=True):
         raise ValueError(f'missing {name}' if name else 'missing')
     else:
         fail()
+    return None  # unreachable
 
-
-def normalize_int(value, name=None, *,
-                  range=None,
-                  coerce=False,
-                  required=True,
-                  ):
+def normalize_int(
+        value: Any,
+        name: Optional[str] = None,
+        *,
+        range: Optional[str] = None,
+        coerce: bool = False,
+        required: bool = True,
+) -> Optional[int]:
     if coerce:
         value = coerce_int(value)
     return validate_int(value, name, range=range, required=required)
@@ -139,7 +168,13 @@ def normalize_int(value, name=None, *,
 ##################################
 # validation utils
 
-def validate_arg(value, expected, argname=None, *, required=True):
+def validate_arg(
+        value: Any,
+        expected: Type,
+        argname: Optional[str] = None,
+        *,
+        required: bool = True
+) -> None:
     if not isinstance(expected, type):
         raise NotImplementedError(expected)
     if not value:
@@ -155,9 +190,8 @@ def validate_arg(value, expected, argname=None, *, required=True):
 # tables
 
 class ColumnSpec(namedtuple('ColumnSpec', 'name title width align')):
-
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw: Any):
         if isinstance(raw, cls):
             return raw
         else:
@@ -171,8 +205,14 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
     MARGIN = 1
 
     @classmethod
-    def from_columns(cls, specs, names=None, *, maxwidth=None):
-        columns, names = cls._normalize_columns(specs, names, maxwidth)
+    def from_columns(
+            cls,
+            specs: Iterable[Any],
+            names: Optional[Union[str, Iterable[str]]] = None,
+            *,
+            maxwidth: Optional[int] = None
+    ) -> "TableSpec":
+        columns, normalized_names = cls._normalize_columns(specs, names, maxwidth)
         margin = ' ' * cls.MARGIN
 
         header = div = rowfmt = ''
@@ -190,27 +230,37 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
 
         self = cls(columns, header, div, rowfmt)
         if names:
-            self._colnames = names
+            self._colnames = normalized_names  # type: ignore[has-type]
+        else:
+            self._colnames = None  # type: ignore[has-type]
         return self
 
     @classmethod
-    def _normalize_columns(cls, specs, names, maxwidth):
-        specs = (ColumnSpec.from_raw(s) for s in specs)
+    def _normalize_columns(
+            cls,
+            specs: Iterable[Any],
+            names: Optional[Union[str, Iterable[str]]],
+            maxwidth: Optional[int]
+    ) -> Tuple[List[Any], Optional[List[str]]]:
+        spec_objs = (ColumnSpec.from_raw(s) for s in specs)
         if names:
             if isinstance(names, str):
-                names = names.replace(',', ' ').split()
+                names_list = names.replace(',', ' ').split()
             else:
-                names = list(names)
-            specs = {s.name: s for s in specs}
-            columns = [specs[n] for n in names]
+                names_list = list(names)
+            specs_by_name = {s.name: s for s in spec_objs}
+            columns = [specs_by_name[n] for n in names_list]
         else:
             columns = list(specs)
+            names_list = None
 
         if not maxwidth or maxwidth < 0:
             # XXX Use a minimum set of columns to determine minwidth.
             minwidth = 80
-            maxwidth = max(minwidth, get_termwidth())
+            maxwidth_int = max(minwidth, get_termwidth())
             #print(' '*maxwidth + '|')
+        else:
+            maxwidth_int = maxwidth
 
         sep = cls.SEP
         if not sep:
@@ -232,12 +282,12 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
             if i > 0:
                 size += len(sep)
             size += margin + columns[i].width + margin
-            if size > maxwidth:
+            if size > maxwidth_int:
                 # XXX Maybe drop other columns than just the tail?
                 # XXX Maybe combine some columns?
                 columns[i:] = []
-                if names:
-                    names[i:] = []
+                if names_list:
+                    names_list[i:] = []
                 break
 
         #if termwidth > minwidth + (19 + 3) * 3:
@@ -256,51 +306,68 @@ class TableSpec(namedtuple('TableSpec', 'columns header div rowfmt')):
         #        ('started,created', 'start / (created)', 21, None),
         #    )
 
-        return columns, names
+        return columns, names_list
 
     @property
-    def colnames(self):
+    def colnames(self) -> List[str]:
         try:
-            return self._colnames
+            return self._colnames  # type: ignore[has-type]
         except AttributeError:
             self._colnames = [c.name for c in self.columns]
             return self._colnames
 
-    def render(self, rows, *, numrows=None, total=None):
+    def render(
+            self,
+            rows: Iterable["TableRow"],
+            *,
+            numrows: Optional[int] = None,
+            total: Optional[int] = None
+    ) -> Iterable[str]:
         # We use a default format here.
         header = [self.div, self.header, self.div]
-        rows = self._render_rows(rows)
-        rows = RenderingRows(rows, header, numrows)
+        rendered_rows = self._render_rows(rows)
+        rendering_rows = RenderingRows(rendered_rows, header, numrows)
         yield from header
-        yield from rows
-        yield div
-        yield from rows.render_count(total)
+        yield from rendering_rows
+        yield self.div
+        yield from rendering_rows.render_count(total)
 
-    def render_rows(self, rows, periodic=None, numrows=None):
-        rows = self._render_rows(rows)
-        return RenderingRows(rows, periodic, numrows)
+    def render_rows(
+            self,
+            rows: Iterable["TableRow"],
+            periodic: Optional[Union[str, Iterable[str]]] = None,
+            numrows: Optional[int] = None
+    ) -> "RenderingRows":
+        rendered_rows = self._render_rows(rows)
+        return RenderingRows(rendered_rows, periodic, numrows)
 
-    def _render_rows(self, rows):
+    def _render_rows(self, rows: Iterable["TableRow"]) -> Iterable[str]:
         fmt = self.rowfmt
         for row in rows:
             values = row.render_values(self.colnames)
             yield fmt.format(*values)
 
-    def _render_row(self, row):
+    def _render_row(self, row: "TableRow") -> str:
         values = row.render_values(self.colnames)
         return self.rowfmt.format(*values)
 
 
 class RenderingRows:
+    pending: List[str]
 
-    def __init__(self, rows, periodic=None, numrows=None):
+    def __init__(
+            self,
+            rows: Iterable[str],
+            periodic: Optional[Union[str, Iterable[str]]] = None,
+            numrows: Optional[int] = None
+    ):
         if not periodic:
             periodic = None
         elif isinstance(periodic, str):
             periodic = [periodic]
         if not numrows:
             try:
-                numrows = len(rows)
+                numrows = len(list(rows))
             except TypeError:
                 numrows = None
         self.rows = iter(rows)
@@ -316,7 +383,7 @@ class RenderingRows:
     def __iter__(self):
         return self
 
-    def __next__(self):
+    def __next__(self) -> str:
         if self.pending:
             return self.pending.pop(0)
         row = next(self.rows)
@@ -329,7 +396,11 @@ class RenderingRows:
                     return self.pending.pop(0)
         return row
 
-    def render_count(self, total=None, label='matched'):
+    def render_count(
+            self,
+            total: Optional[int] = None,
+            label: str = 'matched'
+    ) -> Iterable[str]:
         if total is None:
             yield f'(total: {total})'
         elif self.count == total:
@@ -341,7 +412,11 @@ class RenderingRows:
 
 class TableRow:
 
-    def __init__(self, data, render_value):
+    def __init__(
+            self,
+            data: Mapping[str, Any],
+            render_value: Callable[[str], str]
+    ):
         self.data = data
         self.render_value = render_value
         self._colnames = list(data)
@@ -352,7 +427,10 @@ class TableRow:
     def __eq__(self, other):
         raise NotImplementedError
 
-    def render_values(self, colnames=None):
+    def render_values(
+            self,
+            colnames: Optional[Iterable[str]] = None
+    ) -> Iterable[str]:
         if not colnames:
             colnames = self._colnames
         for colname in colnames:
@@ -376,13 +454,17 @@ SECOND = datetime.timedelta(seconds=1)
 DAY = datetime.timedelta(days=1)
 
 
-def utcnow():
+def utcnow() -> float:
     if time.tzname[0] == 'UTC':
         return time.time()
     return time.mktime(time.gmtime())
 
 
-def get_utc_datetime(timestamp=None, *, fail=True):
+def get_utc_datetime(
+        timestamp: Optional[Any] = None,
+        *,
+        fail: bool = True
+) -> Tuple[Optional[datetime.datetime], Optional[bool]]:
     tzinfo = datetime.timezone.utc
     if timestamp is None:
         timestamp = int(utcnow())
@@ -453,6 +535,7 @@ class ElapsedTimeWithUnits:
          )
         '''
     REGEX = re.compile(f'^{PAT}$', re.VERBOSE)
+    _units: str
 
     @classmethod
     def parse(cls, elapsedstr, *, fail=False):
@@ -508,35 +591,46 @@ class ElapsedTimeWithUnits:
         return self
 
     @classmethod
-    def _convert_to_seconds(cls, elapsed, units):
+    def _convert_to_seconds(
+            cls,
+            elapsed,
+            units: Optional[str]
+    ) -> "ElapsedTimeWithUnits":
         if units == 's':
             return elapsed
         return (elapsed / cls._resolve_units(units)).normalize()
 
     @classmethod
-    def _convert_from_seconds(cls, elapsed, units):
+    def _convert_from_seconds(
+            cls,
+            elapsed,
+            units: str
+    ) -> "ElapsedTimeWithUnits":
         if units == 's':
             return elapsed
         return (elapsed * cls._resolve_units(units)).normalize()
 
     @classmethod
-    def _resolve_units(cls, units):
-        try:
-            return cls._UNITS[units]
-        except KeyError:
+    def _resolve_units(cls, units: Optional[str]) -> int:
+        if units not in cls._UNITS:
             raise ValueError(f'unsupported units {units!r}')
+        return cls._UNITS[units]
 
     @classmethod
-    def _validate_elapsed(cls, elapsed):
+    def _validate_elapsed(cls, elapsed) -> None:
         if elapsed < 0:
             raise ValueError(f'expected non-negative value, got {elapsed}')
 
     @classmethod
-    def _check_for_abnormal(cls, elapsed, units):
+    def _check_for_abnormal(cls, elapsed, units: str) -> None:
         if elapsed < 1 or elapsed >= 1000:
             logger.warn('abnormal elapsed value {elapsed} {units}, consider normalizing')
 
-    def __new__(cls, elapsed, units='s'):
+    def __new__(
+            cls,
+            elapsed,
+            units: str = 's'
+    ) -> "ElapsedTimeWithUnits":
         self = super().__new__(cls)
         self._elapsed = decimal.Decimal(elapsed)
         self._units = units
@@ -703,7 +797,7 @@ class ElapsedTimeComparison:
 ##################################
 # OS utils
 
-def resolve_user(cfg, user=None):
+def resolve_user(cfg: Any, user: Optional[str] = None) -> str:
     if not user:
         user = USER
         if not user or user == 'benchmarking':
@@ -715,7 +809,11 @@ def resolve_user(cfg, user=None):
     return user
 
 
-def parse_bool_env_var(valstr, *, failunknown=False):
+def parse_bool_env_var(
+        valstr: str,
+        *,
+        failunknown: bool = False
+) -> Optional[bool]:
     m = re.match(r'^\s*(?:(1|y(?:es)?|t(?:rue)?)|(0|no?|f(?:alse)?))\s*$',
                  valstr.lower())
     if not m:
@@ -726,17 +824,22 @@ def parse_bool_env_var(valstr, *, failunknown=False):
     return True if yes else False
 
 
-def get_bool_env_var(name, default=None, *, failunknown=False):
+def get_bool_env_var(
+        name: str,
+        default: Optional[bool] = None,
+        *,
+        failunknown: bool = False
+) -> Optional[bool]:
     value = os.environ.get(name)
     if value is None:
         return default
     return parse_bool_env_var(value, failunknown=failunknown)
 
 
-def resolve_os_name():
+def resolve_os_name() -> str:
     if sys.platform == 'win32':
         return 'windows'
-    elif sys.paltform == 'linux':
+    elif sys.platform == 'linux':
         return 'linux'
     elif sys.platform == 'darwin':
         return 'mac'
@@ -744,7 +847,7 @@ def resolve_os_name():
         raise NotImplementedError(sys.platform)
 
 
-def resolve_cpu_arch():
+def resolve_cpu_arch() -> str:
     uname = platform.uname()
     machine = uname.machine.lower()
     if machine in ('amd64', 'x86_64'):
@@ -757,7 +860,7 @@ def resolve_cpu_arch():
         raise NotImplementedError(machine)
 
 
-def get_termwidth(*, nontty=1000, unknown=80):
+def get_termwidth(*, notty: int = 1000, unknown: int = 80) -> int:
     if os.isatty(sys.stdout.fileno()):
         try:
             termsize = os.get_terminal_size()
@@ -769,7 +872,7 @@ def get_termwidth(*, nontty=1000, unknown=80):
         return unknown or 80
 
 
-def is_proc_running(pid):
+def is_proc_running(pid: int) -> bool:
     if pid == PID:
         return True
     try:
@@ -786,7 +889,12 @@ def is_proc_running(pid):
         return True
 
 
-def run_fg(cmd, *args, cwd=None, env=None):
+def run_fg(
+        cmd: str,
+        *args,
+        cwd: Optional[str] = None,
+        env: Optional[Mapping[str, str]] = None
+) -> subprocess.CompletedProcess:
     if not cwd:
         cwd = os.getcwd()
     argv = [cmd, *args]
@@ -803,7 +911,13 @@ def run_fg(cmd, *args, cwd=None, env=None):
     )
 
 
-def run_bg(argv, logfile=None, *, cwd=None, env=None):
+def run_bg(
+        argv: Union[str, Sequence[str]],
+        logfile: Optional[str] = None,
+        *,
+        cwd: Optional[str] = None,
+        env: Optional[Mapping[str, str]] = None
+) -> None:
     if not cwd:
         cwd = os.getcwd()
 
@@ -842,7 +956,12 @@ def run_bg(argv, logfile=None, *, cwd=None, env=None):
 ##################################
 # file utils
 
-def check_shell_str(value, *, required=True, allowspaces=False):
+def check_shell_str(
+        value: Any,
+        *,
+        required: bool = True,
+        allowspaces: bool = False
+) -> Optional[str]:
     validate_str(value, required=required)
     if not value:
         return None
@@ -851,14 +970,23 @@ def check_shell_str(value, *, required=True, allowspaces=False):
     return value
 
 
-def quote_shell_str(value, *, required=True):
+def quote_shell_str(
+        value: Any,
+        *,
+        required: bool = True
+) -> str:
     value = check_shell_str(value, required=required, allowspaces=True)
     if value is not None:
         value = shlex.quote(value)
     return value
 
 
-def get_next_line(lines, notfound=None, *, skipempty=False):
+def get_next_line(
+        lines: Iterable[str],
+        notfound: Optional[str] = None,
+        *,
+        skipempty: bool = False
+) -> Optional[str]:
     for line in lines:
         if not skipempty or line.rstrip():
             return line
@@ -866,7 +994,7 @@ def get_next_line(lines, notfound=None, *, skipempty=False):
         return notfound
 
 
-def strict_relpath(filename, rootdir):
+def strict_relpath(filename: str, rootdir: Optional[str]) -> str:
     relfile = os.path.relpath(filename, rootdir)
     if relfile.startswith('..' + os.path.sep):
         raise ValueError(f'relpath mismatch ({filename!r}, {rootdir!r})')
@@ -1686,8 +1814,8 @@ class GitRemotes:
 
     def __init__(self, repo):
         _repo = GitLocalRepo.from_raw(repo)
-        if not repo:
-            raise TypeError(repo)
+        if not _repo:
+            raise TypeError(_repo)
         self._repo = repo
 
     def _git(self, cmd, *args):
@@ -1740,9 +1868,9 @@ class GitBranches:
 
     def __init__(self, repo):
         _repo = GitLocalRepo.from_raw(repo)
-        if not repo:
+        if not _repo:
             raise TypeError(repo)
-        self._repo = repo
+        self._repo = _repo
 
     @property
     def current(self):
@@ -2317,6 +2445,14 @@ class GitRefCandidates:
         return _branch, tag, commit, name
 
 
+ToGitRefType = Union[
+    "GitRef",
+    str,
+    Dict[str, str],
+    Tuple[str, str, str, str, str, str]
+]
+
+
 class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
 
     # XXX Use requested.orig.revision instead of requested.revision?
@@ -2328,12 +2464,12 @@ class GitRef(namedtuple('GitRef', 'remote branch tag commit name requested')):
     }
 
     @classmethod
-    def from_raw(cls, raw):
+    def from_raw(cls, raw: ToGitRefType):
         if isinstance(raw, cls):
             return raw
         elif isinstance(raw, str):
             raise TypeError(raw)
-        elif hasattr(raw, 'items'):
+        elif isinstance(raw, dict):
             if raw.get('requested'):
                 raw['requested'] = GitRefRequest.from_raw(raw['requested'])
             return cls(**raw)
@@ -2683,8 +2819,8 @@ class Config(types.SimpleNamespace):
     """The base config for the benchmarking machinery."""
 
     # XXX Get FIELDS from the __init__() signature?
-    FIELDS = ()
-    OPTIONAL = ()
+    FIELDS: List[str] = []
+    OPTIONAL: List[str] = []
 
     FILE = 'benchmarking.json'
 
@@ -4284,7 +4420,7 @@ class PythonImplementation:
     def name(self):
         return self._name
 
-    def parse_version(self, version, *, requirestr=True):
+    def parse_version(self, version, *, requirestr=True) -> Version:
         try:
             return self.VERSION.parse(version)
         except TypeError:
@@ -4301,7 +4437,7 @@ class CPython(PythonImplementation):
         super().__init__('cpython')
 
 
-def resolve_python_implementation(impl):
+def resolve_python_implementation(impl) -> PythonImplementation:
     if isinstance(impl, str):
         if impl == 'cpython':
             return CPython()
@@ -4415,15 +4551,22 @@ class InvalidMetadataError(MetadataError):
 
 class Metadata(types.SimpleNamespace):
 
-    FIELDS = None
-    OPTIONAL = None
+    FIELDS: List[str] = []
+    OPTIONAL: List[str] = []
 
     _extra = None
 
     @classmethod
-    def load(cls, metafile, *, optional=None, fail=True):
+    def load(
+            cls,
+            metafile: Union[str, TextIO],
+            *,
+            optional: Optional[List[str]] = None,
+            fail: bool = True,
+            **kwargs
+    ):
         if optional is None:
-            optional = cls.OPTIONAL or ()
+            optional = cls.OPTIONAL or []
         filename = getattr(metafile, 'name', metafile)
         try:
             data = cls._load_data(metafile)
@@ -4439,9 +4582,14 @@ class Metadata(types.SimpleNamespace):
         return self
 
     @classmethod
-    def from_jsonable(cls, data, *, optional=None):
+    def from_jsonable(
+            cls,
+            data: Any,
+            *,
+            optional: Optional[List[str]] = None
+    ):
         if optional is None:
-            optional = cls.OPTIONAL or ()
+            optional = cls.OPTIONAL or []
         kwargs, extra = cls._extract_kwargs(data, optional, None)
         self = cls(**kwargs)
         if extra:
@@ -4449,7 +4597,11 @@ class Metadata(types.SimpleNamespace):
         return self
 
     @classmethod
-    def _load_data(cls, metafile, fail=False):
+    def _load_data(
+            cls,
+            metafile: Union[str, TextIO],
+            fail: bool = False
+    ) -> Any:
         if isinstance(metafile, str):
             filename = metafile
             with open(filename) as metafile:
@@ -4463,10 +4615,15 @@ class Metadata(types.SimpleNamespace):
             return None
 
     @classmethod
-    def _extract_kwargs(cls, data, optional, filename):
+    def _extract_kwargs(
+            cls,
+            data: dict,
+            optional: List[str],
+            filename
+    ) -> Tuple[dict, Optional[dict]]:
         kwargs = {}
         extra = {}
-        unused = set(cls.FIELDS or ())
+        unused = set(cls.FIELDS or [])
         for field in data:
             if field in unused:
                 kwargs[field] = data[field]
@@ -4479,20 +4636,14 @@ class Metadata(types.SimpleNamespace):
             raise ValueError(f'missing required data (fields: {missing})')
         return (kwargs, extra) if kwargs else (extra, None)
 
-    def refresh(self, resfile):
-        """Reload from the given file."""
-        fresh = self.load(resfile)
-        # This isn't the best way to go, but it's simple.
-        vars(self).clear()
-        self.__init__(**vars(fresh))
-        return fresh
-
-    def as_jsonable(self, *, withextra=False):
+    def as_jsonable(self, *, withextra: bool = False) -> dict:
         fields = self.FIELDS
         if not fields:
             fields = [f for f in vars(self) if not f.startswith('_')]
         elif withextra:
             fields.extend((getattr(self, '_extra', None) or {}).keys())
+        # TODO: "optional" should be used in the loop to be smarter
+        # about how to handle AttributeError
         optional = set(self.OPTIONAL or ())
         data = {}
         for field in fields:
@@ -4506,7 +4657,12 @@ class Metadata(types.SimpleNamespace):
             data[field] = value
         return data
 
-    def save(self, resfile, *, withextra=False):
+    def save(
+            self,
+            resfile: Union[str, TextIO],
+            *,
+            withextra: bool = False
+    ) -> None:
         if isinstance(resfile, str):
             filename = resfile
             with open(filename, 'w') as resfile:

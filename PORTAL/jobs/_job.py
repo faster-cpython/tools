@@ -6,9 +6,11 @@ import subprocess
 import sys
 import textwrap
 import time
+from typing import Any, Iterable, Mapping, Optional
 
 from . import _utils, _common, _workers, _current
-from .requests import RequestID, Request, Result
+from .requests import RequestID, Request, Result, ToRequestIDType
+from . import JobsConfig
 
 
 logger = logging.getLogger(__name__)
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 class JobError(_common.JobsError):
     MSG = 'job {reqid} has a problem'
 
-    def __init__(self, reqid, msg=None):
+    def __init__(self, reqid: RequestID, msg: Optional[str] = None):
         msg = (msg or self.MSG).format(reqid=str(reqid))
         super().__init__(msg)
         self.reqid = reqid
@@ -51,20 +53,25 @@ class JobFS(_common.JobFS):
         work.ssh_okay = f'{work}/ssh.ok'
 
     @property
-    def portal_script(self):
+    def portal_script(self) -> str:
         return self.work.portal_script
 
     @property
-    def ssh_okay(self):
+    def ssh_okay(self) -> str:
         return self.work.ssh_okay
 
 
 class Job:
     """A single requested job."""
 
-    def __init__(self, reqid, fs, worker, cfg, store):
-        if not reqid:
-            raise ValueError('missing reqid')
+    def __init__(
+            self,
+            reqid: ToRequestIDType,
+            fs: _common.JobFS,
+            worker: _workers.JobWorker,
+            cfg: JobsConfig,
+            store: Any = None
+    ):
         if not fs:
             raise ValueError('missing fs')
         elif not isinstance(fs, JobFS):
@@ -73,7 +80,10 @@ class Job:
             raise ValueError('missing worker')
         elif not isinstance(worker, _workers.JobWorker):
             raise TypeError(f'expected JobWorker for worker, got {worker!r}')
-        self._reqid = RequestID.from_raw(reqid)
+        resolved_reqid = RequestID.from_raw(reqid)
+        if not resolved_reqid:
+            raise ValueError('missing reqid')
+        self._reqid = resolved_reqid
         self._fs = fs
         self._worker = worker
         self._cfg = cfg
@@ -93,30 +103,30 @@ class Job:
         raise NotImplementedError
 
     @property
-    def reqid(self):
+    def reqid(self) -> RequestID:
         return self._reqid
 
     @property
-    def fs(self):
+    def fs(self) -> _common.JobFS:
         return self._fs
 
     @property
-    def worker(self):
+    def worker(self) -> _workers.JobWorker:
         return self._worker
 
     @property
-    def cfg(self):
+    def cfg(self) -> JobsConfig:
         return self._cfg
 
     @property
-    def kind(self):
+    def kind(self) -> str:
         return self.reqid.kind
 
     @property
-    def request(self):
+    def request(self) -> Request:
         return Request(self._reqid, str(self._fs))
 
-    def load_request(self, *, fail=True):
+    def load_request(self, *, fail: bool = True) -> Request:
         req = self._kind.Request.load(
             self._fs.request.metadata,
             fs=self._fs.request,
@@ -124,7 +134,7 @@ class Job:
         )
         return req
 
-    def load_result(self, *, fail=True):
+    def load_result(self, *, fail: bool = True) -> Result:
         res = self._kind.Result.load(
             self._fs.result.metadata,
             fs=self._fs.result,
@@ -133,7 +143,7 @@ class Job:
         )
         return res
 
-    def get_status(self, *, fail=True):
+    def get_status(self, *, fail: bool = True) -> Optional[str]:
         try:
             return Result.read_status(self._fs.result.metadata)
         except FileNotFoundError:
@@ -152,13 +162,19 @@ class Job:
                 raise
             return None
 
-    def set_status(self, status):
+    def set_status(self, status: str) -> None:
         status = Result.resolve_status(status)
         result = self.load_result()
         result.set_status(status)
         result.save(self._fs.result.metadata, withextra=True)
 
-    def _create(self, kind_kwargs, pushfsattrs, pullfsattrs, queue_log):
+    def _create(
+            self,
+            kind_kwargs: Mapping[str, Any],
+            pushfsattrs: Optional[_common.FsAttrsType],
+            pullfsattrs: Optional[_common.FsAttrsType],
+            queue_log: str
+    ):
         os.makedirs(self._fs.request.root, exist_ok=True)
         os.makedirs(self._fs.work.root, exist_ok=True)
         os.makedirs(self._fs.result.root, exist_ok=True)
@@ -185,9 +201,14 @@ class Job:
             outfile.write(script)
         os.chmod(self._fs.portal_script, 0o755)
 
-    def _build_send_script(self, queue_log, pushfsfields=None, pullfsfields=None, *,
-                           hidecfg=False,
-                           ):
+    def _build_send_script(
+            self,
+            queue_log: str,
+            pushfsfields: Optional[_common.FsAttrsType] = None,
+            pullfsfields: Optional[_common.FsAttrsType] = None,
+            *,
+            hidecfg: bool = False,
+    ) -> str:
         reqid = self.reqid
         pfiles = self._fs
         bfiles = self._worker.fs
@@ -196,13 +217,16 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            ssh = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
+            sshcmds = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
             user = '$user'
         else:
-            user = _utils.check_shell_str(self._cfg.local_user)
+            cfg_user = _utils.check_shell_str(self._cfg.local_user)
+            if cfg_user is None:
+                raise ValueError("Couldn't find local_user")
+            user = cfg_user
             _utils.check_shell_str(self._cfg.ssh.user)
             _utils.check_shell_str(self._cfg.ssh.host)
-            ssh = self._worker.ssh.shell_commands
+            sshcmds = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
 
@@ -216,7 +240,7 @@ class Job:
         _utils.check_shell_str(bfiles.result.root)
         _utils.check_shell_str(bfiles.result.metadata)
 
-        ensure_user = ssh.ensure_user(user, agent=False)
+        ensure_user = sshcmds.ensure_user(user, agent=False)
         ensure_user = '\n                '.join(ensure_user)
 
         pushfsfields = [
@@ -225,7 +249,7 @@ class Job:
             ('request', 'metadata'),
             ('work', 'job_script'),
             ('result', 'metadata'),
-            *pushfsfields,
+            *(pushfsfields or []),
         ]
         pushfiles = []
         for field in pushfsfields or ():
@@ -237,12 +261,13 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pushfiles.append((bvalue, pvalue))
-        pushfiles = (ssh.push(s, t) for s, t in pushfiles)
-        pushfiles = '\n                '.join(pushfiles)
+        pushfiles_str = '\n                '.join(
+            sshcmds.push(s, t) for s, t in pushfiles
+        )
 
         pullfsfields = [
             ('result', 'metadata'),
-            *pullfsfields,
+            *(pullfsfields or []),
         ]
         pullfiles = []
         for field in pullfsfields or ():
@@ -254,12 +279,13 @@ class Job:
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
             pullfiles.append((bvalue, pvalue))
-        pullfiles = (ssh.pull(s, t) for s, t in pullfiles)
-        pullfiles = '\n                '.join(pullfiles)
+        pullfiles_str = '\n                '.join(
+            sshcmds.pull(s, t) for s, t in pullfiles
+        )
 
         #push = ssh.push
         #pull = ssh.pull
-        ssh = ssh.run_shell
+        ssh = sshcmds.run_shell
 
         return textwrap.dedent(f'''
             #!/usr/bin/env bash
@@ -303,7 +329,7 @@ class Job:
                 {ssh(f'mkdir -p {bfiles.request}')}
                 {ssh(f'mkdir -p {bfiles.work}')}
                 {ssh(f'mkdir -p {bfiles.result}')}
-                {pushfiles}
+                {pushfiles_str}
 
                 # Run the request.
                 {ssh(bfiles.job_script)}
@@ -311,7 +337,7 @@ class Job:
 
                 # Finish up.
                 # XXX Push from the worker in run.sh instead of pulling here?
-                {pullfiles}
+                {pullfiles_str}
 
                 )
             fi
@@ -333,19 +359,25 @@ class Job:
             exit $exitcode
         '''[1:-1])
 
-    def _get_ssh_agent(self):
+    def _get_ssh_agent(self) -> _utils.SSHAgentInfo:
         agent = self._cfg.worker.ssh.agent
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:
-                agent = SSHAgentInfo.from_env_vars()
+                agent = _utils.SSHAgentInfo.from_env_vars()
         if agent:
             logger.debug(f'(using SSH agent at {agent.auth_sock})')
         else:
             logger.debug('(no SSH agent running)')
         return agent
 
-    def check_ssh(self, *, onunknown=None, agent=None, fail=True):
+    def check_ssh(
+            self,
+            *,
+            onunknown: Optional[str] = None,
+            agent: Optional[_utils.SSHAgentInfo] = None,
+            fail: bool = True
+    ) -> bool:
         filename = self._fs.ssh_okay
         if onunknown is None:
             save = False
@@ -388,7 +420,7 @@ class Job:
             raise ConnectionRefusedError('SSH failed (is your SSH agent running and up-to-date?)')
         return okay
 
-    def run(self, *, background=False):
+    def run(self, *, background: bool = False) -> int:
         agent = self._get_ssh_agent()
         env = agent.apply_env() if agent else None
         self.check_ssh(onunknown='save', agent=agent)
@@ -401,10 +433,10 @@ class Job:
             proc = subprocess.run([self._fs.portal_script], env=env)
             return proc.returncode
 
-    def get_pid(self):
+    def get_pid(self) -> Optional[int]:
         return self._pidfile.read()
 
-    def kill(self):
+    def kill(self) -> None:
         pid = self.get_pid()
         if pid:
             logger.info('# killing PID %s', pid)
@@ -418,7 +450,12 @@ class Job:
         if text and text.isdigit():
             self._worker.ssh.run_shell(f'kill {text}', agent=agent)
 
-    def wait_until_started(self, timeout=None, *, checkssh=False):
+    def wait_until_started(
+            self,
+            timeout: Any = None,
+            *,
+            checkssh: bool = False
+    ) -> Optional[int]:
         if not timeout or timeout < 0:
             timeout = None
         else:
@@ -444,7 +481,7 @@ class Job:
             pid = self.get_pid()
         return pid
 
-    def attach(self, lines=None):
+    def attach(self, lines: Optional[Iterable[str]] = None) -> None:
         pid = self.wait_until_started()
         try:
             if pid:
@@ -455,7 +492,12 @@ class Job:
             # XXX Prompt to cancel the job?
             return
 
-    def wait_until_finished(self, pid=None, *, timeout=True):
+    def wait_until_finished(
+            self,
+            pid: Optional[int] = None,
+            *,
+            timeout: Any = True
+    ) -> None:
         if timeout is True:
             # Default to double the typical.
             timeout = self._kind.TYPICAL_DURATION_SECS or None
@@ -465,48 +507,60 @@ class Job:
             timeout = None
         if timeout:
             end = time.time() + timeout
+        else:
+            end = None
         if not pid:
             try:
                 pid = self.wait_until_started(timeout)
             except JobFinishedError:
                 return
-        while _utils.is_proc_running(pid):
-            if timeout and time.time() > end:
-                raise TimeoutError(f'timed out after {timeout} seconds')
-            time.sleep(0.1)
+        if pid is not None:
+            while _utils.is_proc_running(pid):
+                if timeout and (end is not None and time.time() > end):
+                    raise TimeoutError(f'timed out after {timeout} seconds')
+                time.sleep(0.1)
         # Make sure it finished.
         status = self.get_status()
         if status not in Result.FINISHED:
             assert status not in Result.ACTIVE, (self, status)
             raise JobNeverStartedError(self.reqid)
 
-    def cancel(self, *, ifstatus=None):
+    def cancel(self, *, ifstatus: Optional[str] = None) -> None:
         if ifstatus is not None:
-            if job.get_status() not in (Result.STATUS.CREATED, ifstatus):
+            if self.get_status() not in (Result.STATUS.CREATED, ifstatus):
                 return
         self.kill()
         # XXX Try to download the results directly?
         self.set_status('canceled')
 
-    def close(self):
+    def close(self) -> None:
         result = self.load_result()
         result.close()
         result.save(self._fs.result.metadata, withextra=True)
 
-    def upload_result(self, author=None, *, clean=True, push=True):
+    def upload_result(
+            self,
+            author: Optional[str] = None,
+            *,
+            clean: bool = True,
+            push: bool = True
+    ) -> None:
         res = self.load_result()
         # We upload directly.
-        self._store.add(
-            res.pyperf,
-            branch='main',
-            author=author,
-            compressed=False,
-            split=True,
-            clean=clean,
-            push=push,
-        )
+        if self._store is not None:
+            self._store.add(
+                res.pyperf,
+                branch='main',
+                author=author,
+                compressed=False,
+                split=True,
+                clean=clean,
+                push=push,
+            )
+        else:
+            raise ValueError("No store")
 
-    def as_row(self):  # XXX Move to JobSummary.
+    def as_row(self) -> _utils.TableRow:  # XXX Move to JobSummary.
         try:
             res = self.load_result()
         except FileNotFoundError:
@@ -521,10 +575,13 @@ class Job:
             end = finished
             if not end:
                 end, _ = _utils.get_utc_datetime()
-            elapsed = end - started
-        date = (started, self.reqid.date)
-        if not any(date):
-            date = None
+            if end is not None:
+                elapsed = end - started
+            else:
+                # TODO: Handle this situation better
+                elapsed = None
+        date_options = (started, self.reqid.date)
+        date = any(date_options) and date_options or None
         fullref = ref = remote = branch = tag = commit = None
         req = self.load_request(fail=False)
         if req:
@@ -584,7 +641,7 @@ class Job:
 
     # XXX Add as_summary().
 
-    def render(self, fmt=None):
+    def render(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:
             fmt = 'summary'
         reqfile = self._fs.request.metadata
@@ -601,7 +658,8 @@ class Job:
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
 
-    def _render_summary(self, fmt=None):
+
+    def _render_summary(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:
             fmt = 'verbose'
 

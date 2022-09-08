@@ -2,9 +2,12 @@ import configparser
 import logging
 import os.path
 import textwrap
+from typing import Any, Iterable, List, Optional, Tuple, Union
 
-from . import _utils, _pyperformance, _common
-from .requests import Request, Result
+from . import _job
+from . import _utils, _pyperformance, _common, _workers
+from .requests import Request, RequestID, Result, ToRequestIDType
+from . import requests
 
 
 FAKE_DELAY = 3
@@ -45,7 +48,12 @@ class CompileBenchRequest(Request):
     #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
 
     @classmethod
-    def _extract_kwargs(cls, data, optional, filename):
+    def _extract_kwargs(
+            cls,
+            data: Any,
+            optional: List[str],
+            filename
+    ) -> Tuple[dict, Optional[dict]]:
         # This is a backward-compatibility shim.
         try:
             return super()._extract_kwargs(data, optional, filename)
@@ -59,19 +67,20 @@ class CompileBenchRequest(Request):
             kwargs.setdefault('ref', 'deadbeef')
             return kwargs, extra
 
-    def __init__(self,
-                 id,
-                 datadir,
-                 ref,
-                 pyperformance_ref=None,
-                 remote=None,
-                 revision=None,
-                 branch=None,
-                 benchmarks=None,
-                 optimize=True,
-                 debug=False,
-                 **kwargs
-                 ):
+    def __init__(
+            self,
+            id: ToRequestIDType,
+            datadir: str,
+            ref: _utils.ToGitRefType,
+            pyperformance_ref: Optional[_utils.ToGitRefType] = None,
+            remote: Optional[str] = None,
+            revision: Optional[str] = None,
+            branch: Optional[str] = None,
+            benchmarks: Optional[List[str]] = None,
+            optimize: bool = True,
+            debug: bool = False,
+            **kwargs
+    ):
         if remote and not _utils.looks_like_git_remote(remote):
             raise ValueError(remote)
         if branch and not _utils.looks_like_git_branch(branch):
@@ -86,31 +95,35 @@ class CompileBenchRequest(Request):
                 if ref and _utils.looks_like_git_commit(ref):
                     commit = ref
                 try:
-                    ref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                    gitref = _utils.GitRef.from_values(remote, branch, tag, commit, ref)
+                    if gitref is None:
+                        raise ValueError
                 except ValueError:
                     # backward compatibility
                     GR = _utils.GitRef
-                    ref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
+                    gitref = GR.__new__(GR, remote, branch, tag, commit, ref, None)
             else:
                 refstr = ref
-                ref = _utils.GitRef.resolve(revision, branch, remote)
-                if refstr not in (ref.commit, ref.branch, ref.tag, None):
+                gitref = _utils.GitRef.resolve(revision, branch, remote)
+                if gitref is None:
+                    raise ValueError("Could not resolve ref {ref}")
+                if refstr not in (gitref.commit, gitref.branch, gitref.tag, None):
                     raise ValueError(f'unexpected ref {refstr!r}')
         else:
-            ref = _utils.GitRef.from_raw(ref)
+            gitref = _utils.GitRef.from_raw(ref)
 
-        self.ref = ref
+        self.ref = gitref
         self.pyperformance_ref = pyperformance_ref or str(ref)
-        self.remote = ref.remote
+        self.remote = gitref.remote
         self.revision = revision
-        self.branch = ref.branch
+        self.branch = gitref.branch
         self.benchmarks = benchmarks
         self.optimize = True if optimize is None else optimize
         self.debug = debug
         self._impl = _utils.CPython()
 
     @property
-    def cpython(self):
+    def cpython(self) -> _utils.GitHubTarget:
         # XXX Pass self.ref directly?
         ref = str(self.ref)
         if self.remote and self.remote != 'origin':
@@ -119,7 +132,7 @@ class CompileBenchRequest(Request):
             return self.CPYTHON.copy(ref=ref)
 
     @property
-    def release(self):
+    def release(self) -> str:
         if self.remote == 'origin':
             if not self.branch:
                 release = 'main'
@@ -142,16 +155,15 @@ class CompileBenchRequest(Request):
         return release
 
     @property
-    def versionstr(self):
+    def versionstr(self) -> str:
         return _utils.CPythonVersion.render_extended(
             version=self.release,
             bits=64,
             commit=self.ref.commit[:10],
         )
-        return f'{version} ({bits}-bit) revision {commit}'
 
     @property
-    def result(self):
+    def result(self) -> "CompileBenchResult":
         return CompileBenchResult(self.id, self.reqdir)
 
 
@@ -166,8 +178,15 @@ class CompileBenchResult(Result):
         'pyperformance_results_orig',
     ]
 
+    _pyperf: _pyperformance.PyperfResults
+
     @classmethod
-    def _extract_kwargs(cls, data, optional, filename):
+    def _extract_kwargs(
+            cls,
+            data: Any,
+            optional: List[str],
+            filename: str
+    ) -> Tuple[dict, Optional[dict]]:
         # This is a backward-compatibility shim.
         try:
             return super()._extract_kwargs(data, optional, filename)
@@ -178,18 +197,22 @@ class CompileBenchResult(Result):
             kwargs.setdefault('history', None)
             return kwargs, extra
 
-    def __init__(self, reqid, reqdir, *,
-                 status=None,
-                 #pyperformance_results=None,
-                 #pyperformance_results_orig=None,
-                 **kwargs
-                 ):
+    def __init__(
+            self,
+            reqid: ToRequestIDType,
+            reqdir: str,
+            *,
+            status: Optional[str] = None,
+            #pyperformance_results=None,
+            #pyperformance_results_orig=None,
+            **kwargs
+    ):
         super().__init__(reqid, reqdir, status, **kwargs)
         #self.pyperformance_results = pyperformance_results
         #self.pyperformance_results_orig = pyperformance_results_orig
 
     @property
-    def pyperf(self):
+    def pyperf(self) -> _pyperformance.PyperfResults:
         try:
             return self._pyperf
         except AttributeError:
@@ -212,20 +235,27 @@ class CompileBenchResult(Result):
                 resfile.write(results)
 
             self._pyperf = results
-            return self._pyperf
+        return self._pyperf
 
 
-def resolve_compile_bench_request(reqid, workdir, remote, revision, branch,
-                                  benchmarks,
-                                  *,
-                                  optimize,
-                                  debug,
-                                  ):
+def resolve_compile_bench_request(
+        reqid: ToRequestIDType,
+        workdir: str,
+        remote: str,
+        revision: str,
+        branch: str,
+        benchmarks: Optional[Union[str, Iterable[str]]],
+        *,
+        optimize: bool,
+        debug: bool,
+) -> CompileBenchRequest:
     if isinstance(benchmarks, str):
-        benchmarks = benchmarks.replace(',', ' ').split()
-    if benchmarks:
-        benchmarks = (b.strip() for b in benchmarks)
-        benchmarks = [b for b in benchmarks if b]
+        benchmarks_seq = benchmarks.replace(',', ' ').split()
+    elif benchmarks is None:
+        benchmarks_seq = []
+    else:
+        benchmarks_seq = list(benchmarks)
+    benchmarks_list = [b.strip() for b in benchmarks_seq if b]
 
     ref = _utils.GitRef.resolve(revision, branch, remote)
     if not ref:
@@ -243,14 +273,17 @@ def resolve_compile_bench_request(reqid, workdir, remote, revision, branch,
         remote=remote or None,
         revision=revision or None,
         branch=branch or None,
-        benchmarks=benchmarks or None,
+        benchmarks=benchmarks_list or None,
         optimize=bool(optimize),
         debug=bool(debug),
     )
     return meta
 
 
-def build_pyperformance_manifest(req, bfiles):
+def build_pyperformance_manifest(
+        req: CompileBenchRequest,
+        bfiles: _workers.WorkerJobsFS,
+) -> str:
     return textwrap.dedent(f'''
         [includes]
         <default>
@@ -258,13 +291,16 @@ def build_pyperformance_manifest(req, bfiles):
     '''[1:-1])
 
 
-def build_pyperformance_config(req, bfiles):
+def build_pyperformance_config(
+        req: CompileBenchRequest,
+        bfiles: _workers.WorkerJobsFS
+) -> configparser.ConfigParser:
     cpython = bfiles.repos.cpython
-    bfiles = bfiles.resolve_request(req.id)
+    bfiles_jobfs = bfiles.resolve_request(req.id)
     cfg = configparser.ConfigParser()
 
     cfg['config'] = {}
-    cfg['config']['json_dir'] = bfiles.result.root
+    cfg['config']['json_dir'] = bfiles_jobfs.result.root
     cfg['config']['debug'] = str(req.debug)
     # XXX pyperformance should be looking in [scm] for this.
     cfg['config']['git_remote'] = req.remote
@@ -275,13 +311,13 @@ def build_pyperformance_config(req, bfiles):
     cfg['scm']['update'] = 'True'
 
     cfg['compile'] = {}
-    cfg['compile']['bench_dir'] = bfiles.work.scratch_dir
+    cfg['compile']['bench_dir'] = bfiles_jobfs.work.scratch_dir
     cfg['compile']['pgo'] = str(req.optimize)
     cfg['compile']['lto'] = str(req.optimize)
     cfg['compile']['install'] = 'True'
 
     cfg['run_benchmark'] = {}
-    cfg['run_benchmark']['manifest'] = bfiles.request.pyperformance_manifest
+    cfg['run_benchmark']['manifest'] = bfiles_jobfs.request.pyperformance_manifest
     cfg['run_benchmark']['benchmarks'] = ','.join(req.benchmarks or ())
     cfg['run_benchmark']['system_tune'] = 'True'
     cfg['run_benchmark']['upload'] = 'False'
@@ -289,15 +325,21 @@ def build_pyperformance_config(req, bfiles):
     return cfg
 
 
-def build_compile_script(req, bfiles, fake=None):
-    fakedelay = FAKE_DELAY
+def build_compile_script(
+        req: CompileBenchRequest,
+        bfiles: _workers.WorkerJobsFS,
+        fake: Optional[Any] = None
+) -> str:
+    exitcode: Optional[Union[str, int]]
+    fakedelay: Optional[int] = FAKE_DELAY
     if fake is False or fake is None:
-        fake = (None, None)
+        exitcode, fakedelay = (None, None)
     elif fake is True:
-        fake = (0, None)
+        exitcode, fakedelay = (0, None)
     elif isinstance(fake, (int, str)):
-        fake = (fake, None)
-    exitcode, fakedelay = fake
+        exitcode, fakedelay = (fake, None)
+    else:
+        exitcode, fakedelay = (None, None)
     if fakedelay is None:
         fakedelay = FAKE_DELAY
     else:
@@ -330,15 +372,15 @@ def build_compile_script(req, bfiles, fake=None):
     pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
     pyston_benchmarks_repo = _utils.quote_shell_str(bfiles.repos.pyston_benchmarks)
 
-    bfiles = bfiles.resolve_request(req.id)
-    _utils.check_shell_str(bfiles.work.pidfile)
-    _utils.check_shell_str(bfiles.work.logfile)
-    _utils.check_shell_str(bfiles.work.scratch_dir)
-    _utils.check_shell_str(bfiles.request.pyperformance_config)
-    _utils.check_shell_str(bfiles.result.pyperformance_log)
-    _utils.check_shell_str(bfiles.result.metadata)
-    _utils.check_shell_str(bfiles.result.pyperformance_results)
-    _utils.check_shell_str(bfiles.work.pyperformance_results_glob)
+    _bfiles = bfiles.resolve_request(req.id)
+    _utils.check_shell_str(_bfiles.work.pidfile)
+    _utils.check_shell_str(_bfiles.work.logfile)
+    _utils.check_shell_str(_bfiles.work.scratch_dir)
+    _utils.check_shell_str(_bfiles.request.pyperformance_config)
+    _utils.check_shell_str(_bfiles.result.pyperformance_log)
+    _utils.check_shell_str(_bfiles.result.metadata)
+    _utils.check_shell_str(_bfiles.result.pyperformance_results)
+    _utils.check_shell_str(_bfiles.work.pyperformance_results_glob)
 
     _utils.check_shell_str(python)
 
@@ -355,18 +397,18 @@ def build_compile_script(req, bfiles, fake=None):
         #####################
         # Mark the result as running.
 
-        echo "$$" > {bfiles.work.pidfile}
+        echo "$$" > {_bfiles.work.pidfile}
 
-        status=$(jq -r '.status' {bfiles.result.metadata})
+        status=$(jq -r '.status' {_bfiles.result.metadata})
         if [ "$status" != 'activated' ]; then
             2>&1 echo "ERROR: expected activated status, got $status"
-            2>&1 echo "       (see {bfiles.result.metadata})"
+            2>&1 echo "       (see {_bfiles.result.metadata})"
             exit 1
         fi
 
         ( set -x
-        jq --arg date $(date -u -Iseconds) '.history += [["running", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-        mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+        jq --arg date $(date -u -Iseconds) '.history += [["running", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+        mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
         )
 
         #####################
@@ -441,25 +483,25 @@ def build_compile_script(req, bfiles, fake=None):
         # Run the benchmarks.
 
         ( set -x
-        mkdir -p {bfiles.work.scratch_dir}
+        mkdir -p {_bfiles.work.scratch_dir}
         )
 
         echo "running the benchmarks..."
-        echo "(logging to {bfiles.work.logfile})"
+        echo "(logging to {_bfiles.work.logfile})"
         exitcode='{exitcode}'
         if [ -n "$exitcode" ]; then
             ( set -x
             sleep {fakedelay}
-            touch {bfiles.work.logfile}
-            touch {bfiles.request}/pyperformance-dummy-results.json.gz
+            touch {_bfiles.work.logfile}
+            touch {_bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
             ( set -x
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
-                {bfiles.request.pyperformance_config} \\
+                {_bfiles.request.pyperformance_config} \\
                 {ref} {maybe_branch} \\
-                2>&1 | tee {bfiles.work.logfile}
+                2>&1 | tee {_bfiles.work.logfile}
             )
             exitcode=$?
         fi
@@ -467,44 +509,44 @@ def build_compile_script(req, bfiles, fake=None):
         #####################
         # Record the results.
 
-        if [ -e {bfiles.work.logfile} ]; then
-            ln -s {bfiles.work.logfile} {bfiles.result.pyperformance_log}
+        if [ -e {_bfiles.work.logfile} ]; then
+            ln -s {_bfiles.work.logfile} {_bfiles.result.pyperformance_log}
         fi
 
-        results=$(2>/dev/null ls {bfiles.work.pyperformance_results_glob})
+        results=$(2>/dev/null ls {_bfiles.work.pyperformance_results_glob})
         results_name=$(2>/dev/null basename $results)
 
         echo "saving results..."
         if [ $exitcode -eq 0 -a -n "$results" ]; then
             ( set -x
-            jq '.status = "success"' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq '.status = "success"' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg results "$results" '.pyperformance_data_orig = $results' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg results "$results" '.pyperformance_data_orig = $results' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg date $(date -u -Iseconds) '.history += [["success", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg date $(date -u -Iseconds) '.history += [["success", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
             )
         else
             ( set -x
-            jq '.status = "failed"' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq '.status = "failed"' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
 
-            jq --arg date $(date -u -Iseconds) '.history += [["failed", $date]]' {bfiles.result.metadata} > {bfiles.result.metadata}.tmp
-            mv {bfiles.result.metadata}.tmp {bfiles.result.metadata}
+            jq --arg date $(date -u -Iseconds) '.history += [["failed", $date]]' {_bfiles.result.metadata} > {_bfiles.result.metadata}.tmp
+            mv {_bfiles.result.metadata}.tmp {_bfiles.result.metadata}
             )
         fi
 
         if [ -n "$results" -a -e "$results" ]; then
             ( set -x
-            ln -s $results {bfiles.result.pyperformance_results}
+            ln -s $results {_bfiles.result.pyperformance_results}
             )
         fi
 
         echo "...done!"
 
-        #rm -f {bfiles.work.pidfile}
+        #rm -f {_bfiles.work.pidfile}
     '''[1:-1])
 
 
@@ -526,12 +568,20 @@ class CompileBenchKind(_common.JobKind):
     Request = CompileBenchRequest
     Result = CompileBenchResult
 
-    def set_request_fs(self, fs, context):
+    def set_request_fs(
+            self,
+            fs: _common.JobRequestFS,
+            context: Optional[str]
+    ) -> None:
         fs.pyperformance_manifest = f'{fs}/benchmarks.manifest'
         #fs.pyperformance_config = f'{fs}/compile.ini'
         fs.pyperformance_config = f'{fs}/pyperformance.ini'
 
-    def set_work_fs(self, fs, context):
+    def set_work_fs(
+            self,
+            fs: _common.JobWorkFS,
+            context: Optional[str]
+    ) -> None:
         if context == 'job-worker':
             # other directories needed by the job
             fs.venv = f'{fs}/pyperformance-venv'
@@ -540,13 +590,25 @@ class CompileBenchKind(_common.JobKind):
             # XXX Is this right?
             fs.pyperformance_results_glob = f'{fs}/*.json.gz'
 
-    def set_result_fs(self, fs, context):
+    def set_result_fs(
+            self,
+            fs: _common.JobResultFS,
+            context: Optional[str]
+    ) -> None:
         #fs.pyperformance_log = f'{fs}/run.log'
         fs.pyperformance_log = f'{fs}/pyperformance.log'
         #fs.pyperformance_results = f'{fs}/results-data.json.gz'
         fs.pyperformance_results = f'{fs}/pyperformance-results.json.gz'
 
-    def create(self, reqid, jobfs, workerfs, *, _fake=None, **req_kwargs):
+    def create(
+            self,
+            reqid: ToRequestIDType,
+            jobfs: _job.JobFS,
+            workerfs: _workers.WorkerJobsFS,
+            *,
+            _fake: Optional[Any] = None,
+            **req_kwargs
+    ) -> Tuple[CompileBenchRequest, str]:
         req = resolve_compile_bench_request(
             reqid,
             jobfs.work.root,
@@ -567,7 +629,7 @@ class CompileBenchKind(_common.JobKind):
         script = build_compile_script(req, workerfs, _fake)
         return req, script
 
-    def as_row(self, req):
+    def as_row(self, req: requests.Request) -> Tuple[str, str, str, str, str, str]:
         ref = req.ref
         assert not isinstance(ref, str), repr(ref)
         return ref.full, ref, ref.remote, ref.branch, ref.tag, ref.commit

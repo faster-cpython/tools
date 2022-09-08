@@ -2,13 +2,16 @@ import logging
 import os
 import os.path
 import sys
+from typing import (
+    Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Type, Union
+)
 
 from . import _utils, _pyperformance, _common, _workers, _job, _current
-from . import queue as _queue
-from .requests import RequestID, Request
+from . import queue as queue_mod
+from .requests import RequestID, ToRequestIDType
 
 # top-level exports
-from ._common import JobsError, PKG_ROOT
+from ._common import JobsError
 
 
 logger = logging.getLogger(__name__)
@@ -30,9 +33,9 @@ class JobsConfig(_utils.TopConfig):
     ]
 
     def __init__(self,
-                 local_user,
-                 worker,
-                 data_dir=None,
+                 local_user: str,
+                 worker: Optional[Union[str, _workers.WorkerConfig]],
+                 data_dir: Optional[str] = None,
                  **ignored
                  ):
         if not local_user:
@@ -40,25 +43,30 @@ class JobsConfig(_utils.TopConfig):
         if not worker:
             raise ValueError('missing worker')
         elif not isinstance(worker, _workers.WorkerConfig):
-            worker = _workers.WorkerConfig.from_jsonable(worker)
+            worker_resolved = _workers.WorkerConfig.from_jsonable(worker)
+        else:
+            worker_resolved = worker
         if data_dir:
             data_dir = os.path.abspath(os.path.expanduser(data_dir))
         else:
             data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
         super().__init__(
             local_user=local_user,
-            worker=worker,
+            worker=worker_resolved,
             data_dir=data_dir or None,
         )
 
     @property
-    def ssh(self):
+    def ssh(self) -> _utils.SSHConnectionConfig:
         return self.worker.ssh
 
 
 class PortalFS(_utils.FSTree):
 
-    def __init__(self, root='~/BENCH'):
+    def __init__(self, root: Optional[str] = None):
+        if root is None:
+            root = "~/BENCH"
+
         super().__init__(root)
 
         self.jobs = _common.JobsFS(self.root)
@@ -67,18 +75,19 @@ class PortalFS(_utils.FSTree):
 
         self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
 
-        self.queue = _queue.JobQueueFS(self.jobs.requests)
+        self.queue = queue_mod.JobQueueFS(self.jobs.requests)
 
     @property
-    def currentjob(self):
+    def currentjob(self) -> str:
         return self.jobs.requests.current
 
 
 class Jobs:
 
-    FS = PortalFS
+    FS: Type[PortalFS] = PortalFS
+    _queue: queue_mod.JobQueue
 
-    def __init__(self, cfg, *, devmode=False):
+    def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
@@ -88,19 +97,19 @@ class Jobs:
     def __str__(self):
         return self._fs.root
 
-    def __eq__(self, other):
+    def __eq__(self, _other):
         raise NotImplementedError
 
     @property
-    def cfg(self):
+    def cfg(self) -> JobsConfig:
         return self._cfg
 
     @property
-    def devmode(self):
+    def devmode(self) -> bool:
         return self._devmode
 
     @property
-    def fs(self):
+    def fs(self) -> _utils.FSTree:
         """Files on the portal host."""
         return self._fs.jobs.copy()
 
@@ -109,17 +118,17 @@ class Jobs:
         try:
             return self._queue
         except AttributeError:
-            self._queue = _queue.JobQueue.from_fstree(self._fs.queue)
+            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue)
             return self._queue
 
-    def iter_all(self):
+    def iter_all(self) -> Iterator[_job.Job]:
         for name in os.listdir(str(self._fs.jobs.requests)):
             reqid = RequestID.parse(name)
             if not reqid:
                 continue
             yield self._get(reqid)
 
-    def _get(self, reqid):
+    def _get(self, reqid: RequestID) -> _job.Job:
         return _job.Job(
             reqid,
             self._fs.jobs.resolve_request(reqid),
@@ -128,25 +137,24 @@ class Jobs:
             self._store,
         )
 
-    def get_current(self):
+    def get_current(self) -> Optional[_job.Job]:
         reqid = _current.get_staged_request(self._fs.jobs)
         if not reqid:
             return None
         return self._get(reqid)
 
-    def get(self, reqid=None):
+    def get(self, reqid: Optional[ToRequestIDType] = None) -> Optional[_job.Job]:
         if not reqid:
             return self.get_current()
-        orig = reqid
-        reqid = RequestID.from_raw(orig)
-        if not reqid:
-            if isinstance(orig, str):
-                reqid = self._parse_reqdir(orig)
-            if not reqid:
+        reqid_resolved = RequestID.from_raw(reqid)
+        if not reqid_resolved:
+            if isinstance(reqid, str):
+                reqid_resolved = self._parse_reqdir(reqid)
+            if not reqid_resolved:
                 return None
-        return self._get(reqid)
+        return self._get(reqid_resolved)
 
-    def _parse_reqdir(self, filename):
+    def _parse_reqdir(self, filename: str) -> RequestID:
         dirname, basename = os.path.split(filename)
         reqid = RequestID.parse(basename)
         if not reqid:
@@ -154,14 +162,22 @@ class Jobs:
             reqid = RequestID.parse(os.path.basename(dirname))
         return reqid
 
-    def match_results(self, specifier, suites=None):
+    def match_results(
+            self,
+            specifier: Any,
+            suites: _pyperformance.SuitesType = None
+    ) -> Iterator[_pyperformance.PyperfResultsFile]:
         matched = list(self._store.match(specifier, suites=suites))
         if matched:
             yield from matched
         else:
             yield from self._match_job_results(specifier, suites)
 
-    def _match_job_results(self, specifier, suites):
+    def _match_job_results(
+            self,
+            specifier: Union[str, RequestID],
+            suites: Optional[Any]
+    ) -> Iterator[_pyperformance.PyperfResultsFile]:
         if isinstance(specifier, str):
             job = self.get(specifier)
             if job:
@@ -174,14 +190,20 @@ class Jobs:
                     resultsroot=self._fs.jobs.results.root,
                 )
 
-    def create(self, reqid, kind_kwargs=None, pushfsattrs=None, pullfsattrs=None):
+    def create(
+            self,
+            reqid: RequestID,
+            kind_kwargs: Optional[Mapping[str, Any]] = None,
+            pushfsattrs: Optional[_common.FsAttrsType] = None,
+            pullfsattrs: Optional[_common.FsAttrsType] = None
+    ) -> _job.Job:
         if kind_kwargs is None:
             kind_kwargs = {}
         job = self._get(reqid)
         job._create(kind_kwargs, pushfsattrs, pullfsattrs, self._fs.queue.log)
         return job
 
-    def activate(self, reqid):
+    def activate(self, reqid: RequestID) -> _job.Job:
         logger.debug('# staging request')
         _current.stage_request(reqid, self._fs.jobs)
         logger.debug('# done staging request')
@@ -189,17 +211,21 @@ class Jobs:
         job.set_status('activated')
         return job
 
-    def wait_until_job_started(self, job=None, *, timeout=True):
+    def wait_until_job_started(
+            self,
+            job: Optional[Union[_job.Job, RequestID]] = None,
+            *,
+            timeout: Union[int, bool] = True
+    ) -> Tuple[_job.Job, Optional[int]]:
         current = _current.get_staged_request(self._fs.jobs)
         if isinstance(job, _job.Job):
             reqid = job.reqid
         else:
-            reqid = job
-            if not reqid:
-                reqid = current
-                if not reqid:
-                    raise NoRunningJobError
-            job = self._get(reqid)
+            reqid_source = job or current
+            if not reqid_source:
+                raise NoRunningJobError
+            job = self._get(reqid_source)
+            reqid = job.reqid
         if timeout is True:
             # Calculate the timeout.
             if current:
@@ -210,13 +236,13 @@ class Jobs:
                         jobkind = _common.resolve_job_kind(reqid.kind)
                     except KeyError:
                         raise NotImplementedError(reqid)
-                    expected = jobkind.TYPICAL_DURATION_SECS
+                    expected = jobkind.TYPICAL_DURATION_SECS or 0
                     # We could subtract the elapsed time, but it isn't worth it.
                     timeout = expected
             if timeout:
-                # Add the expected time for everything in the queue before the job.
                 if timeout is True:
                     timeout = 0
+                # Add the expected time for everything in the queue before the job.
                 for i, queued in enumerate(self.queue.snapshot):
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
@@ -226,7 +252,7 @@ class Jobs:
                         jobkind = _common.resolve_job_kind(queued.kind)
                     except KeyError:
                         raise NotImplementedError(queued)
-                    expected = jobkind.TYPICAL_DURATION_SECS
+                    expected = jobkind.TYPICAL_DURATION_SECS or 0
                     timeout += expected
                 else:
                     # Either it hasn't been queued or it already finished.
@@ -235,7 +261,7 @@ class Jobs:
         pid = job.wait_until_started(timeout)
         return job, pid
 
-    def ensure_next(self):
+    def ensure_next(self) -> None:
         logger.debug('Making sure a job is running, if possible')
         # XXX Return (queued job, already running job).
         job = self.get_current()
@@ -266,7 +292,12 @@ class Jobs:
             cwd=_common.SYS_PATH_ENTRY,
         )
 
-    def cancel_current(self, reqid=None, *, ifstatus=None):
+    def cancel_current(
+            self,
+            reqid: Optional[RequestID] = None,
+            *,
+            ifstatus: Optional[str] = None
+    ) -> _job.Job:
         job = self.get(reqid)
         if job is None:
             raise NoRunningJobError
@@ -280,7 +311,7 @@ class Jobs:
         logger.info('# done unstaging request')
         return job
 
-    def finish_successful(self, reqid):
+    def finish_successful(self, reqid: RequestID) -> _job.Job:
         logger.info('# unstaging request %s', reqid)
         try:
             _current.unstage_request(reqid, self._fs.jobs)
@@ -293,12 +324,21 @@ class Jobs:
         return job
 
 
-_SORT = {
+_SORT: Mapping[str, Callable[[_job.Job], RequestID]] = {
     'reqid': (lambda j: j.reqid),
 }
 
 
-def sort_jobs(jobs, sortby=None, *, ascending=False):
+ToJobsType = Union[Jobs, Sequence[_job.Job]]
+
+
+def sort_jobs(
+        jobs: ToJobsType,
+        sortby: Optional[Union[str, Sequence[str]]] = None,
+        # sortby must be one of the keys in _SORT
+        *,
+        ascending: bool = False
+) -> Sequence[_job.Job]:
     if isinstance(jobs, Jobs):
         jobs = list(jobs.iter_all())
     if not sortby:
@@ -320,11 +360,17 @@ def sort_jobs(jobs, sortby=None, *, ascending=False):
     return jobs
 
 
-def select_job(jobs, criteria=None):
+def select_job(
+        jobs: ToJobsType,
+        criteria: Optional[Union[str, Sequence[str]]] = None
+) -> Iterator[_job.Job]:
     raise NotImplementedError
 
 
-def select_jobs(jobs, criteria=None):
+def select_jobs(
+        jobs: ToJobsType,
+        criteria: Optional[Union[str, Sequence[str]]] = None
+) -> Iterator[_job.Job]:
     # CSV
     # ranges (i.e. slice)
     if isinstance(jobs, Jobs):
@@ -335,10 +381,7 @@ def select_jobs(jobs, criteria=None):
     if isinstance(criteria, str):
         criteria = [criteria]
     else:
-        try:
-            criteria = list(criteria)
-        except TypeError:
-            criteria = [criteria]
+        criteria = list(criteria)
     if len(criteria) > 1:
         raise NotImplementedError(criteria)
     selection = _utils.get_slice(criteria[0])
