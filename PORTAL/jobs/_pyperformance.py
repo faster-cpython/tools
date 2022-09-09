@@ -3089,10 +3089,9 @@ class PyperfResultsRepo(PyperfResultsStorage):
         for readme in readmes:
             repo.add(readme)
         msg = f'Add Benchmark Results ({info.uploadid.copy(suite=None)})'
-        repo.commit(msg)
-        logger.info('...done committing')
-
         if push:
+            repo.commit(msg)
+            logger.info('...done committing')
             self._upload(self.datadir or '.')
 
     def _update_table(
