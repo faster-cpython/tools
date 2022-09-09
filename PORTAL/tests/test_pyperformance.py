@@ -15,8 +15,6 @@ def test_splitting_by_suite(tmp_path):
     correct number of benchmarks.
     """
 
-    tmp_path = Path("/home/mdboom/Work/builds/tmp-ideas/")
-
     git_url = "https://github.com/faster-cpython/ideas"
     git_commit = "4cd693d"  # main on 2022-09-09
     datadir = "benchmark-results"
