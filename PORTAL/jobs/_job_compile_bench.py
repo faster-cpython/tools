@@ -350,12 +350,12 @@ def build_compile_script(
         if exitcode is None:
             exitcode = 0
         elif exitcode == '':
-            logger.warn(f'fakedelay ({fakedelay}) will not be used')
+            logger.warning(f'fakedelay ({fakedelay}) will not be used')
     if exitcode is None:
         exitcode = ''
     elif exitcode != '':
         exitcode = _utils.ensure_int(exitcode, min=0)
-        logger.warn('we will pretend pyperformance will run with exitcode %s', exitcode)
+        logger.warning('we will pretend pyperformance will run with exitcode %s', exitcode)
     python = 'python3.9'  # On the job worker.
     numjobs = 20
 

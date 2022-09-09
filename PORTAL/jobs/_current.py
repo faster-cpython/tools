@@ -235,7 +235,7 @@ def _set_staged(
         else:
             if curid == reqid:
                 # XXX Fail?
-                logger.warn(f'{reqid} is already set as the current job')
+                logger.warning(f'{reqid} is already set as the current job')
                 return
             elif curid:
                 # Clear it if it is no longer valid.

@@ -218,7 +218,7 @@ def cmd_attach(
         job.attach(lines)
     except JobNeverStartedError:
         # XXX Optionally wait anyway?
-        logger.warn('job not started')
+        logger.warning('job not started')
     except JobFinishedError:
         # It already finished.
         pass
@@ -245,7 +245,7 @@ def cmd_cancel(
             try:
                 job = jobs.cancel_current(current.reqid, ifstatus=_status)
             except NoRunningJobError:
-                logger.warn('job just finished')
+                logger.warning('job just finished')
                 return
         else:
             cmd_queue_remove(jobs, reqid)
@@ -280,7 +280,7 @@ def cmd_wait(jobs: Jobs, reqid: Optional[RequestID] = None) -> None:
             job.wait_until_finished(pid)
     except JobNeverStartedError as exc:
         # XXX Optionally wait anyway?
-        logger.warn('job not started')
+        logger.warning('job not started')
     except JobFinishedError:
         # It already finished.
         pass
@@ -378,12 +378,12 @@ def cmd_run_next(jobs: Jobs) -> None:
             return
 
         if not status:
-            logger.warn('queued request (%s) not found', reqid)
+            logger.warning('queued request (%s) not found', reqid)
             logger.info('trying next job...')
             cmd_run_next(jobs)
             return
         elif status is not Result.STATUS.PENDING:
-            logger.warn('expected "pending" status for queued request %s, got %r', reqid, status)
+            logger.warning('expected "pending" status for queued request %s, got %r', reqid, status)
             # XXX Give the option to force the status to "activated"?
             logger.info('trying next job...')
             cmd_run_next(jobs)
@@ -396,10 +396,10 @@ def cmd_run_next(jobs: Jobs) -> None:
             _cmd_run(jobs, reqid)
         except RequestAlreadyStagedError as exc:
             if reqid == exc.curid:
-                logger.warn('%s is already running', reqid)
+                logger.warning('%s is already running', reqid)
                 # XXX Check the pidfile?
             else:
-                logger.warn('another job is already running, adding %s back to the queue', reqid)
+                logger.warning('another job is already running, adding %s back to the queue', reqid)
                 jobs.queue.unpop(reqid)
     except KeyboardInterrupt:
         cmd_cancel(jobs, reqid, _status=Result.STATUS.PENDING)
@@ -456,7 +456,7 @@ def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
 def cmd_queue_list(jobs: Jobs) -> None:
     queue = jobs.queue.snapshot
     if queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     if not queue:
         print('no jobs queued')
@@ -473,7 +473,7 @@ def cmd_queue_pause(jobs: Jobs) -> None:
     try:
        jobs.queue.pause()
     except JobQueuePausedError:
-        logger.warn('job queue was already paused')
+        logger.warning('job queue was already paused')
     else:
         logger.info('job queue paused')
 
@@ -482,7 +482,7 @@ def cmd_queue_unpause(jobs: Jobs) -> None:
     try:
        jobs.queue.unpause()
     except JobQueueNotPausedError:
-        logger.warn('job queue was not paused')
+        logger.warning('job queue was not paused')
     else:
         logger.info('job queue unpaused')
         jobs.ensure_next()
@@ -505,14 +505,14 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
         sys.exit(1)
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     try:
         pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
         for pos, queued in enumerate(jobs.queue, 1):
             if queued == reqid:
-                logger.warn('%s was already queued', reqid)
+                logger.warning('%s was already queued', reqid)
                 break
         else:
             raise NotImplementedError
@@ -529,21 +529,21 @@ def cmd_queue_pop(jobs: Jobs) -> None:
     try:
         reqid = jobs.queue.pop()
     except JobQueuePausedError:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
         return
     except JobQueueEmptyError:
         logger.error('job queue is empty')
         sys.exit(1)
     job = jobs.get(reqid)
     if not job:
-        logger.warn('queued request (%s) not found', reqid)
+        logger.warning('queued request (%s) not found', reqid)
         return
 
     status = job.get_status()
     if not status:
-        logger.warn('queued request (%s) not found', reqid)
+        logger.warning('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warn(f'expected "pending" status for queued request %s, got %r', reqid, status)
+        logger.warning(f'expected "pending" status for queued request %s, got %r', reqid, status)
         # XXX Give the option to force the status to "activated"?
     else:
         # XXX Set the status to "activated"?
@@ -575,14 +575,14 @@ def cmd_queue_move(
         sys.exit(1)
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     status = job.get_status()
     if not status:
         logger.error('request %s not found', reqid)
         sys.exit(1)
     elif status is not Result.STATUS.PENDING:
-        logger.warn('request %s has been updated since queued', reqid)
+        logger.warning('request %s has been updated since queued', reqid)
 
     pos = jobs.queue.move(reqid, position, relative)
     logger.info('...moved to position %s', pos)
@@ -593,22 +593,22 @@ def cmd_queue_remove(jobs: Jobs, reqid: RequestID) -> None:
     logger.info('Removing job %s from the queue...', reqid)
     job = jobs.get(reqid)
     if not job:
-        logger.warn('request %s not found', reqid)
+        logger.warning('request %s not found', reqid)
         return
 
     if jobs.queue.paused:
-        logger.warn('job queue is paused')
+        logger.warning('job queue is paused')
 
     status = job.get_status()
     if not status:
-        logger.warn('request %s not found', reqid)
+        logger.warning('request %s not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warn('request %s has been updated since queued', reqid)
+        logger.warning('request %s has been updated since queued', reqid)
 
     try:
         jobs.queue.remove(reqid)
     except JobNotQueuedError:
-        logger.warn('%s was not queued', reqid)
+        logger.warning('%s was not queued', reqid)
 
     if status is Result.STATUS.PENDING:
         job.set_status('created')

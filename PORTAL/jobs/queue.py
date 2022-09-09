@@ -202,7 +202,7 @@ class JobQueue:
         else:
             jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
-                logger.warn('job queue at %s has bad entries', self._datafile)
+                logger.warning('job queue at %s has bad entries', self._datafile)
                 fixed = True
             data['jobs'] = [r for r in jobs if r]
         # Save and return the data.
