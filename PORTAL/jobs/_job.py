@@ -233,8 +233,8 @@ class Job:
 
         queue_log = _utils.quote_shell_str(queue_log)
 
-        reqdir = _utils.quote_shell_str(pfiles.request.root)
-        results_meta = _utils.quote_shell_str(pfiles.result.metadata)
+        _utils.check_shell_str(pfiles.request.root)
+        _utils.check_shell_str(pfiles.result.metadata)
         pidfile = _utils.quote_shell_str(pfiles.pidfile)
 
         _utils.check_shell_str(bfiles.request.root)
@@ -660,7 +660,6 @@ class Job:
             yield from self._render_summary('verbose')
         else:
             raise ValueError(f'unsupported fmt {fmt!r}')
-
 
     def _render_summary(self, fmt: Optional[str] = None) -> Iterable[str]:
         if not fmt:

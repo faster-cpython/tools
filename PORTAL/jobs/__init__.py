@@ -243,7 +243,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for i, queued in enumerate(self.queue.snapshot):
+                for queued in self.queue.snapshot:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2

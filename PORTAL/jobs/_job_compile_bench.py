@@ -8,9 +8,10 @@ from . import _utils, _pyperformance, _common
 from .requests import Request, RequestID, Result, ToRequestIDType
 from . import requests
 
-
 if TYPE_CHECKING:
     from . import _job, _workers
+
+# flake8: noqa
 
 
 FAKE_DELAY = 3
@@ -47,8 +48,12 @@ class CompileBenchRequest(Request):
     #pyperformance = PYPERFORMANCE.copy('034f58b')  # 1.0.4 release (2022-01-26)
     pyperformance = PYPERFORMANCE.copy('4622a0b')  # will be 1.0.6 release
     pyston_benchmarks = PYSTON_BENCHMARKS.copy('797dfd')  # main from 2022-08-24
-    #pyperformance = PYPERFORMANCE.fork('ericsnowcurrently', 'python-performance', 'benchmark-management')
-    #pyston_benchmarks = PYSTON_BENCHMARKS.fork('ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance')
+    #pyperformance = PYPERFORMANCE.fork(
+    #    'ericsnowcurrently', 'python-performance', 'benchmark-management'
+    #)
+    #pyston_benchmarks = PYSTON_BENCHMARKS.fork(
+    #    'ericsnowcurrently', 'pyston-macrobenchmarks', 'pyperformance'
+    #)
 
     @classmethod
     def _extract_kwargs(

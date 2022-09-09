@@ -190,7 +190,7 @@ class JobFS(types.SimpleNamespace):
         request_fs = JobRequestFS.from_raw(request)
         result_fs = JobResultFS.from_raw(result)
         work_fs = JobWorkFS.from_raw(work)
-        
+
         if not reqid:
             reqid = os.path.basename(request)
             reqid_obj = requests.RequestID.from_raw(reqid)

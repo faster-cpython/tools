@@ -34,6 +34,7 @@ else:
 ##################################
 # the job queue
 
+
 class JobQueueError(Exception):
     MSG = 'some problem with the job queue'
 
