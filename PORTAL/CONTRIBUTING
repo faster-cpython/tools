@@ -1,0 +1,29 @@
+Testing
+-------
+
+Requires pytest.
+
+```
+python -m pip install pytest==7.1.3
+```
+
+Run tests:
+
+```
+python -m pytest PORTAL/tests/
+```
+
+Linting
+-------
+
+Requires mypy.
+
+```
+python -m pip install mypy==0.971
+```
+
+To run a type annotation check:
+
+```
+python -m mypy PORTAL/jobs/*.py
+```

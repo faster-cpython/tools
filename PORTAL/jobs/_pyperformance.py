@@ -8,7 +8,6 @@ import logging
 import os
 import os.path
 import re
-import shutil
 import sys
 from typing import (
     Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional,
@@ -407,7 +406,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     @classmethod
     def normalize_suite(cls, suite: SuitesType) -> SuiteType:
         if not suite:
-            return cls.SUITE_NOT_KNOWN
+            return cls.MULTI_SUITE
 
         if (
                 not isinstance(suite, str) and
@@ -1568,6 +1567,7 @@ class PyperfResults:
             results = self._copy()
             results._data = data
             results._by_suite = {suite: data['benchmarks'][0]}
+            results._uploadid = results.uploadid.copy(suite=suite)
             by_suite_resolved[suite] = results
         return by_suite_resolved
 
@@ -1583,13 +1583,13 @@ class PyperfResults:
     ) -> "PyperfResults":
         if self._resfile is None:
             raise ValueError
-        if os.path.exists(self._resfile.filename):
-            resfile = self._resfile.copy_to(filename, resultsroot,
-                                            compressed=compressed)
+        resfile: PyperfResultsFile
+        if isinstance(filename, PyperfResultsFile):
+            resfile = filename
         else:
             resfile = PyperfResultsFile(filename, resultsroot,
                                         compressed=compressed)
-            resfile.write(self)
+        resfile.write(self)
         copied = self._copy()
         copied._resfile = resfile
         return copied
@@ -1812,10 +1812,10 @@ class PyperfResultsMetadata:
             return parsed
 
     @property
-    def build(self) -> List[str]:
+    def build(self) -> Tuple[str, ...]:
         # XXX Add to PyperfUploadID?
         # XXX Extract from self._data?
-        return ['PGO', 'LTO']
+        return ('PGO', 'LTO')
 
     @property
     def host(self) -> _utils.HostInfo:
@@ -1908,7 +1908,7 @@ class PyperfResultsInfo(
     def from_values(
             cls,
             uploadid: Any,
-            build: Optional[_utils.ListOrStrType] = None,
+            build: Optional[_utils.SequenceOrStrType] = None,
             filename: Optional[str] = None,
             compared: Optional[_PyperfComparison] = None,
             resultsroot: Optional[str] = None,
@@ -1923,7 +1923,7 @@ class PyperfResultsInfo(
     def _from_values(
             cls,
             uploadid: Any,
-            build: Optional[List[str]],
+            build: Optional[Tuple[str, ...]],
             filename: Optional[str],
             compared: Optional[_PyperfComparison],
             resultsroot: Optional[str],
@@ -1947,18 +1947,18 @@ class PyperfResultsInfo(
     @classmethod
     def _normalize_build(
             cls,
-            build: Optional[_utils.ListOrStrType]
-    ) -> Optional[List[str]]:
+            build: Optional[_utils.SequenceOrStrType]
+    ) -> Optional[Tuple[str, ...]]:
         if not build:
             return None
         if isinstance(build, str):
             # "PGO,LTO"
             build = build.split(',')
         cls._validate_build_values(build)
-        return build
+        return tuple(build)
 
     @classmethod
-    def _validate_build_values(cls, values: List[str]) -> None:
+    def _validate_build_values(cls, values: _utils.SequenceOrStrType) -> None:
         for i, value in enumerate(values):
             if not value:
                 raise ValueError(f'build[{i}] is empty')
@@ -1969,7 +1969,7 @@ class PyperfResultsInfo(
     def __new__(
             cls,
             uploadid: Optional[PyperfUploadID],
-            build: Optional[List[str]] = None,
+            build: Optional[Tuple[str, ...]] = None,
             filename: Optional[str] = None,
             compared: Optional[_PyperfComparison] = None
     ):
@@ -2531,48 +2531,6 @@ class PyperfResultsFile:
             with _open(self._filename, 'w') as outfile:  # type: ignore[operator]
                 json.dump(data, outfile, indent=2)
 
-    def copy_to(
-            self,
-            filename: str,
-            resultsroot: Optional[str] = None,
-            *,
-            compressed: bool = False
-    ) -> "PyperfResultsFile":
-        copied: PyperfResultsFile
-        if isinstance(filename, PyperfResultsFile):
-            copied = filename
-            if (copied._resultsroot and resultsroot and
-                    resultsroot != copied._resultsroot):
-                raise ValueError(f'resultsroot mismatch ({resultsroot} != {copied._resultsroot})')
-        else:
-            if not filename:
-                filename = self._filename
-            elif os.path.isdir(filename):
-                raise NotImplementedError(filename)
-            elif not resultsroot and (not os.path.isabs(filename) or
-                                      filename.startswith(self._resultsroot)):
-                resultsroot = self._resultsroot
-            (filename, relfile, resultsroot,
-             ) = self._resolve_filename(filename, resultsroot, compressed)
-            if filename == self._filename:
-                raise ValueError(f'copying to self ({filename})')
-
-            cls = type(self)
-            copied = cls.__new__(cls)
-            copied._filename = filename
-            copied._relfile = relfile
-            copied._resultsroot = resultsroot
-
-        if copied.iscompressed == self.iscompressed:
-            if copied._filename == self._filename:
-                # XXX Fail?
-                pass
-            shutil.copyfile(self._filename, copied._filename)
-        else:
-            results = self.read()
-            copied.write(results)
-        return copied
-
     def compare(
             self,
             others: Sequence["PyperfResultsFile"]
@@ -2657,7 +2615,7 @@ class PyperfResultsDir:
             self,
             relfile: str,
             uploadid: PyperfUploadID,
-            build: Optional[_utils.ListOrStrType] = None,
+            build: Optional[_utils.SequenceOrStrType] = None,
             baseline: Optional[str] = None,
             mean: Optional[str] = None,
             *,
@@ -3002,7 +2960,9 @@ class PyperfResultsRepo(PyperfResultsStorage):
             raise ValueError(root)
         if isinstance(remote, str):
             remote_resolved = _utils.GitHubTarget.resolve(remote, root)
-        elif not isinstance(remote, _utils.GitHubTarget):
+        else:
+            remote_resolved = remote
+        if not isinstance(remote_resolved, _utils.GitHubTarget):
             raise TypeError(f'unsupported remote {remote!r}')
         raw = remote_resolved.ensure_local(root)
 #        raw.clean()

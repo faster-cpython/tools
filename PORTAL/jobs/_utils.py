@@ -27,7 +27,7 @@ sudo --login --user <username> ssh-import-id gh:<username>
 '''
 
 
-ListOrStrType = Union[str, List[str]]
+SequenceOrStrType = Union[str, Sequence[str]]
 
 
 USER = os.environ.get('USER', '').strip()
@@ -1418,8 +1418,8 @@ class LogSection(types.SimpleNamespace):
 # git utils
 
 GITHUB_REMOTE_URL = re.compile(r'''
-    ^(
-        (
+    ^(?:
+        (?:
             https://github\.com/
             ( [^/]+ )  # <https_org>
             /
@@ -1427,7 +1427,7 @@ GITHUB_REMOTE_URL = re.compile(r'''
             /?
          )
         |
-        (
+        (?:
             git@github\.com:
             ( [^/]+ )  # <ssh_org>
             /
@@ -1534,10 +1534,10 @@ class GitHubTarget(types.SimpleNamespace):
 
     @classmethod
     def from_url(cls, url, remote=None, upstream=None):
-        m = GITHUB_REMOTE_URL.match(value)
+        m = GITHUB_REMOTE_URL.match(url)
         if not m:
             return None
-        https_org, https_repo, ssh_org, ssh_repo = m
+        https_org, https_repo, ssh_org, ssh_repo = m.groups()
         org = https_org or ssh_org
         project = https_repo or ssh_repo
         ssh = bool(ssh_org)
@@ -1569,11 +1569,11 @@ class GitHubTarget(types.SimpleNamespace):
         if upstream and isinstance(upstream, str):
             upstream = cls.resolve(upstream, reporoot)
         self = cls.from_url(remote, upstream=upstream)
-        self.remote = cls._find(remote, reporoot)
+        vars(self)['remote'] = cls._find(remote, reporoot)
         if not self.remote:
             raise Exception(f'no remote matching {remote} found')
         if not upstream:
-            self.upstream = cls.from_remote_name('origin', reporoot)
+            vars(self)['upstream'] = cls.from_remote_name('origin', reporoot)
         return self
 
     @classmethod
