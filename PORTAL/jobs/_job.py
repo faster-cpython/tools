@@ -443,7 +443,7 @@ class Job:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
-                logger.warn(f'job {self._reqid} no longer (PID: {pid})')
+                logger.warning(f'job {self._reqid} no longer (PID: {pid})')
         # Kill the worker process, if running.
         agent = self._get_ssh_agent()
         text = self._worker.ssh.read(self._worker.fs.pidfile, agent=agent)

@@ -624,7 +624,7 @@ class ElapsedTimeWithUnits:
     @classmethod
     def _check_for_abnormal(cls, elapsed, units: str) -> None:
         if elapsed < 1 or elapsed >= 1000:
-            logger.warn('abnormal elapsed value {elapsed} {units}, consider normalizing')
+            logger.warning('abnormal elapsed value {elapsed} {units}, consider normalizing')
 
     def __new__(
             cls,
@@ -1028,7 +1028,7 @@ def read_file(filename, *, fail=True):
         if fail:
             raise  # re-raise
         if os.path.exists(filename):
-            logger.warn('could not load file %r', filename)
+            logger.warning('could not load file %r', filename)
         return None
 
 
@@ -1128,7 +1128,7 @@ class PIDFile:
                 raise InvalidPIDFileError(self._filename, text)
         elif invalid == 'remove':
             def handle_invalid(text):
-                logger.warn('removing invalid PID file (%s)', self._filename)
+                logger.warning('removing invalid PID file (%s)', self._filename)
                 self.remove()
                 return None
         else:
@@ -1152,7 +1152,7 @@ class PIDFile:
             if orphaned == 'fail':
                 raise OrphanedPIDFileError(self._filename, pid)
             elif orphaned == 'remove':
-                logger.warn('removing orphaned PID file (%s)', self._filename)
+                logger.warning('removing orphaned PID file (%s)', self._filename)
                 self.remove()
                 return None
             elif orphaned == 'ignore':
@@ -1184,14 +1184,14 @@ class PIDFile:
                 pidfile.write(f'{pid}')
             return pid
         except OSError as exc:
-            logger.warn('failed to create PID file (%s): %s', self._filename, exc)
+            logger.warning('failed to create PID file (%s): %s', self._filename, exc)
             return None
 
     def remove(self):
         try:
             os.unlink(self._filename)
         except FileNotFoundError:
-            logger.warn('lock file not found (%s)', self._filename)
+            logger.warning('lock file not found (%s)', self._filename)
 
 
 class LockFile:
@@ -2946,7 +2946,7 @@ class TopConfig(Config):
             filename = f'{dirname}/{cls.FILE}'
             if os.path.exists(filename):
                 if os.path.isdir(filename):
-                    logger.warn(f'expected file, found {filename}')
+                    logger.warning(f'expected file, found {filename}')
                 else:
                     return filename
         else:
@@ -3550,7 +3550,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         sock = os.environ.get('SSH_AUTH_SOCK')
         if sock:
             if not os.path.exists(sock):
-                logger.warn(f'auth sock {sock} missing')
+                logger.warning(f'auth sock {sock} missing')
         else:
             return None
 
@@ -3591,7 +3591,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         if m:
             sock, = m.groups()
             if not os.path.exists(sock):
-                logger.warn(f'auth sock {sock} missing')
+                logger.warning(f'auth sock {sock} missing')
         else:
             raise ValueError('SSH_AUTH_SOCK not found')
 
@@ -3634,9 +3634,9 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         if not self.auth_sock:
             raise ValueError('missing auth_sock')
         elif not os.path.exists(self.auth_sock):
-            logger.warn(f'auth sock {self.auth_sock} missing')
+            logger.warning(f'auth sock {self.auth_sock} missing')
         if not self.pid:
-            logger.warn(f'missing pid')
+            logger.warning(f'missing pid')
         else:
             validate_int(self.pid, name='pid')
 

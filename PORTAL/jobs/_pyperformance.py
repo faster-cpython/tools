@@ -1544,7 +1544,7 @@ class PyperfResults:
 #                by_suite[suite][name] = data
                 by_suite[normalized_suite].append(data)
         else:
-            logger.warn(f'empty results {self}')
+            logger.warning(f'empty results {self}')
         return by_suite
 
     def _iter_benchmarks(self) -> Iterator[Tuple[str, Any]]:
@@ -1720,7 +1720,7 @@ class PyperfResultsMetadata:
             else:
                 logger.debug(f'# {field} empty/missing in results metadata{context}; ignoring)')
         elif old != value:
-             logger.warn(f'replacing {field} in results metadata{context} ({old} -> {value})')
+             logger.warning(f'replacing {field} in results metadata{context} ({old} -> {value})')
              data[field] = value
              modified = True
         return old, modified
@@ -1740,12 +1740,12 @@ class PyperfResultsMetadata:
                     continue
                 if key in topdata:
                     if value != topdata[key]:
-                        logger.warn(f'top/per-benchmark metadata mismatch for {key} (top: {topdata[key]!r}, bench: {value!r}); ignoring')
+                        logger.warning(f'top/per-benchmark metadata mismatch for {key} (top: {topdata[key]!r}, bench: {value!r}); ignoring')
                 elif key in metadata:
                     if metadata[key] is None:
                         continue
                     if value != metadata[key]:
-                        logger.warn(f'per-benchmark metadata mismatch for {key} ({value!r} != {metadata[key]!r}); ignoring')
+                        logger.warning(f'per-benchmark metadata mismatch for {key} ({value!r} != {metadata[key]!r}); ignoring')
                         metadata[key] = None
                 else:
                     metadata[key] = value
@@ -2592,7 +2592,7 @@ class PyperfResultsFile:
             cwd=cwd,
         )
         if proc.returncode:
-            logger.warn(proc.stdout)
+            logger.warning(proc.stdout)
             return None
         filenames = [
             self._filename,
