@@ -3181,7 +3181,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
                 by_suite[suite] = []
             date, release, commit, host, mean = row
             relpath = self._raw.relpath(info.filename)
-            relpath = relpath.replace('\/', '/')
+            relpath = relpath.replace(r'\/', '/')
             date = f'[{date}]({relpath})'
             if not mean:
 #                assert info.isbaseline, repr(info)
