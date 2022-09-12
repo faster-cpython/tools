@@ -36,18 +36,15 @@ def test_splitting_by_suite(tmp_path):
 
     results_file = _pyperformance.PyperfResultsFile(str(input_file)).read()
 
-    results_repo.add(
-        results_file, branch=git_commit, push=False
-    )
+    results_repo.add(results_file, branch=git_commit, push=False)
 
-    with open(
-        repo_root / datadir / f"{base_filename}-pyperformance.json", "r"
-    ) as fd:
+    with open(repo_root / datadir / f"{base_filename}-pyperformance.json", "r") as fd:
         content = json.load(fd)
         assert len(content["benchmarks"]) == 59
 
-    with open(
-        repo_root / datadir / f"{base_filename}-pyston.json", "r"
-    ) as fd:
+    with open(repo_root / datadir / f"{base_filename}-pyston.json", "r") as fd:
         content = json.load(fd)
         assert len(content["benchmarks"]) == 3
+        assert ["json", "pycparser", "thrift"] == sorted(
+            [x["metadata"]["name"] for x in content["benchmarks"]]
+        )
