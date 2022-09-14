@@ -478,8 +478,8 @@ def get_utc_datetime(
             timestamp = datetime.datetime.fromisoformat(timestamp)
             timestamp = timestamp.astimezone(tzinfo)
         else:
-            m = re.match(r'''
-                (
+            m = re.match(
+                r'''(
                     \d{4} - \d\d - \d\d
                     (.)  # <sep>
                     \d\d : \d\d : \d\d
