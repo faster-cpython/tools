@@ -543,7 +543,7 @@ def cmd_queue_pop(jobs: Jobs) -> None:
     if not status:
         logger.warning('queued request (%s) not found', reqid)
     elif status is not Result.STATUS.PENDING:
-        logger.warning(f'expected "pending" status for queued request {reqid}, got {status}')
+        logger.warning('expected "pending" status for queued request %s, got %r', reqid, status)
         # XXX Give the option to force the status to "activated"?
     else:
         # XXX Set the status to "activated"?

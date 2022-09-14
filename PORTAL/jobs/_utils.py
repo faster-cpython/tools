@@ -478,10 +478,17 @@ def get_utc_datetime(
             timestamp = datetime.datetime.fromisoformat(timestamp)
             timestamp = timestamp.astimezone(tzinfo)
         else:
-            m = re.match(
-                r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)'
-                r'(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?',
-                timestamp
+            m = re.match(r'''
+                (
+                    \d{4} - \d\d - \d\d
+                    (.)  # <sep>
+                    \d\d : \d\d : \d\d
+                 )  # <body>
+                ( \. \d{3} (?: \d{3} )? )?  # <subzero>
+                ( [+-] \d\d :? \d\d .* )?  # <tz>
+                ''',
+                timestamp,
+                re.VERBOSE,
             )
             if not m:
                 if fail:
@@ -1380,8 +1387,7 @@ class LogSection(types.SimpleNamespace):
         try:
             return self._timestamp
         except AttributeError:
-            # TODO: get_utc_timestamp is undefined
-            self._timestamp = get_utc_timestamp(self.header.created)  # noqa
+            self._timestamp = get_utc_datetime(self.header.created)
             return self._timestamp
 
     def add_record(self, record):
@@ -1712,7 +1718,7 @@ class GitHubTarget(types.SimpleNamespace):
             reporoot = os.path.join(HOME, f'{self.org}-{self.project}')
         repo = GitLocalRepo.ensure(reporoot, origin)
         if origin.name != 'origin':
-            repo.remotes.add(remotename)
+            repo.remotes.add(origin.name)
         return repo
 
     def copy(self, ref=None):
