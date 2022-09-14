@@ -510,7 +510,7 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
     try:
         pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
-        for queued in jobs.queue:
+        for pos, queued in enumerate(jobs.queue):
             if queued == reqid:
                 logger.warning('%s was already queued', reqid)
                 break
@@ -903,13 +903,14 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     if not add_hidden:
         return (lambda *a, **k: None)
     sub = add_cmd('bench-host', help='Manage the host where benchmarks run')
-    sub.add_subparsers(dest='action')
+    benchhost = sub.add_subparsers(dest='action')  # noqa
     raise NotImplementedError
 
     def handle_args(args, parser):
         if args.cmd != 'bench-host':
             return
-        action = args.pop('action')
+        ns = vars(args)
+        action = ns.pop('action')
         args.cmd = f'bench-host-{action}'
     return handle_args
 
