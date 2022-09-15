@@ -11,8 +11,6 @@ from . import requests
 if TYPE_CHECKING:
     from . import _job, _workers
 
-# flake8: noqa
-
 
 FAKE_DELAY = 3
 
