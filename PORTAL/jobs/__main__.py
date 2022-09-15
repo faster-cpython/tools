@@ -1076,6 +1076,16 @@ def parse_args(
     return cmd, ns, cfgfile, user, verbosity, logfile, devmode
 
 
+def _should_ensure_next(cmd):
+    # In some cases the mechanism to run jobs from the queue may
+    # get interrupted, so we re-start it manually here if necessary.
+    if cmd in ('queue-info', 'compare', 'show'):
+        return False
+    if cmd.startswith('internal-'):
+        return False
+    return True
+
+
 def main(
         cmd: str,
         cmd_kwargs: MutableMapping[str, Any],
@@ -1111,9 +1121,7 @@ def main(
 
     jobs = Jobs(cfg, devmode=devmode)
 
-    if cmd != 'queue-info' and not cmd.startswith('internal-'):
-        # In some cases the mechanism to run jobs from the queue may
-        # get interrupted, so we re-start it manually here if necessary.
+    if _should_ensure_next(cmd):
         jobs.ensure_next()
 
     # Resolve the request ID, if any.
