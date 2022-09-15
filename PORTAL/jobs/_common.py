@@ -161,6 +161,7 @@ class JobFS(types.SimpleNamespace):
     """
 
     context: Optional[str] = None  # required in subclasses
+    _jobs: "JobsFS"
 
     @classmethod
     def from_jobsfs(
@@ -255,6 +256,13 @@ class JobFS(types.SimpleNamespace):
     @property
     def logfile(self) -> str:
         return self.work.logfile
+
+    @property
+    def jobs(self) -> "JobsFS":
+        try:
+            return self._jobs
+        except AttributeError:
+            raise NotImplementedError
 
     def look_up(self, name: str, subname: Optional[str] = None) -> Any:
         value = getattr(self, name)
