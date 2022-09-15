@@ -233,8 +233,6 @@ class Job:
 
         queue_log = _utils.quote_shell_str(queue_log)
 
-        _utils.check_shell_str(pfiles.request.root)
-        _utils.check_shell_str(pfiles.result.metadata)
         pidfile = _utils.quote_shell_str(pfiles.pidfile)
 
         _utils.check_shell_str(bfiles.request.root)
