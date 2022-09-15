@@ -3004,6 +3004,8 @@ class PyperfResultsRepo(PyperfResultsStorage):
             remote_resolved = _utils.GitHubTarget.resolve(remote, root)
         elif not isinstance(remote, _utils.GitHubTarget):
             raise TypeError(f'unsupported remote {remote!r}')
+        else:
+            remote_resolved = remote
         raw = remote_resolved.ensure_local(root)
 #        raw.clean()
 #        raw.switch_branch('main')
