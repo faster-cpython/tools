@@ -8,6 +8,7 @@ import logging
 import os
 import os.path
 import re
+import shutil
 import sys
 from typing import (
     Any, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional,
@@ -1437,6 +1438,7 @@ class PyperfResults:
         self._validate_data(data)
         self._data = data
         self._resfile = PyperfResultsFile.from_raw(resfile)
+        self._modified = False
 
     def _copy(self) -> "PyperfResults":
         cls = type(self)
@@ -1563,7 +1565,7 @@ class PyperfResults:
             results = self._copy()
             results._data = data
             results._by_suite = {suite: data['benchmarks'][0]}
-            results._uploadid = results.uploadid.copy(suite=suite)
+            results._modified = True
             by_suite_resolved[suite] = results
         return by_suite_resolved
 
@@ -1572,20 +1574,24 @@ class PyperfResults:
 
     def copy_to(
             self,
-            filename: str,
+            filename: Union["PyperfResultsFile", str],
             resultsroot: Optional[str] = None,
             *,
             compressed: bool = False
     ) -> "PyperfResults":
         if self._resfile is None:
             raise ValueError
-        resfile: PyperfResultsFile
         if isinstance(filename, PyperfResultsFile):
-            resfile = filename
+            filename_str = filename.filename
         else:
-            resfile = PyperfResultsFile(filename, resultsroot,
+            filename_str = filename
+        if not self._modified and os.path.exists(self._resfile.filename):
+            resfile = self._resfile.copy_to(filename_str, resultsroot,
+                                            compressed=compressed)
+        else:
+            resfile = PyperfResultsFile(filename_str, resultsroot,
                                         compressed=compressed)
-        resfile.write(self)
+            resfile.write(self)
         copied = self._copy()
         copied._resfile = resfile
         return copied
@@ -2526,6 +2532,48 @@ class PyperfResultsFile:
         else:
             with _open(self._filename, 'w') as outfile:  # type: ignore[operator]
                 json.dump(data, outfile, indent=2)
+
+    def copy_to(
+            self,
+            filename: str,
+            resultsroot: Optional[str] = None,
+            *,
+            compressed: bool = False
+    ) -> "PyperfResultsFile":
+        copied: PyperfResultsFile
+        if isinstance(filename, PyperfResultsFile):
+            copied = filename
+            if (copied._resultsroot and resultsroot and
+                    resultsroot != copied._resultsroot):
+                raise ValueError(f'resultsroot mismatch ({resultsroot} != {copied._resultsroot})')
+        else:
+            if not filename:
+                filename = self._filename
+            elif os.path.isdir(filename):
+                raise NotImplementedError(filename)
+            elif not resultsroot and (not os.path.isabs(filename) or
+                                      filename.startswith(self._resultsroot)):
+                resultsroot = self._resultsroot
+            (filename, relfile, resultsroot,
+             ) = self._resolve_filename(filename, resultsroot, compressed)
+            if filename == self._filename:
+                raise ValueError(f'copying to self ({filename})')
+
+            cls = type(self)
+            copied = cls.__new__(cls)
+            copied._filename = filename
+            copied._relfile = relfile
+            copied._resultsroot = resultsroot
+
+        if copied.iscompressed == self.iscompressed:
+            if copied._filename == self._filename:
+                # XXX Fail?
+                pass
+            shutil.copyfile(self._filename, copied._filename)
+        else:
+            results = self.read()
+            copied.write(results)
+        return copied
 
     def compare(
             self,
