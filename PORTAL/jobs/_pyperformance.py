@@ -1579,7 +1579,7 @@ class PyperfResults:
             filename: str,
             resultsroot: Optional[str] = None,
             *,
-            compressed: bool = False
+            compressed: Optional[bool] = None,
     ) -> "PyperfResults":
         if self._resfile is None:
             raise ValueError
@@ -2436,7 +2436,7 @@ class PyperfResultsFile:
             cls,
             filename: str,
             resultsroot: Optional[str],
-            compressed: bool
+            compressed: Optional[bool],
     ) -> Tuple[str, str, str]:
         if not filename:
             raise ValueError('missing filename')
@@ -2447,7 +2447,7 @@ class PyperfResultsFile:
     def _ensure_suffix(
             cls,
             filename: str,
-            compressed: bool
+            compressed: Optional[bool],
     ) -> str:
         if not filename.endswith((cls.SUFFIX, cls.COMPRESSED_SUFFIX)):
             raise ValueError(f'unsupported file suffix ({filename})')
@@ -2471,7 +2471,7 @@ class PyperfResultsFile:
             filename: str,
             resultsroot: Optional[str] = None,
             *,
-            compressed: bool = False
+            compressed: Optional[bool] = None,
     ):
         (filename, relfile, resultsroot,
          ) = self._resolve_filename(filename, resultsroot, compressed)
@@ -2536,7 +2536,7 @@ class PyperfResultsFile:
             filename: str,
             resultsroot: Optional[str] = None,
             *,
-            compressed: bool = False
+            compressed: Optional[bool] = None,
     ) -> "PyperfResultsFile":
         copied: PyperfResultsFile
         if isinstance(filename, PyperfResultsFile):
