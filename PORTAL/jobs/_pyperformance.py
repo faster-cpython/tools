@@ -210,7 +210,7 @@ class Benchmarks:
     def _load(self):
         for suite in self.SUITES:
             if suite not in self._cache:
-                self._cache = self._load_suite(suite)
+                self._cache[suite] = self._load_suite(suite)
         return self._cache
 
 

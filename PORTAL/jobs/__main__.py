@@ -510,7 +510,7 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
     try:
         pos = jobs.queue.push(reqid)
     except JobAlreadyQueuedError:
-        for pos, queued in enumerate(jobs.queue):
+        for pos, queued in enumerate(jobs.queue, 1):
             if queued == reqid:
                 logger.warning('%s was already queued', reqid)
                 break

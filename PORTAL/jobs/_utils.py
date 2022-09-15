@@ -1519,10 +1519,7 @@ def _git(cmd, args, cwd, cfg):
     return text
 
 
-_git_path = shutil.which('git')
-
-
-def _git_raw(cmd, args, cwd, cfg, *, GIT=_git_path):
+def _git_raw(cmd, args, cwd, cfg, *, GIT=shutil.which('git')):
     env = dict(os.environ)
     preargs = []
     if cfg:
