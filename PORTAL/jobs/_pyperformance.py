@@ -406,7 +406,7 @@ class PyperfUploadID(namedtuple('PyperfUploadName',
     @classmethod
     def normalize_suite(cls, suite: SuitesType) -> SuiteType:
         if not suite:
-            return cls.MULTI_SUITE
+            return cls.SUITE_NOT_KNOWN
 
         if (
                 not isinstance(suite, str) and
@@ -1496,14 +1496,10 @@ class PyperfResults:
         try:
             return self._uploadid
         except AttributeError:
-            if self._resfile.uploadid:
-                # XXX Compare with what we get from the metadata?
-                self._uploadid = self._resfile.uploadid
-            else:
-                self._uploadid = PyperfUploadID.from_metadata(
-                    self.metadata,
-                    suite=self.suites,
-                )
+            self._uploadid = PyperfUploadID.from_metadata(
+                self.metadata,
+                suite=self.suites,
+            )
         return self._uploadid
 
     @property

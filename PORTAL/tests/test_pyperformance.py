@@ -35,6 +35,7 @@ def test_splitting_by_suite(tmp_path):
         assert len(content["benchmarks"]) == 62
 
     results_file = _pyperformance.PyperfResultsFile(str(input_file)).read()
+    assert results_file.suite == _pyperformance.PyperfUploadID.MULTI_SUITE
 
     results_repo.add(results_file, branch=git_commit, push=False)
 

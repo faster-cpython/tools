@@ -3067,6 +3067,14 @@ class HostInfo(namedtuple('HostInfo', 'id name dnsname cpu platform')):
             metadata['dnsname'] = self.dnsname
         return metadata
 
+    def __lt__(self, other):
+        if isinstance(other, HostInfo):
+            return super().__lt__(self, other)
+        elif isinstance(other, str):
+            return self.id < other
+        else:
+            raise TypeError(f"Can't compare HostInfo to {type(other)}")
+
 
 class PlatformInfo(namedtuple('PlatformInfo', 'kernel')):
 
