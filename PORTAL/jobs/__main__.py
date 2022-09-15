@@ -1079,7 +1079,7 @@ def parse_args(
 def _should_ensure_next(cmd):
     # In some cases the mechanism to run jobs from the queue may
     # get interrupted, so we re-start it manually here if necessary.
-    if cmd == 'queue-info':
+    if cmd in ('queue-info', 'compare'):
         return False
     if cmd.startswith('internal-'):
         return False
