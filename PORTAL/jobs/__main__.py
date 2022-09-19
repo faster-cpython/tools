@@ -669,6 +669,11 @@ def configure_root_logger(
         *,
         maxlevel: int = logging.CRITICAL,
 ) -> None:
+    # pytest does its own monkey-patching of logging that isn't compatible with
+    # this.
+    if "pytest" in sys.modules:
+        return
+
     logger = logging.getLogger()
 
     level = max(1,  # 0 disables it, so we use the next lowest.
@@ -916,9 +921,14 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
 
 
 def parse_args(
-        argv: Sequence[str] = sys.argv[1:],
-        prog: str = sys.argv[0]
+        argv: Optional[Sequence[str]] = None,
+        prog: Optional[str] = None
 ) -> Tuple[str, Dict[str, Any], str, str, int, str, bool]:
+
+    if argv is None:
+        argv = sys.argv[1:]
+    if prog is None:
+        prog = sys.argv[0]
 
     ##########
     # Resolve dev mode.
@@ -1173,7 +1183,14 @@ def main(
         run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
 
 
-if __name__ == '__main__':
-    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args()
+def _parse_and_main(
+    argv: Optional[Sequence[str]] = None,
+    prog: Optional[str] = None
+):
+    cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args(argv, prog)
     configure_root_logger(verbosity, logfile)
     main(cmd, cmd_kwargs, cfgfile, user, devmode)
+
+
+if __name__ == '__main__':
+    _parse_and_main()

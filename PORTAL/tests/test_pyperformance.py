@@ -1,12 +1,11 @@
 import json
-from pathlib import Path
 import re
 
 
 from jobs import _pyperformance, _utils
 
 
-DATA_ROOT = Path(__file__).parent / "data"
+from .helpers import DATA_ROOT, NEW_FILENAME, IDEAS_GIT_URL
 
 
 def test_splitting_by_suite(tmp_path):
@@ -16,17 +15,16 @@ def test_splitting_by_suite(tmp_path):
     correct number of benchmarks.
     """
 
-    git_url = "https://github.com/faster-cpython/ideas"
     git_commit = "4cd693d"  # main on 2022-09-09
     datadir = "benchmark-results"
     repo_root = tmp_path / "ideas"
-    base_filename = "cpython-3.11.0b1-8d32a5c8c4-fc_linux-b2cf916db80e"
+    base_filename = NEW_FILENAME.stem
 
-    github_target = _utils.GitHubTarget.from_url(git_url)
+    github_target = _utils.GitHubTarget.from_url(IDEAS_GIT_URL)
     github_target.ensure_local(str(repo_root))
 
     results_repo = _pyperformance.PyperfResultsRepo.from_remote(
-        git_url, str(repo_root), datadir=datadir
+        IDEAS_GIT_URL, str(repo_root), datadir=datadir
     )
 
     input_file = DATA_ROOT / f"{base_filename}.json"
@@ -58,17 +56,16 @@ def test_paths_in_readme(tmp_path):
     Make sure the paths to benchmarks in the README.md files are correct.
     """
 
-    git_url = "https://github.com/faster-cpython/ideas"
     git_commit = "4cd693d"  # main on 2022-09-09
     datadir = "benchmark-results"
     repo_root = tmp_path / "ideas"
-    base_filename = "cpython-3.11.0b1-8d32a5c8c4-fc_linux-b2cf916db80e"
+    base_filename = NEW_FILENAME.stem
 
-    github_target = _utils.GitHubTarget.from_url(git_url)
+    github_target = _utils.GitHubTarget.from_url(IDEAS_GIT_URL)
     github_target.ensure_local(str(repo_root))
 
     results_repo = _pyperformance.PyperfResultsRepo.from_remote(
-        git_url, str(repo_root), datadir=datadir
+        IDEAS_GIT_URL, str(repo_root), datadir=datadir
     )
 
     input_file = DATA_ROOT / f"{base_filename}.json"
