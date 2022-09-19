@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 
 
 from jobs import _pyperformance, _utils
@@ -50,3 +51,48 @@ def test_splitting_by_suite(tmp_path):
         assert ["json", "pycparser", "thrift"] == sorted(
             [x["metadata"]["name"] for x in content["benchmarks"]]
         )
+
+
+def test_paths_in_readme(tmp_path):
+    """
+    Make sure the paths to benchmarks in the README.md files are correct.
+    """
+
+    git_url = "https://github.com/faster-cpython/ideas"
+    git_commit = "4cd693d"  # main on 2022-09-09
+    datadir = "benchmark-results"
+    repo_root = tmp_path / "ideas"
+    base_filename = "cpython-3.11.0b1-8d32a5c8c4-fc_linux-b2cf916db80e"
+
+    github_target = _utils.GitHubTarget.from_url(git_url)
+    github_target.ensure_local(str(repo_root))
+
+    results_repo = _pyperformance.PyperfResultsRepo.from_remote(
+        git_url, str(repo_root), datadir=datadir
+    )
+
+    input_file = DATA_ROOT / f"{base_filename}.json"
+
+    results_file = _pyperformance.PyperfResultsFile(str(input_file)).read()
+
+    results_repo.add(results_file, branch=git_commit, push=False)
+
+    find_url_to_results = re.compile(
+        r"\]\((.*cpython-.*-(?:(?:pyperformance)|(?:pyston))\.json)\)"
+    )
+
+    # The top-level README.md file should have links that include
+    # `benchmark-results`
+    with open(repo_root / "README.md", "r") as fd:
+        content = fd.read()
+        for url in find_url_to_results.finditer(content):
+            url = url.groups()[0]
+            assert url.startswith(f"{datadir}/cpython-")
+
+    # The `benchmark-results/README.md` file should have links that don't
+    # include `benchmark-results`
+    with open(repo_root / datadir / "README.md", "r") as fd:
+        content = fd.read()
+        for url in find_url_to_results.finditer(content):
+            url = url.groups()[0]
+            assert url.startswith("cpython-")
