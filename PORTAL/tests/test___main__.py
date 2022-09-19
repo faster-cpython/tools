@@ -32,7 +32,7 @@ def test_compare(tmp_path, capsys):
     )
 
     expected = """
-| Geometric mean          | (ref)                                                           | 1.3068x slower                                                |
+| Geometric mean          | (ref)                                                           | 1.31x slower                                                  |
 +-------------------------+-----------------------------------------------------------------+---------------------------------------------------------------+
 
 Benchmark hidden because not significant (1): pickle
@@ -40,9 +40,6 @@ Ignored benchmarks (6) of cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperf
     """
 
     captured = capsys.readouterr()
-
-    print(repr(captured.out.strip()[-len(expected.strip()):]))
-    print(repr(expected.strip()))
 
     assert captured.out.strip().endswith(expected.strip())
 
