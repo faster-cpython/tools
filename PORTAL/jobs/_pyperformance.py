@@ -1502,7 +1502,16 @@ class PyperfResults:
                 self.metadata,
                 suite=self.suites,
             )
-        return self._uploadid
+            assert (
+                getattr(self, "_modified", False) or
+                self._resfile.uploadid is None or
+                self._uploadid == self._resfile.uploadid or
+                (
+                    str(self._uploadid._replace(suite=PyperfUploadID.SUITE_NOT_KNOWN)) ==
+                    str(self._resfile.uploadid._replace(suite=PyperfUploadID.SUITE_NOT_KNOWN))
+                )
+            ), (self._uploadid, self._resfile.uploadid)
+            return self._uploadid
 
     @property
     def suite(self) -> str:
