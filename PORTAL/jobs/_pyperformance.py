@@ -3148,7 +3148,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             index: PyperfResultsIndex,
             filename: str
     ) -> str:
-        table_lines = self._render_markdown(index)
+        table_lines = self._render_markdown(index, filename)
         MARKDOWN_START = '<!-- START results table -->'
         MARKDOWN_END = '<!-- END results table -->'
         filename = self._raw.resolve(filename)
@@ -3175,11 +3175,17 @@ class PyperfResultsRepo(PyperfResultsStorage):
             outfile.write(text)
         return filename
 
-    def _render_markdown(self, index: PyperfResultsIndex) -> Iterator[str]:
+    def _render_markdown(
+        self,
+        index: PyperfResultsIndex,
+        output_filename: str
+    ) -> Iterator[str]:
         def render_row(row):
             row = (f' {v} ' for v in row)
             return f'| {"|".join(row)} |'
         columns = 'date release commit host mean'.split()
+
+        output_dir = os.path.dirname(os.path.join(self._raw.root, output_filename))
 
         rows = index.as_rendered_rows(columns)
         by_suite: Dict[SuiteType, List[List[str]]] = {}
@@ -3188,7 +3194,7 @@ class PyperfResultsRepo(PyperfResultsStorage):
             if suite not in by_suite:
                 by_suite[suite] = []
             date, release, commit, host, mean = row
-            relpath = self._raw.relpath(info.filename)
+            relpath = os.path.relpath(info.filename, output_dir)
             relpath = relpath.replace(r'\/', '/')
             date = f'[{date}]({relpath})'
             if not mean:
