@@ -209,10 +209,8 @@ class Benchmarks:
 
     def _load(self):
         for suite in self.SUITES:
-            try:
-                names = self._cache[suite]
-            except KeyError:
-                names = self._cache[suite] = self._load_suite(suite)
+            if suite not in self._cache:
+                self._cache[suite] = self._load_suite(suite)
         return self._cache
 
 
@@ -847,7 +845,9 @@ class PyperfComparison(_PyperfComparison):
         super().__init__(source, byname)
         baseline = PyperfComparisonBaseline.from_raw(baseline, fail=True)
         if self._byname and sorted(self._byname) != sorted(baseline.byname):
-            raise ValueError(f'mismatch with baseline ({sorted(self._byname)} != {sorted(baseline.byname)})')
+            b1 = sorted(self._byname)
+            b2 = sorted(baseline.byname)
+            raise ValueError(f'mismatch with baseline ({b1} != {b2})')
         if mean:
             mean = _utils.ElapsedTimeComparison.parse(mean, fail=True)
 
@@ -1049,7 +1049,6 @@ class PyperfTable:
                 except StopIteration:
                     continue
                 if not headerdiv.startswith('+='):
-                #if headerdiv != header.div:
                     raise ValueError('bad table text')
                 break
         else:
@@ -1060,7 +1059,7 @@ class PyperfTable:
         for line in lines:
             try:
                 row = row_cls.parse(line, fail=True)
-            except PyperfTableRowUnsupportedLineError as exc:
+            except PyperfTableRowUnsupportedLineError:
                 if not line:
                     # end-of-table
                     break
@@ -1115,7 +1114,7 @@ class PyperfTable:
             lines: Iterator[str],
             required: bool = True
     ) -> Tuple[Optional[List[str]], Optional[str]]:
-        # Ignored benchmarks (2) of benchmark-results/cpython-3.10.4-9d38120e33-fc_linux-42d6dd4409cb.json: genshi_text, genshi_xml
+        # Ignored benchmarks (2) of cpython-3.10.4-9d38120e33-fc_linux-42d6dd4409cb.json: genshi_text, genshi_xml
         prefix = r'Ignored benchmarks \((\d+)\) of \w+.*\w'
         names, line = cls._parse_names_list(line, lines, prefix)
         if not names and required:
@@ -1339,6 +1338,7 @@ class PyperfTableRow(_PyperfTableRowBase):
             raise TypeError('not supported for subclasses')
         if not header:
             raise ValueError('missing header')
+
         class _PyperfTableRow(PyperfTableRow):
             @classmethod
             def parse(  # type: ignore[override]
@@ -1731,9 +1731,9 @@ class PyperfResultsMetadata:
             else:
                 logger.debug(f'# {field} empty/missing in results metadata{context}; ignoring)')
         elif old != value:
-             logger.warning(f'replacing {field} in results metadata{context} ({old} -> {value})')
-             data[field] = value
-             modified = True
+            logger.warning(f'replacing {field} in results metadata{context} ({old} -> {value})')
+            data[field] = value
+            modified = True
         return old, modified
 
     @classmethod
@@ -1848,7 +1848,6 @@ class PyperfResultsMetadata:
 
     @property
     def compatid(self) -> str:
-        raw = self.host.as_metadata()
         return PyperfUploadID.build_compatid(
             self.host,
             self._data['performance_version'],
@@ -2195,9 +2194,9 @@ class PyperfResultsInfo(
 
 class PyperfResultsIndex:
 
-#    iter_all()
-#    add()
-#    ensure_means()
+    # iter_all()
+    # add()
+    # ensure_means()
 
     def __init__(
             self,
@@ -2597,8 +2596,6 @@ class PyperfResultsFile:
             *(optional),
             '--table',
             self._relfile,
-#            *(_utils.strict_relpath(o.filename, cwd)
-#              for o in others),
             *(o._relfile for o in others),
             cwd=cwd,
         )
@@ -2607,11 +2604,9 @@ class PyperfResultsFile:
             return None
         filenames = [
             self._filename,
-#            *(os.path.join(cwd, o.filename) for o in others),
             *(o.filename for o in others),
         ]
         return PyperfComparisons.parse_table(proc.stdout, filenames)
-#        return PyperfTable.parse(proc.stdout, filenames)
 
 
 class PyperfResultsDir:
@@ -3197,8 +3192,6 @@ class PyperfResultsRepo(PyperfResultsStorage):
             relpath = relpath.replace(r'\/', '/')
             date = f'[{date}]({relpath})'
             if not mean:
-#                assert info.isbaseline, repr(info)
-#                assert not mean, repr(mean)
                 mean = PyperfComparisonValue.BASELINE
             assert '3.10.4' not in release or mean == '(ref)', repr(mean)
             row = [date, release, commit, host, mean]

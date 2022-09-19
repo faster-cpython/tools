@@ -152,6 +152,7 @@ def validate_int(
         fail()
     return None  # unreachable
 
+
 def normalize_int(
         value: Any,
         name: Optional[str] = None,
@@ -477,7 +478,18 @@ def get_utc_datetime(
             timestamp = datetime.datetime.fromisoformat(timestamp)
             timestamp = timestamp.astimezone(tzinfo)
         else:
-            m = re.match(r'(\d{4}-\d\d-\d\d(.)\d\d:\d\d:\d\d)(\.\d{3}(?:\d{3})?)?([+-]\d\d:?\d\d.*)?', timestamp)
+            m = re.match(
+                r'''(
+                    \d{4} - \d\d - \d\d
+                    (.)  # <sep>
+                    \d\d : \d\d : \d\d
+                 )  # <body>
+                ( \. \d{3} (?: \d{3} )? )?  # <subzero>
+                ( [+-] \d\d :? \d\d .* )?  # <tz>
+                ''',
+                timestamp,
+                re.VERBOSE,
+            )
             if not m:
                 if fail:
                     raise NotImplementedError(repr(timestamp))
@@ -653,7 +665,7 @@ class ElapsedTimeWithUnits:
 
     def __str__(self):
         # XXX Limit to 2 decimal places?
-        return f'{self._elapsed} {self_units}'
+        return f'{self._elapsed} {self.units}'
 
     def __hash__(self):
         return hash((self._elapsed, self._units))
@@ -685,7 +697,7 @@ class ElapsedTimeWithUnits:
             for units in candidates:
                 if units == self._units:
                     break
-            for units in candidates:
+            for _ in candidates:
                 elapsed /= 1000
                 if elapsed < 1000:
                     break
@@ -697,7 +709,7 @@ class ElapsedTimeWithUnits:
             for units in candidates:
                 if units == self._units:
                     break
-            for units in candidates:
+            for _ in candidates:
                 elapsed *= 1000
                 if elapsed >= 1:
                     break
@@ -1024,7 +1036,7 @@ def read_file(filename, *, fail=True):
     try:
         with open(filename) as infile:
             return infile.read()
-    except OSError as exc:
+    except OSError:
         if fail:
             raise  # re-raise
         if os.path.exists(filename):
@@ -1123,7 +1135,7 @@ class PIDFile:
         if invalid is None:
             def handle_invalid(text):
                 return text
-        if invalid == 'fail':
+        elif invalid == 'fail':
             def handle_invalid(text):
                 raise InvalidPIDFileError(self._filename, text)
         elif invalid == 'remove':
@@ -1375,7 +1387,7 @@ class LogSection(types.SimpleNamespace):
         try:
             return self._timestamp
         except AttributeError:
-            self._timestamp = get_utc_timestamp(self.header.created)
+            self._timestamp = get_utc_datetime(self.header.created)
             return self._timestamp
 
     def add_record(self, record):
@@ -1394,7 +1406,7 @@ class LogSection(types.SimpleNamespace):
             )
             record.created = self.header.created
             record.msecs = 0
-        elif not isinstance(header, logging.LogRecord):
+        elif not isinstance(record, logging.LogRecord):
             raise TypeError(f'expected logging.LogRecord, got {record!r}')
         self.body.append(record)
 
@@ -1561,7 +1573,7 @@ class GitHubTarget(types.SimpleNamespace):
     @classmethod
     def from_remote_name(cls, remote, reporoot):
         if not looks_like_git_name(remote):
-            raise ValueError(f'invalid remote {name!r}')
+            raise ValueError(f'invalid remote {remote!r}')
         return cls._from_remote_name(remote, reporoot)
 
     @classmethod
@@ -1650,7 +1662,6 @@ class GitHubTarget(types.SimpleNamespace):
 
     @property
     def archive_url(self):
-        ref = self.ref or 'main'
         return f'{self.url}/archive/{self.ref or "main"}.tar.gz'
 
     @property
@@ -1704,7 +1715,7 @@ class GitHubTarget(types.SimpleNamespace):
             reporoot = os.path.join(HOME, f'{self.org}-{self.project}')
         repo = GitLocalRepo.ensure(reporoot, origin)
         if origin.name != 'origin':
-            repo.remotes.add(remote)
+            repo.remotes.add(origin.name)
         return repo
 
     def copy(self, ref=None):
@@ -1989,7 +2000,7 @@ class GitLocalRepo(GitRepo):
         return self
 
     @classmethod
-    def _parse(cls, repostr):
+    def _parse(cls, raw):
         # XXX Make sure it looks like a dirname.
         return cls(raw)
 
@@ -2861,7 +2872,7 @@ class Config(types.SimpleNamespace):
     def _load_includes(cls, includes, seen):
         if isinstance(includes, str):
             includes = [includes]
-        for i, filename in enumerate(includes):
+        for filename in includes:
             if not filename:
                 continue
             filename = os.path.abspath(os.path.expanduser(filename))
@@ -3053,8 +3064,8 @@ class HostInfo(namedtuple('HostInfo', 'id name dnsname cpu platform')):
             os_name = self.platform.os_name
             if not os_name:
                 raise NotImplementedError
-            self._os_name = name
-            return name
+            self._os_name = os_name
+            return os_name
 
     def as_metadata(self):
         metadata = {
@@ -3106,7 +3117,7 @@ class PlatformInfo(namedtuple('PlatformInfo', 'kernel')):
              )
          )
         '''
-    REGEX = re.compile(rf'^({KERNEL})$', re.VERBOSE)
+    REGEX = re.compile(rf'^({KERNEL})$', re.VERBOSE)  # noqa: F821
 
     @classmethod
     def from_raw(cls, raw, *, fail=None):
@@ -3153,7 +3164,7 @@ class PlatformInfo(namedtuple('PlatformInfo', 'kernel')):
 
     def _parse_kernel(self):
         kernelstr = self.kernel.lower()
-        m = re.match(rf'^({KERNEL})$', kernelstr, re.VERBOSE)
+        m = re.match(rf'^({self.KERNEL})$', kernelstr, re.VERBOSE)
         if not m:
             raise ValueError(f'unsupported kernel str{self.kernel!r}')
         self._handle_parsed_kernel(m.groups())
@@ -3252,6 +3263,7 @@ class CPUInfo(namedtuple('CPUInfo', 'model arch cores')):
         count = max(0, int(count)) if count else 0
 
         cores_by_id = {}
+
         def add_core(coreid):
             core = cores_by_id[coreid] = {
                 'id': coreid,
@@ -3260,15 +3272,18 @@ class CPUInfo(namedtuple('CPUInfo', 'model arch cores')):
                 'affinity': None,
             }
             return core
+
         if count:
             for i in range(count):
                 add_core(i)
+
             def ensure_core(coreid):
                 if coreid >= count:
                     raise ValueError(f'expected {count} cores, got {coreid+1}')
                 return cores_by_id[coreid]
         else:
             def ensure_core(coreid):
+                nonlocal count
                 if coreid < count:
                     return cores_by_id[coreid]
                 count = coreid + 1
@@ -3371,7 +3386,7 @@ class CPUInfo(namedtuple('CPUInfo', 'model arch cores')):
         self = super().__new__(
             cls,
             model=model,
-            arch = arch or None,
+            arch=arch or None,
             cores=tuple(CPUCoreInfo.from_raw(c) for c in cores or ()),
         )
         return self
@@ -3455,9 +3470,9 @@ class CPUCoreInfo(namedtuple('CPUCoreInfo', 'id config frequency affinity')):
            'cpu_config': self.config,
         }
         if self.frequency:
-           metadata['cpu_freq'] = self.frequency
+            metadata['cpu_freq'] = self.frequency
         if self.affinity:
-           metadata['cpu_affinity'] = True
+            metadata['cpu_affinity'] = True
         return metadata
 
 
@@ -3537,7 +3552,7 @@ def parse_email_address(addr):
     if not addr:
         raise ValueError('missing addr')
     elif isinstance(addr, str):
-        m = re.match(f'^({EMAIL_ADDR})|(\S.*) <({EMAIL_ADDR})>$', addr)
+        m = re.match(rf'^({EMAIL_ADDR})|(\S.*) <({EMAIL_ADDR})>$', addr)
         if not m:
             return None
         addr1, name2, addr2 = m.groups()
@@ -3644,7 +3659,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
         elif not os.path.exists(self.auth_sock):
             logger.warning(f'auth sock {self.auth_sock} missing')
         if not self.pid:
-            logger.warning(f'missing pid')
+            logger.warning('missing pid')
         else:
             validate_int(self.pid, name='pid')
 
@@ -3814,18 +3829,18 @@ class SSHClient(SSHCommands):
         return run_fg(*argv, env=env)
 
     def push(self, source, target, *, agent=None):
-        argv = super().push(*args)
+        argv = super().push(source, target)
         env = agent.apply_env() if agent else None
         return run_fg(*argv, env=env)
 
     def pull(self, source, target, *, agent=None):
-        argv = super().push(*args)
+        argv = super().pull(source, target)
         env = agent.apply_env() if agent else None
         return run_fg(*argv, env=env)
 
     def read(self, filename, *, agent=None):
         if not filename:
-            raise ValueError(f'missing filename')
+            raise ValueError('missing filename')
         proc = self.run_shell(f'cat {filename}', agent=agent)
         if proc.returncode != 0:
             return None
@@ -3967,7 +3982,6 @@ class VersionRelease(namedtuple('VersionRelease', 'level serial')):
         return self.next_serial(maxserial)
 
     def render(self):
-        level = self.LEVELS[self.level]
         return f'{self.LEVELS[self.level]}{self.serial}'
 
 
@@ -4031,7 +4045,7 @@ class ReleasePlan:
         else:
             for entry in data:
                 if isinstance(entry, (tuple, list)):
-                    level, info= entry
+                    level, info = entry
                     if level not in bylevel:
                         raise ValueError(f'unsupported release level {level!r}')
                     info = ReleaseInfo.from_raw(info)
@@ -4266,7 +4280,7 @@ class Version(namedtuple('Version', 'major minor micro release')):
     def next(self):
         if self.release:
             return self.next_release()
-        elif micro:
+        elif self.micro:
             return self.next_micro()
         else:
             return self.next_minor()
@@ -4372,9 +4386,9 @@ class CPythonVersion(Version):
     @classmethod
     def _validate_extra(cls, verstr, extra, major, minor, micro, release):
         if extra == '+':
-            if not self.release:
+            if not release:
                 raise ValueError('missing release (for dev version)')
-            elif self.release.is_dev:
+            elif release.is_dev:
                 raise ValueError('dev release not supported for dev version')
         elif extra:
             raise ValueError(f'unexpected data {extra!r}')
@@ -4503,7 +4517,7 @@ def get_slice(raw):
         start = stop = None
         if raw < 0:
             start = raw
-        elif criteria > 0:
+        elif raw > 0:
             stop = raw
         return slice(start, stop)
     elif isinstance(raw, str):
@@ -4514,7 +4528,7 @@ def get_slice(raw):
         else:
             raise NotImplementedError(repr(raw))
     else:
-        raise TypeError(f'expected str, got {criteria!r}')
+        raise TypeError(f'expected str or int, got {raw!r}')
 
 
 def as_jsonable(data):
@@ -4652,7 +4666,7 @@ class Metadata(types.SimpleNamespace):
             fields.extend((getattr(self, '_extra', None) or {}).keys())
         # TODO: "optional" should be used in the loop to be smarter
         # about how to handle AttributeError
-        optional = set(self.OPTIONAL or ())
+        # optional = set(self.OPTIONAL or ())
         data = {}
         for field in fields:
             try:
