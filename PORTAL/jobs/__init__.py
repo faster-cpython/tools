@@ -95,7 +95,7 @@ class Jobs:
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
         self._store = _pyperformance.FasterCPythonResults.from_remote(
-            root=cfg.results_repo_root
+            root=getattr(cfg, "results_repo_root", None)
         )
 
     def __str__(self):
