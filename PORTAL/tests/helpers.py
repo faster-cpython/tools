@@ -27,4 +27,12 @@ def setup_temp_env(tmp_path: Path):
 
     cfg_file.write_text(json.dumps(content))
 
+    requests = (tmp_path / "BENCH" / "REQUESTS")
+    requests.mkdir(parents=True)
+    queues = (tmp_path / "BENCH" / "QUEUES")
+    queues.mkdir(parents=True)
+    for workerid in ("linux", "mac"):
+        path = queues / workerid
+        path.mkdir()
+
     return ["--config", str(cfg_file)]

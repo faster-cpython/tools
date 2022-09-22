@@ -1,3 +1,6 @@
+import json
+
+
 import pytest
 
 
@@ -11,12 +14,13 @@ def test_compare(tmp_path, capsys):
     # This is just a simple smoke test
 
     __main__._parse_and_main(
-        helpers.setup_temp_env(tmp_path) + [
+        helpers.setup_temp_env(tmp_path)
+        + [
             "compare",
             "cpython-3.12.0a0-c20186c397-fc_linux-b2cf916db80e-pyperformance",
             "cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperformance",
         ],
-        __file__
+        __file__,
     )
 
     expected_start = """
@@ -41,10 +45,54 @@ def test_show(tmp_path):
 
     with pytest.raises(SystemExit) as exc:
         __main__._parse_and_main(
-            helpers.setup_temp_env(tmp_path) + [
+            helpers.setup_temp_env(tmp_path)
+            + [
                 "show",
             ],
-            __file__
+            __file__,
         )
 
     assert exc.value.code == 1
+
+
+def test_run_bench(tmp_path, monkeypatch):
+    # Just a basic smoke test
+
+    def dummy(*args, **kwargs):
+        return
+
+    monkeypatch.setitem(__main__.COMMANDS, "attach", dummy)
+
+    __main__._parse_and_main(
+        helpers.setup_temp_env(tmp_path)
+        + [
+            "run-bench",
+            "--worker",
+            "mac",
+            "--benchmarks",
+            "deepcopy",
+            "caf63ec5",
+        ],
+        __file__,
+    )
+
+    queue = json.loads(
+        (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json").read_text()
+    )
+
+    assert len(queue["jobs"]) == 1
+    assert queue["jobs"][0].endswith("-mac")
+    assert queue["jobs"][0].startswith("req-compile-bench")
+
+    request_dir = list((tmp_path / "BENCH" / "REQUESTS").iterdir())[0]
+
+    files = sorted(x.name for x in request_dir.iterdir())
+
+    assert [
+        "benchmarks.manifest",
+        "pyperformance.ini",
+        "request.json",
+        "results.json",
+        "run.sh",
+        "send.sh",
+    ] == files

@@ -1,5 +1,6 @@
 import json
 import logging
+import os.path
 import sys
 import types
 from typing import (
@@ -130,6 +131,9 @@ class JobQueueSnapshot(JobQueueData):
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
 
+    def workerid(self) -> str:
+        return os.path.basename(os.path.dirname(self.datafile))
+
 
 class JobQueue:
 
@@ -203,7 +207,7 @@ class JobQueue:
         else:
             jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
-                logger.warning('job queue at %s has bad entries', self._datafile)
+                logger.warning('job queue at %s has bad entries %s', self._datafile, data['jobs'])
                 fixed = True
             data['jobs'] = [r for r in jobs if r]
         # Save and return the data.
@@ -307,7 +311,7 @@ class JobQueue:
             data.jobs.insert(0, reqid)
             self._save(data)
 
-    def move(self, reqid: RequestID, position: int, relative: str) -> int:
+    def move(self, reqid: RequestID, position: int, relative: Optional[str]) -> int:
         with self._lock:
             data = self._load()
             if reqid not in data.jobs:

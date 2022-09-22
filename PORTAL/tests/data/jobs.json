@@ -1,8 +1,15 @@
 {
     "local_user": "benchmarking",
-    "worker": {
-        "user": "benchmarking",
-        "ssh_host": "localhost",
-        "ssh_port": 22222
+    "workers": {
+        "linux": {
+            "user": "benchmarking",
+            "ssh_host": "localhost",
+            "ssh_port": 22222
+        },
+        "mac": {
+            "user": "benchmarking",
+            "ssh_host": "localhost",
+            "ssh_port": 22244
+        }
     }
 }

@@ -287,12 +287,14 @@ class JobFS(types.SimpleNamespace):
         return value
 
     def copy(self) -> "JobFS":
-        return type(self)(
+        result = type(self)(
             str(self.request),
             str(self.result),
             str(self.work),
             self.reqid,
         )
+        result.context = self.context
+        return result
 
 
 class JobsFS(_utils.FSTree):
@@ -305,7 +307,7 @@ class JobsFS(_utils.FSTree):
 
     @classmethod
     def from_user(cls, user: str) -> "JobsFS":
-        return cls(f'/home/{user}/BENCH')
+        return cls(f'~{user}/BENCH')
 
     @classmethod
     def from_raw(
@@ -337,6 +339,7 @@ class JobsFS(_utils.FSTree):
         self.requests = _utils.FSTree(f'{root}/REQUESTS')
         self.work = _utils.FSTree(self.requests.root)
         self.results = _utils.FSTree(self.requests.root)
+        self.queues = _utils.FSTree(f'{root}/QUEUES')
 
     def __str__(self):
         return self.root
@@ -354,4 +357,6 @@ class JobsFS(_utils.FSTree):
         return self.JOBFS.from_jobsfs(self, reqid)
 
     def copy(self) -> "JobsFS":
-        return type(self)(self.root)
+        result = type(self)(self.root)
+        result.context = self.context
+        return result
