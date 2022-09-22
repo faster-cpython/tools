@@ -921,8 +921,8 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
 
 
 def parse_args(
-        argv: Sequence[str],
-        prog: str
+        argv: Sequence[str] = sys.argv[1:],
+        prog: str = sys.argv[0]
 ) -> Tuple[str, Dict[str, Any], str, str, int, str, bool]:
 
     ##########
