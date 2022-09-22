@@ -1,0 +1,8 @@
+{
+    "local_user": "benchmarking",
+    "worker": {
+        "user": "benchmarking",
+        "ssh_host": "localhost",
+        "ssh_port": 22222
+    }
+}

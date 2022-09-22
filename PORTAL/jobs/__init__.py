@@ -24,8 +24,8 @@ class NoRunningJobError(JobsError):
 class JobsConfig(_utils.TopConfig):
     """The jobs-related configuration used on the portal host."""
 
-    FIELDS = ['local_user', 'worker', 'data_dir']
-    OPTIONAL = ['data_dir']
+    FIELDS = ['local_user', 'worker', 'data_dir', 'results_repo_root']
+    OPTIONAL = ['data_dir', 'results_repo_root']
 
     FILE = 'jobs.json'
     CONFIG_DIRS = [
@@ -36,6 +36,7 @@ class JobsConfig(_utils.TopConfig):
                  local_user: str,
                  worker: Optional[Union[str, _workers.WorkerConfig]],
                  data_dir: Optional[str] = None,
+                 results_repo_root: Optional[str] = None,
                  **ignored
                  ):
         if not local_user:
@@ -54,6 +55,7 @@ class JobsConfig(_utils.TopConfig):
             local_user=local_user,
             worker=worker_resolved,
             data_dir=data_dir or None,
+            results_repo_root=results_repo_root
         )
 
     @property
@@ -92,7 +94,9 @@ class Jobs:
         self._devmode = devmode
         self._fs = self.FS(cfg.data_dir)
         self._workers = _workers.Workers.from_config(cfg)
-        self._store = _pyperformance.FasterCPythonResults.from_remote()
+        self._store = _pyperformance.FasterCPythonResults.from_remote(
+            root=getattr(cfg, "results_repo_root", None)
+        )
 
     def __str__(self):
         return self._fs.root
