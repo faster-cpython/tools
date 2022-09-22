@@ -3236,9 +3236,6 @@ class FasterCPythonResults(PyperfResultsRepo):
     DATADIR = 'benchmark-results'
     BASELINE = '3.10.4'
 
-    # Used to override with a temp directory from tests
-    _DEFAULT_ROOT = None
-
     @classmethod
     def from_remote(  # type: ignore[override]
             cls,
@@ -3248,8 +3245,6 @@ class FasterCPythonResults(PyperfResultsRepo):
     ) -> "PyperfResultsRepo":
         if not remote:
             remote = cls.REMOTE
-        if root is None:
-            root = cls._DEFAULT_ROOT
         return super().from_remote(remote, root, baseline=baseline)
 
     @classmethod

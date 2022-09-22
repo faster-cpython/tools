@@ -4,26 +4,14 @@ import pytest
 from jobs import __main__, _pyperformance, _utils
 
 
-from .helpers import DEFAULT_ARGS, IDEAS_GIT_URL
-
-
-def _setup_repo_root(tmp_path):
-    repo_root = tmp_path / "ideas"
-
-    github_target = _utils.GitHubTarget.from_url(IDEAS_GIT_URL)
-    github_target.ensure_local(str(repo_root))
-
-    # Monkey-patch
-    _pyperformance.FasterCPythonResults._DEFAULT_ROOT = str(repo_root)
+from . import helpers
 
 
 def test_compare(tmp_path, capsys):
     # This is just a simple smoke test
 
-    _setup_repo_root(tmp_path)
-
     __main__._parse_and_main(
-        DEFAULT_ARGS + [
+        helpers.setup_temp_env(tmp_path) + [
             "compare",
             "cpython-3.12.0a0-c20186c397-fc_linux-b2cf916db80e-pyperformance",
             "cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperformance",
@@ -51,11 +39,9 @@ Ignored benchmarks (6) of cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperf
 def test_show(tmp_path):
     # This is just a simple smoke test
 
-    _setup_repo_root(tmp_path)
-
     with pytest.raises(SystemExit) as exc:
         __main__._parse_and_main(
-            DEFAULT_ARGS + [
+            helpers.setup_temp_env(tmp_path) + [
                 "show",
             ],
             __file__
