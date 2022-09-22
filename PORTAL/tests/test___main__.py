@@ -84,9 +84,11 @@ def test_run_bench(tmp_path, monkeypatch):
     assert queue["jobs"][0].endswith("-mac")
     assert queue["jobs"][0].startswith("req-compile-bench")
 
-    request_dir = list((tmp_path / "BENCH" / "REQUESTS").iterdir())[0]
+    requests_dir = list((tmp_path / "BENCH" / "REQUESTS").iterdir())
 
-    files = sorted(x.name for x in request_dir.iterdir())
+    assert len(requests_dir) == 1
+
+    files = sorted(x.name for x in requests_dir[0].iterdir())
 
     assert [
         "benchmarks.manifest",
