@@ -669,11 +669,6 @@ def configure_root_logger(
         *,
         maxlevel: int = logging.CRITICAL,
 ) -> None:
-    # pytest does its own monkey-patching of logging that isn't compatible with
-    # this.
-    if "pytest" in sys.modules:
-        return
-
     logger = logging.getLogger()
 
     level = max(1,  # 0 disables it, so we use the next lowest.
@@ -681,6 +676,11 @@ def configure_root_logger(
                     maxlevel - verbosity * 10))
     logger.setLevel(level)
     #logger.propagate = False
+
+    # pytest does its own monkey-patching of logging that isn't compatible with
+    # this.
+    if "pytest" in sys.modules:
+        return
 
     assert not logger.handlers, logger.handlers
     handler: Any
