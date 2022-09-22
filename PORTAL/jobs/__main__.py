@@ -134,7 +134,6 @@ def cmd_request_compile_bench(
     assert reqid.kind == 'compile-bench', reqid
     reqroot = jobs.fs.resolve_request(reqid).request.root
     logger.info('generating request files in %s...', reqroot)
-    reqid._workerid = worker
     job = jobs.create(
         reqid,
         kind_kwargs=dict(
