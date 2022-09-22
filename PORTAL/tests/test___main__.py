@@ -4,7 +4,7 @@ import json
 import pytest
 
 
-from jobs import __main__, _pyperformance, _utils
+from jobs import __main__
 
 
 from . import helpers
