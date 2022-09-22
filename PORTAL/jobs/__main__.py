@@ -1179,7 +1179,7 @@ def main(
 
 
 def _parse_and_main(
-    argv: Sequence[str] = sys.argv[-1],
+    argv: Sequence[str] = sys.argv[1:],
     prog: str = sys.argv[0]
 ):
     cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args(argv, prog)
