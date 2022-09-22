@@ -921,14 +921,9 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
 
 
 def parse_args(
-        argv: Optional[Sequence[str]] = None,
-        prog: Optional[str] = None
+        argv: Sequence[str],
+        prog: str
 ) -> Tuple[str, Dict[str, Any], str, str, int, str, bool]:
-
-    if argv is None:
-        argv = sys.argv[1:]
-    if prog is None:
-        prog = sys.argv[0]
 
     ##########
     # Resolve dev mode.
@@ -1184,8 +1179,8 @@ def main(
 
 
 def _parse_and_main(
-    argv: Optional[Sequence[str]] = None,
-    prog: Optional[str] = None
+    argv: Optional[Sequence[str]] = sys.argv[-1],
+    prog: Optional[str] = sys.argv[0]
 ):
     cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args(argv, prog)
     configure_root_logger(verbosity, logfile)
