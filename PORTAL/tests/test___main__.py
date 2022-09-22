@@ -31,7 +31,10 @@ def test_compare(tmp_path, capsys):
         __file__
     )
 
-    expected = """
+    expected_start = """
+| Benchmark               | cpython-3.12.0a0-c20186c397-fc_linux-b2cf916db80e-pyperformance | cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperformance |
+    """
+    expected_end = """
 | Geometric mean          | (ref)                                                           | 1.31x slower                                                  |
 +-------------------------+-----------------------------------------------------------------+---------------------------------------------------------------+
 
@@ -41,7 +44,8 @@ Ignored benchmarks (6) of cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperf
 
     captured = capsys.readouterr()
 
-    assert captured.out.strip().endswith(expected.strip())
+    assert expected_start.strip() in captured.out
+    assert captured.out.strip().endswith(expected_end.strip())
 
 
 def test_show(tmp_path):
