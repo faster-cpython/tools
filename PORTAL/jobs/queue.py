@@ -110,6 +110,7 @@ class JobQueueData(types.SimpleNamespace):
 class JobQueueSnapshot(JobQueueData):
     def __init__(
             self,
+            id: str,
             jobs: Sequence[RequestID],
             paused: bool,
             locked: LockInfoType,
@@ -118,6 +119,7 @@ class JobQueueSnapshot(JobQueueData):
             logfile: str
     ):
         super().__init__(tuple(jobs), paused)
+        self.id = id
         self.locked = locked
         self.datafile = datafile
         self.lockfile = lockfile
@@ -147,7 +149,8 @@ class JobQueue:
     @classmethod
     def from_fstree(
             cls,
-            fs: Union[str, JobQueueFS, _common.JobsFS]
+            fs: Union[str, JobQueueFS, _common.JobsFS],
+            id: Optional[str] = None,
     ) -> "JobQueue":
         queuefs: _utils.FSTree
         if isinstance(fs, str):
@@ -159,17 +162,20 @@ class JobQueue:
         else:
             raise TypeError(f'expected JobQueueFS, got {fs!r}')
         self = cls(
+            id=id or os.path.basename(queuefs.root),
             datafile=queuefs.data,
             lockfile=queuefs.lock,
             logfile=queuefs.log,
         )
         return self
 
-    def __init__(self, datafile: str, lockfile: str, logfile: str):
+    def __init__(self, id: str, datafile: str, lockfile: str, logfile: str):
+        _utils.validate_str(id, 'id')
         _utils.validate_str(datafile, 'datafile')
         _utils.validate_str(lockfile, 'lockfile')
         _utils.validate_str(logfile, 'logfile')
 
+        self._id = id
         self._datafile = datafile
         self._lock = _utils.LockFile(lockfile)
         self._logfile = logfile
@@ -238,6 +244,10 @@ class JobQueue:
             _utils.write_json(data, outfile)
 
     @property
+    def id(self):
+        return self._id
+
+    @property
     def snapshot(self) -> JobQueueSnapshot:
         data = self._load()
         locked: LockInfoType
@@ -250,6 +260,7 @@ class JobQueue:
         else:
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
+            id=self._id,
             datafile=self._datafile,
             lockfile=self._lock.filename,
             logfile=self._logfile,
