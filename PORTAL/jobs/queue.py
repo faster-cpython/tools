@@ -37,34 +37,40 @@ else:
 
 
 class JobQueueError(Exception):
-    MSG = 'some problem with the job queue'
+    MSG = 'some problem with job queue {id!r}'
 
-    def __init__(self, msg: Optional[str] = None):
-        super().__init__(msg or self.MSG)
+    def __init__(self, queueid: str, msg: Optional[str] = None):
+        msg = (msg or self.MSG).format(id=id)
+        super().__init__(msg)
+        self.queueid = queueid
 
 
 class JobQueuePausedError(JobQueueError):
-    MSG = 'job queue paused'
+    MSG = 'job queue{id} paused'
 
 
 class JobQueueNotPausedError(JobQueueError):
-    MSG = 'job queue not paused'
+    MSG = 'job queue{id} not paused'
 
 
 class JobQueueEmptyError(JobQueueError):
-    MSG = 'job queue is empty'
+    MSG = 'job queue{id} is empty'
 
 
 class QueuedJobError(_job.JobError, JobQueueError):
-    MSG = 'some problem with job {reqid}'
+    MSG = 'some problem with job {reqid} (queue {id})'
+
+    def __init__(self, queueid: str, reqid: RequestID):
+        _job.JobError.__init__(reqid, msg, id=queueid)
+        self.queueid = queueid
 
 
 class JobNotQueuedError(QueuedJobError):
-    MSG = 'job {reqid} is not in the queue'
+    MSG = 'job {reqid} is not in queue {id}'
 
 
 class JobAlreadyQueuedError(QueuedJobError):
-    MSG = 'job {reqid} is already in the queue'
+    MSG = 'job {reqid} is already in queue {id}'
 
 
 class JobQueueFS(_utils.FSTree):
@@ -278,7 +284,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if data.paused:
-                raise JobQueuePausedError()
+                raise JobQueuePausedError(self._id)
             data.paused = True
             self._save(data)
 
@@ -286,7 +292,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if not data.paused:
-                raise JobQueueNotPausedError()
+                raise JobQueueNotPausedError(self._id)
             data.paused = False
             self._save(data)
 
@@ -294,7 +300,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if reqid in data.jobs:
-                raise JobAlreadyQueuedError(reqid)
+                raise JobAlreadyQueuedError(self._id, reqid)
 
             data.jobs.append(reqid)
             self._save(data)
@@ -305,9 +311,9 @@ class JobQueue:
             data = self._load()
             if data.paused:
                 if not forceifpaused:
-                    raise JobQueuePausedError()
+                    raise JobQueuePausedError(self._id)
             if not data.jobs:
-                raise JobQueueEmptyError()
+                raise JobQueueEmptyError(self._id)
 
             reqid = data.jobs.pop(0)
             self._save(data)
@@ -326,7 +332,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if reqid not in data.jobs:
-                raise JobNotQueuedError(reqid)
+                raise JobNotQueuedError(self._id, reqid)
 
             old = data.jobs.index(reqid)
             if relative == '+':
@@ -348,7 +354,7 @@ class JobQueue:
             data = self._load()
 
             if reqid not in data.jobs:
-                raise JobNotQueuedError(reqid)
+                raise JobNotQueuedError(self._id, reqid)
 
             data.jobs.remove(reqid)
             self._save(data)
