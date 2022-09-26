@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class JobError(_common.JobsError):
     MSG = 'job {reqid} has a problem'
 
-    def __init__(self, reqid: RequestID, msg: Optional[str] = None):
-        msg = (msg or self.MSG).format(reqid=str(reqid))
+    def __init__(self, reqid: RequestID, msg: Optional[str] = None, **fmtkwargs):
+        msg = (msg or self.MSG).format(reqid=str(reqid), **fmtkwargs)
         super().__init__(msg)
         self.reqid = reqid
 
