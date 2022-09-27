@@ -67,21 +67,21 @@ class JobKind:
     def set_request_fs(
             self,
             fs: "JobRequestFS",
-            context: str
+            context: str,
     ) -> None:
         raise NotImplementedError
 
     def set_work_fs(
             self,
             fs: "JobWorkFS",
-            context: Optional[str]
+            context: str,
     ) -> None:
         raise NotImplementedError
 
     def set_result_fs(
             self,
             fs: "JobResultFS",
-            context: Optional[str]
+            context: str,
     ) -> None:
         raise NotImplementedError
 
