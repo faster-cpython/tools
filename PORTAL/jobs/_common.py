@@ -29,6 +29,16 @@ class JobsError(RuntimeError):
         super().__init__(msg or self.MSG)
 
 
+def validate_context(context: str):
+    """Fail if the given value isn't a valid context name."""
+    if not context:
+        raise ValueError('missing context')
+    elif not isinstance(context, str):
+        raise TypeError(f'unsupported context {context!r}')
+    elif not context.replace('-', '_').isidentifier():
+        raise ValueError(f'invalid context {context!r}')
+
+
 ##################################
 # request kinds
 
