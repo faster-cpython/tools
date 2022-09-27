@@ -40,13 +40,11 @@ class WorkerConfig(_utils.Config):
 class WorkerJobFS(_common.JobFS):
     """The file structure of a job's data on a worker."""
 
-    context = 'job-worker'
+    CONTEXT = 'job-worker'
 
 
 class WorkerJobsFS(_common.JobsFS):
     """The file structure of the jobs data on a worker."""
-
-    context = 'job-worker'
 
     JOBFS = WorkerJobFS
 

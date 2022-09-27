@@ -47,7 +47,7 @@ class JobAlreadyFinishedError(JobFinishedError):
 class JobFS(_common.JobFS):
     """The file structure of a job's data."""
 
-    context = 'portal'
+    CONTEXT = 'portal'
 
     def _custom_init(self):
         work = self.work

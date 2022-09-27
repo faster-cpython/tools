@@ -29,6 +29,16 @@ class JobsError(RuntimeError):
         super().__init__(msg or self.MSG)
 
 
+def validate_context(context: str):
+    """Fail if the given value isn't a valid context name."""
+    if not context:
+        raise ValueError('missing context')
+    elif not isinstance(context, str):
+        raise TypeError(f'unsupported context {context!r}')
+    elif not context.replace('-', '_').isidentifier():
+        raise ValueError(f'invalid context {context!r}')
+
+
 ##################################
 # request kinds
 
@@ -57,21 +67,21 @@ class JobKind:
     def set_request_fs(
             self,
             fs: "JobRequestFS",
-            context: str
+            context: str,
     ) -> None:
         raise NotImplementedError
 
     def set_work_fs(
             self,
             fs: "JobWorkFS",
-            context: Optional[str]
+            context: str,
     ) -> None:
         raise NotImplementedError
 
     def set_result_fs(
             self,
             fs: "JobResultFS",
-            context: Optional[str]
+            context: str,
     ) -> None:
         raise NotImplementedError
 
@@ -160,7 +170,8 @@ class JobFS(types.SimpleNamespace):
     This serves as the base class for context-specific subclasses.
     """
 
-    context: Optional[str] = None  # required in subclasses
+    CONTEXT: str = ''  # required in subclasses
+
     _jobs: "JobsFS"
 
     @classmethod
@@ -188,6 +199,10 @@ class JobFS(types.SimpleNamespace):
             work: Union[str, JobWorkFS],
             reqid: Optional[requests.ToRequestIDType] = None
     ):
+        if type(self) is JobFS:
+            raise TypeError('JobFS must be subclassed')
+        validate_context(self.CONTEXT)
+
         request_fs = JobRequestFS.from_raw(request)
         result_fs = JobResultFS.from_raw(result)
         work_fs = JobWorkFS.from_raw(work)
@@ -212,13 +227,10 @@ class JobFS(types.SimpleNamespace):
 
         self._custom_init()
 
-        if self.context is None:
-            raise ValueError(f"No context set on {self}")
-
         jobkind = resolve_job_kind(reqid_obj.kind)
-        jobkind.set_request_fs(request_fs, self.context)
-        jobkind.set_work_fs(work_fs, self.context)
-        jobkind.set_result_fs(result_fs, self.context)
+        jobkind.set_request_fs(request_fs, self.CONTEXT)
+        jobkind.set_work_fs(work_fs, self.CONTEXT)
+        jobkind.set_result_fs(result_fs, self.CONTEXT)
 
     def _custom_init(self) -> None:
         pass
@@ -228,6 +240,10 @@ class JobFS(types.SimpleNamespace):
 
     def __fspath__(self):
         return str(self.request)
+
+    @property
+    def context(self):
+        return self.CONTEXT
 
     @property
     def requestsroot(self) -> str:
@@ -285,8 +301,6 @@ class JobsFS(_utils.FSTree):
     This serves as the base class for context-specific subclasses.
     """
 
-    context: Optional[str] = None  # required in subclasses
-
     JOBFS = JobFS
 
     @classmethod
@@ -312,6 +326,10 @@ class JobsFS(_utils.FSTree):
             raise TypeError(raw)
 
     def __init__(self, root: Optional[str] = None):
+        if type(self) is JobsFS:
+            raise TypeError('JobsFS must be subclassed')
+        validate_context(self.JOBFS.CONTEXT)
+
         if not root:
             root = '~/BENCH'
         super().__init__(root)
@@ -322,6 +340,15 @@ class JobsFS(_utils.FSTree):
 
     def __str__(self):
         return self.root
+
+    def __setattr__(self, name, value):
+        if name == 'JOBFS':
+            raise AttributeError('JOBFS is read-only')
+        return super().__setattr__(name, value)
+
+    @property
+    def context(self):
+        return self.JOBFS.CONTEXT
 
     def resolve_request(self, reqid: requests.ToRequestIDType) -> JobFS:
         return self.JOBFS.from_jobsfs(self, reqid)
