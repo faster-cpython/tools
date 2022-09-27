@@ -46,8 +46,6 @@ class WorkerJobFS(_common.JobFS):
 class WorkerJobsFS(_common.JobsFS):
     """The file structure of the jobs data on a worker."""
 
-    CONTEXT = 'job-worker'
-
     JOBFS = WorkerJobFS
 
     def __init__(self, root=None):
