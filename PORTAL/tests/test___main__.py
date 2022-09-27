@@ -83,11 +83,10 @@ def test_run_bench(tmp_path, monkeypatch):
     assert reqid.endswith("-mac")
     assert reqid.startswith("req-compile-bench")
 
-    requests_dir = list((tmp_path / "BENCH" / "REQUESTS").iterdir())
+    reqdir, = list((tmp_path / "BENCH" / "REQUESTS").iterdir())
+    assert reqdir.name == reqid
 
-    assert len(requests_dir) == 1
-
-    files = sorted(x.name for x in requests_dir[0].iterdir())
+    files = sorted(x.name for x in reqdir.iterdir())
 
     assert [
         "benchmarks.manifest",
