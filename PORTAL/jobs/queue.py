@@ -60,8 +60,13 @@ class JobQueueEmptyError(JobQueueError):
 class QueuedJobError(_job.JobError, JobQueueError):
     MSG = 'some problem with job {reqid} (queue {id})'
 
-    def __init__(self, queueid: str, reqid: RequestID):
-        _job.JobError.__init__(reqid, msg, id=queueid)
+    def __init__(
+        self,
+        queueid: str,
+        reqid: RequestID,
+        msg: Optional[str] = None
+    ):
+        _job.JobError.__init__(self, reqid, msg, id=queueid)
         self.queueid = queueid
 
 
@@ -74,7 +79,7 @@ class JobAlreadyQueuedError(QueuedJobError):
 
 
 class JobQueueFS(_utils.FSTree):
-    """The file structure of the job queue data."""
+    """The file structure of the job queue data for a single worker."""
 
     def __init__(
             self,
@@ -90,6 +95,18 @@ class JobQueueFS(_utils.FSTree):
 
     def __fspath__(self):
         return self.data
+
+
+class JobQueuesFS(_utils.FSTree):
+    """The file structure of all of the job queues."""
+    def resolve_queue(self, queueid: str) -> JobQueueFS:
+        return JobQueueFS(os.path.join(self.root, queueid))
+
+    def __str__(self) -> str:
+        return self.root
+
+    def __fspath__(self) -> str:
+        return self.root
 
 
 class JobQueueData(types.SimpleNamespace):
@@ -125,7 +142,7 @@ class JobQueueSnapshot(JobQueueData):
             logfile: str
     ):
         super().__init__(tuple(jobs), paused)
-        self.id = id
+        self._id = id
         self.locked = locked
         self.datafile = datafile
         self.lockfile = lockfile
@@ -139,8 +156,8 @@ class JobQueueSnapshot(JobQueueData):
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
 
-    def workerid(self) -> str:
-        return os.path.basename(os.path.dirname(self.datafile))
+    def id(self) -> str:
+        return self._id
 
 
 class JobQueue:
@@ -366,3 +383,21 @@ class JobQueue:
             return
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
+
+
+class JobQueues:
+    @classmethod
+    def from_config(cls, cfg: "JobsConfig", fs: JobQueuesFS):
+        return cls(cfg, fs)
+
+    def __init__(self, cfg: "JobsConfig", fs: JobQueuesFS):
+        self._cfg = cfg
+        self._fs = fs
+
+    def get_queue(self, queueid: str) -> JobQueue:
+        assert queueid in self._cfg.workers, queueid
+        return JobQueue.from_fstree(self._fs.resolve_queue(queueid))
+
+    def iter_queues(self) -> Iterator[JobQueue]:
+        for queueid in self._cfg.workers.keys():
+            yield JobQueue.from_fstree(self._fs.resolve_queue(queueid))

@@ -3,7 +3,7 @@ import os
 import os.path
 import sys
 from typing import (
-    Any, Callable, Iterable, Iterator, Mapping, MutableMapping, Optional,
+    Any, Callable, Iterator, Mapping, MutableMapping, Optional,
     Sequence, Tuple, Type, Union
 )
 
@@ -63,6 +63,14 @@ class JobsConfig(_utils.TopConfig):
             results_repo_root=results_repo_root
         )
 
+    @property
+    def queues(self):
+        try:
+            return self._queues
+        except AttributeError:
+            self._queues = {w: {} for w in self.workers}
+            return self._queues
+
 
 class PortalJobsFS(_common.JobsFS):
     JOBFS = _job.JobFS
@@ -83,14 +91,13 @@ class PortalFS(_utils.FSTree):
 
         self.jobs = PortalJobsFS(self.root)
 
-        self._queue = self.jobs.queues
-
     @property
     def currentjob(self) -> str:
         return self.jobs.requests.current
 
-    def queue(self, workerid: str) -> queue_mod.JobQueueFS:
-        return queue_mod.JobQueueFS(os.path.join(self._queue, workerid))
+    @property
+    def queues(self) -> queue_mod.JobQueuesFS:
+        return queue_mod.JobQueuesFS(self.jobs.queues)
 
 
 class Jobs:
@@ -126,16 +133,9 @@ class Jobs:
         """Files on the portal host."""
         return self._fs.jobs.copy()
 
-    def queue(self, workerid: str) -> queue_mod.JobQueue:
-        try:
-            return self._queue
-        except AttributeError:
-            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue(workerid))
-            return self._queue
-
-    def iter_queues(self) -> Iterable[queue_mod.JobQueue]:
-        for workerid in self.cfg.workers.keys():
-            yield self.queue(workerid)
+    @property
+    def queues(self) -> queue_mod.JobQueues:
+        return queue_mod.JobQueues.from_config(self._cfg, self._fs.queues)
 
     def iter_all(self) -> Iterator[_job.Job]:
         for name in os.listdir(str(self._fs.jobs.requests)):
@@ -216,7 +216,12 @@ class Jobs:
         if kind_kwargs is None:
             kind_kwargs = {}
         job = self._get(reqid)
-        job._create(kind_kwargs, pushfsattrs, pullfsattrs, self._fs.queue(reqid.workerid).log)
+        job._create(
+            kind_kwargs,
+            pushfsattrs,
+            pullfsattrs,
+            self._fs.queues.resolve_queue(reqid.workerid).log
+        )
         return job
 
     def activate(self, reqid: RequestID) -> _job.Job:
@@ -259,7 +264,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for queued in self.queue(reqid.workerid).snapshot:
+                for queued in self.queues.get_queue(reqid.workerid).snapshot:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2
@@ -277,7 +282,7 @@ class Jobs:
         pid = job.wait_until_started(timeout)
         return job, pid
 
-    def ensure_next(self, workerid: str) -> None:
+    def ensure_next(self, queueid: str) -> None:
         logger.debug('Making sure a job is running, if possible')
         # XXX Return (queued job, already running job).
         job = self.get_current()
@@ -285,7 +290,7 @@ class Jobs:
             logger.debug('A job is already running (and will kick off the next one from the queue)')
             # XXX Check the pidfile.
             return
-        queue = self.queue(workerid).snapshot
+        queue = self.queues.get_queue(queueid).snapshot
         if queue.paused:
             logger.debug('No job is running but the queue is paused')
             return
@@ -301,11 +306,11 @@ class Jobs:
             [
                 sys.executable, '-u', '-m', 'jobs', '-v',
                 'internal-run-next',
-                workerid,
+                queueid,
                 '--config', cfgfile,
                 #'--logfile', self._fs.queue.log,
             ],
-            logfile=self._fs.queue(workerid).log,
+            logfile=self._fs.queues.resolve_queue(queueid).log,
             cwd=_common.SYS_PATH_ENTRY,
         )
 

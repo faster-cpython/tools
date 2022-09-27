@@ -86,9 +86,9 @@ def cmd_list(
     logger.info(f'Currently running: {current if current else "none"}')
     logger.info('')
 
-    for queue in jobs.iter_queues():
+    for queue in jobs.queues.iter_queues():
         queue_snapshot = queue.snapshot
-        logger.info(f'Queued jobs: {queue_snapshot.workerid} {len(queue_snapshot)}')
+        logger.info(f'Queued jobs: {queue_snapshot.id} {len(queue_snapshot)}')
         if queue_snapshot:
             logger.info('-' * 40)
             for i, reqid in enumerate(queue_snapshot, 1):
@@ -175,7 +175,7 @@ def cmd_run(
     if not reqid:
         raise NotImplementedError
 
-    if not jobs.queue(reqid.workerid).paused:
+    if not jobs.queues.get_queue(reqid.workerid).paused:
         cmd_queue_push(jobs, reqid)
     else:
         job = _cmd_run(jobs, reqid)
@@ -348,7 +348,7 @@ def cmd_finish_run(jobs: Jobs, reqid: RequestID) -> None:
 
 
 # internal
-def cmd_run_next(jobs: Jobs, workerid: str) -> None:
+def cmd_run_next(jobs: Jobs, queueid: str) -> None:
     logentry = LogSection.from_title('Running next queued job')
     print()
     for line in logentry.render():
@@ -356,7 +356,7 @@ def cmd_run_next(jobs: Jobs, workerid: str) -> None:
     print()
 
     try:
-        reqid = jobs.queue(workerid).pop()
+        reqid = jobs.queues.get_queue(queueid).pop()
     except JobQueuePausedError:
         logger.info('done (job queue is paused)')
     except JobQueueEmptyError:
@@ -377,19 +377,19 @@ def cmd_run_next(jobs: Jobs, workerid: str) -> None:
             traceback.print_exc()
             logger.info('')
             logger.info('trying next job...')
-            cmd_run_next(jobs, workerid)
+            cmd_run_next(jobs, queueid)
             return
 
         if not status:
             logger.warning('queued request (%s) not found', reqid)
             logger.info('trying next job...')
-            cmd_run_next(jobs, workerid)
+            cmd_run_next(jobs, queueid)
             return
         elif status is not Result.STATUS.PENDING:
             logger.warning('expected "pending" status for queued request %s, got %r', reqid, status)
             # XXX Give the option to force the status to "activated"?
             logger.info('trying next job...')
-            cmd_run_next(jobs, workerid)
+            cmd_run_next(jobs, queueid)
             return
 
         # We're okay to run the job.
@@ -403,14 +403,14 @@ def cmd_run_next(jobs: Jobs, workerid: str) -> None:
                 # XXX Check the pidfile?
             else:
                 logger.warning('another job is already running, adding %s back to the queue', reqid)
-                jobs.queue(workerid).unpop(reqid)
+                jobs.queues.get_queue(queueid).unpop(reqid)
     except KeyboardInterrupt:
         cmd_cancel(jobs, reqid, _status=Result.STATUS.PENDING)
         raise  # re-raise
 
 
 def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
-    for queue in jobs.iter_queues():
+    for queue in jobs.queues.iter_queues():
         _queue = queue.snapshot
         queued = _queue.jobs
         paused = _queue.paused
@@ -418,7 +418,7 @@ def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
         if withlog:
             log = list(_queue.read_log())
 
-        print(f'Job Queue ({_queue.workerid}):')
+        print(f'Job Queue ({_queue.id}):')
         print(f'  size:     {len(queued)}')
         #print(f'  max size: {maxsize}')
         print(f'  paused:   {paused}')
@@ -458,9 +458,9 @@ def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
 
 
 def cmd_queue_list(jobs: Jobs) -> None:
-    for queue in jobs.iter_queues():
+    for queue in jobs.queues.iter_queues():
         _queue = queue.snapshot
-        print(f'Queue ({_queue.workerid})')
+        print(f'Queue ({_queue.id})')
 
         if _queue.paused:
             logger.warning('job queue is paused')
@@ -476,23 +476,23 @@ def cmd_queue_list(jobs: Jobs) -> None:
         print()
 
 
-def cmd_queue_pause(jobs: Jobs, workerid: str) -> None:
+def cmd_queue_pause(jobs: Jobs, queueid: str) -> None:
     try:
-        jobs.queue(workerid).pause()
+        jobs.queues.get_queue(queueid).pause()
     except JobQueuePausedError:
         logger.warning('job queue was already paused')
     else:
         logger.info('job queue paused')
 
 
-def cmd_queue_unpause(jobs: Jobs, workerid: str) -> None:
+def cmd_queue_unpause(jobs: Jobs, queueid: str) -> None:
     try:
-        jobs.queue(workerid).unpause()
+        jobs.queues.get_queue(queueid).unpause()
     except JobQueueNotPausedError:
         logger.warning('job queue was not paused')
     else:
         logger.info('job queue unpaused')
-        jobs.ensure_next(workerid)
+        jobs.ensure_next(queueid)
 
 
 def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
@@ -511,13 +511,13 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
         logger.error('request %s has already been used', reqid)
         sys.exit(1)
 
-    if jobs.queue(reqid.workerid).paused:
+    if jobs.queues.get_queue(reqid.workerid).paused:
         logger.warning('job queue is paused')
 
     try:
-        pos = jobs.queue(reqid.workerid).push(reqid)
+        pos = jobs.queues.get_queue(reqid.workerid).push(reqid)
     except JobAlreadyQueuedError:
-        for pos, queued in enumerate(jobs.queue(reqid.workerid), 1):
+        for pos, queued in enumerate(jobs.queues.get_queue(reqid.workerid), 1):
             if queued == reqid:
                 logger.warning('%s was already queued', reqid)
                 break
@@ -531,10 +531,10 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
     jobs.ensure_next(reqid.workerid)
 
 
-def cmd_queue_pop(jobs: Jobs, workerid: str) -> None:
+def cmd_queue_pop(jobs: Jobs, queueid: str) -> None:
     logger.info('Popping the next job from the queue...')
     try:
-        reqid = jobs.queue(workerid).pop()
+        reqid = jobs.queues.get_queue(queueid).pop()
     except JobQueuePausedError:
         logger.warning('job queue is paused')
         return
@@ -581,7 +581,7 @@ def cmd_queue_move(
         logger.error('request %s not found', reqid)
         sys.exit(1)
 
-    if jobs.queue(reqid.workerid).paused:
+    if jobs.queues.get_queue(reqid.workerid).paused:
         logger.warning('job queue is paused')
 
     status = job.get_status()
@@ -591,7 +591,7 @@ def cmd_queue_move(
     elif status is not Result.STATUS.PENDING:
         logger.warning('request %s has been updated since queued', reqid)
 
-    pos = jobs.queue(reqid.workerid).move(reqid, position, relative)
+    pos = jobs.queues.get_queue(reqid.workerid).move(reqid, position, relative)
     logger.info('...moved to position %s', pos)
 
 
@@ -603,7 +603,7 @@ def cmd_queue_remove(jobs: Jobs, reqid: RequestID) -> None:
         logger.warning('request %s not found', reqid)
         return
 
-    if jobs.queue(reqid.workerid).paused:
+    if jobs.queues.get_queue(reqid.workerid).paused:
         logger.warning('job queue is paused')
 
     status = job.get_status()
@@ -613,7 +613,7 @@ def cmd_queue_remove(jobs: Jobs, reqid: RequestID) -> None:
         logger.warning('request %s has been updated since queued', reqid)
 
     try:
-        jobs.queue(reqid.workerid).remove(reqid)
+        jobs.queues.get_queue(reqid.workerid).remove(reqid)
     except JobNotQueuedError:
         logger.warning('%s was not queued', reqid)
 
@@ -850,10 +850,10 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
                      help='also show last 10 lines of the job queue log file')
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
-    sub.add_argument('workerid')
+    sub.add_argument('queueid')
 
     sub = add_cmd('unpause', queue, help='Let queued jobs run')
-    sub.add_argument('workerid')
+    sub.add_argument('queueid')
 
     sub = add_cmd('list', queue, help='List the queued jobs')
 
@@ -861,7 +861,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub.add_argument('reqid')
 
     sub = add_cmd('pop', queue, help='Get the next job from the front of the queue')
-    sub.add_argument('workerid')
+    sub.add_argument('queueid')
 
     sub = add_cmd('move', queue, help='Move a job up or down in the queue')
     sub.add_argument('reqid')
@@ -1070,7 +1070,7 @@ def parse_args(
         sub.add_argument('reqid')
 
         sub = add_cmd('internal-run-next')
-        sub.add_argument('workerid')
+        sub.add_argument('queueid')
 
     ##########
     # Finally, parse the args.
@@ -1166,7 +1166,7 @@ def main(
         if reqid is not None:
             jobs.ensure_next(reqid.workerid)
         else:
-            jobs.ensure_next(cmd_kwargs["workerid"])
+            jobs.ensure_next(cmd_kwargs["queueid"])
 
     # Run the command.
     logger.info('')

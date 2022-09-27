@@ -106,7 +106,7 @@ class Worker:
         fs: WorkerJobsFS,
         ssh: _utils.SSHClient
     ):
-        self._workerid = workerid
+        self._id = workerid
         self._fs = fs
         self._ssh = ssh
 
@@ -119,8 +119,8 @@ class Worker:
         raise NotImplementedError
 
     @property
-    def workerid(self) -> str:
-        return self._workerid
+    def id(self) -> str:
+        return self._id
 
     @property
     def fs(self) -> WorkerJobsFS:
