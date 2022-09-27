@@ -40,10 +40,12 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
     @classmethod
     def parse(cls, idstr: str):
         kinds = '|'.join(cls._KIND_BY_VALUE)
-        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)-(\w+)$', idstr)
+        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)(?:-(\w+))?$', idstr)
         if not m:
             return None
         kind, timestamp, user, workerid = m.groups()
+        if not workerid:
+            workerid = "linux"
         return cls(kind, int(timestamp), user, workerid)
 
     @classmethod
@@ -52,9 +54,8 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
         cfg: int,
         user: Optional[str] = None,
         kind: str = KIND.BENCHMARKS,
-        workerid: str = ''
+        workerid: str = 'linux'
     ) -> "RequestID":
-        assert workerid
         user = _utils.resolve_user(cfg, user)
         timestamp = int(_utils.utcnow())
         return cls(kind, timestamp, user, workerid)
