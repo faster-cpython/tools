@@ -355,7 +355,7 @@ class Job:
 
             # Trigger the next job.
             pushd {_common.SYS_PATH_ENTRY}
-            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} &
+            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --workerid {reqid.workerid} --logfile {queue_log} &
 
             exit $exitcode
         '''[1:-1])
