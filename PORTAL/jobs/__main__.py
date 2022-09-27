@@ -1175,7 +1175,7 @@ def main(
             logger.info('# Running %r command', _cmd)
         logger.info('')
         # XXX Add --lines='-1' for attach.
-        run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
+        _run_cmd(jobs, reqid=reqid, **(_cmd_kwargs or {}))
 
 
 def _parse_and_main(
