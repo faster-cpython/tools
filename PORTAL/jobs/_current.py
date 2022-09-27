@@ -105,6 +105,7 @@ class RequestNotStagedError(UnstagingRequestError):
 
 
 def symlink_from_jobsfs(jobsfs: _common.JobsFS) -> str:
+    # XXX Use PortalJobsFS specifically?
     jobsfs = _common.JobsFS.from_raw(jobsfs)
     try:
         return jobsfs.requests.current

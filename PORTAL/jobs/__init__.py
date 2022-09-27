@@ -63,6 +63,15 @@ class JobsConfig(_utils.TopConfig):
         return self.worker.ssh
 
 
+class PortalJobsFS(_common.JobsFS):
+    JOBFS = _job.JobFS
+
+    def __init__(self, root: str):
+        super().__init__(root)
+        self.requests.current = _current.symlink_from_jobsfs(self)
+        #self.current = _current.symlink_from_jobsfs(self)
+
+
 class PortalFS(_utils.FSTree):
 
     def __init__(self, root: Optional[str] = None):
@@ -71,11 +80,7 @@ class PortalFS(_utils.FSTree):
 
         super().__init__(root)
 
-        self.jobs = _common.JobsFS(self.root)
-        self.jobs.context = 'portal'
-        self.jobs.JOBFS = _job.JobFS
-
-        self.jobs.requests.current = _current.symlink_from_jobsfs(self.jobs)
+        self.jobs = PortalJobsFS(self.root)
 
         self.queue = queue_mod.JobQueueFS(self.jobs.requests)
 
