@@ -170,7 +170,7 @@ class JobFS(types.SimpleNamespace):
     This serves as the base class for context-specific subclasses.
     """
 
-    CONTEXT: Optional[str] = None  # required in subclasses
+    CONTEXT: str = ''  # required in subclasses
 
     _jobs: "JobsFS"
 
