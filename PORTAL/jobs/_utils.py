@@ -3684,6 +3684,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
 class SSHConnectionConfig(Config):
 
     FIELDS = ['user', 'host', 'port', 'agent']
+    OPTIONAL = ['agent']
 
     CONFIG = 'ssh-conn.json'
 
@@ -3724,15 +3725,14 @@ class SSHCommands:
 
     @classmethod
     def from_config(cls, cfg, **kwargs):
-        return cls(cfg.user, cfg.host, cfg.port, cfg.agent, **kwargs)
+        return cls(cfg.user, cfg.host, cfg.port, **kwargs)
 
-    def __init__(self, user, host, port, agent, *, ssh=None, scp=None):
+    def __init__(self, user, host, port, *, ssh=None, scp=None):
         self.user = check_shell_str(user)
         self.host = check_shell_str(host)
         self.port = int(port)
         if self.port < 1:
             raise ValueError(f'invalid port {self.port}')
-        self.agent = agent
 
         opts = []
         if self.host == 'localhost':
@@ -3807,11 +3807,11 @@ class SSHClient(SSHCommands):
 
     @property
     def commands(self):
-        return SSHCommands(self.user, self.host, self.port, self.agent)
+        return SSHCommands(self.user, self.host, self.port)
 
     @property
     def shell_commands(self):
-        return SSHShellCommands(self.user, self.host, self.port, self.agent)
+        return SSHShellCommands(self.user, self.host, self.port)
 
     def check(self, *, agent=None):
         return (self.run_shell('true', agent=agent).returncode == 0)

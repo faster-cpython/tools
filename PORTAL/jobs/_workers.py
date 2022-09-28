@@ -85,6 +85,14 @@ class JobWorker:
     def ssh(self) -> _utils.SSHClient:
         return self._worker.ssh
 
+    @property
+    def worker(self) -> "Worker":
+        return self._worker
+
+    @property
+    def id(self) -> str:
+        return self._worker.id
+
 
 class Worker:
     """A single configured worker."""

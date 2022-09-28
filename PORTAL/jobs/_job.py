@@ -220,7 +220,7 @@ class Job:
             raise NotImplementedError(self._cfg)
         cfgfile = _utils.quote_shell_str(self._cfg.filename)
         if hidecfg:
-            sshcmds = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port', '$ssh_agent')
+            sshcmds = _utils.SSHShellCommands('$ssh_user', '$ssh_host', '$ssh_port')
             user = '$user'
         else:
             cfg_user = _utils.check_shell_str(self._cfg.local_user)
@@ -361,7 +361,7 @@ class Job:
         '''[1:-1])
 
     def _get_ssh_agent(self) -> _utils.SSHAgentInfo:
-        agent = self.worker.ssh.agent
+        agent = self._cfg.workers[self.worker.id].ssh.agent
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:
