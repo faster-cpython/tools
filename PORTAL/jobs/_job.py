@@ -361,7 +361,7 @@ class Job:
         '''[1:-1])
 
     def _get_ssh_agent(self) -> _utils.SSHAgentInfo:
-        agent = self._cfg.workers[self.worker.id].ssh.agent
+        agent = getattr(self._cfg.workers[self.worker.id].ssh, "agent", None)
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:

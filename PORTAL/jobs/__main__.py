@@ -266,7 +266,7 @@ def cmd_cancel(
 
     if current:
         assert reqid is not None
-        jobs.ensure_next(reqid.workerid)
+        jobs.ensure_next()
 
 
 def cmd_wait(jobs: Jobs, reqid: Optional[RequestID] = None) -> None:
@@ -462,6 +462,7 @@ def cmd_queue_info(
                 print('-'*30)
             else:
                 print('  (log is empty)')
+        print()
 
 
 def cmd_queue_list(jobs: Jobs, *, queueid: Optional[str] = None) -> None:
@@ -501,7 +502,7 @@ def cmd_queue_unpause(jobs: Jobs, queueid: str) -> None:
         logger.warning('job queue was not paused')
     else:
         logger.info('job queue unpaused')
-        jobs.ensure_next(queueid)
+        jobs.ensure_next()
 
 
 def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
@@ -537,7 +538,7 @@ def cmd_queue_push(jobs: Jobs, reqid: RequestID) -> None:
 
     logger.info('%s added to the job queue at position %s', reqid, pos)
 
-    jobs.ensure_next(reqid.workerid)
+    jobs.ensure_next()
 
 
 def cmd_queue_pop(jobs: Jobs, queueid: str) -> None:
@@ -857,7 +858,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub.add_argument('--with-log', dest='withlog',
                      action='store_const', const=True,
                      help='also show last 10 lines of the job queue log file')
-    sub.add_argument('queuid', nargs='?', help="The queue to show")
+    sub.add_argument('queueid', nargs='?', help="The queue to show")
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
     sub.add_argument('queueid')
@@ -866,7 +867,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub.add_argument('queueid')
 
     sub = add_cmd('list', queue, help='List the queued jobs')
-    sub.add_argument('queuid', nargs='?', help="The queue to list")
+    sub.add_argument('queueid', nargs='?', help="The queue to list")
 
     sub = add_cmd('push', queue, help='Add a job to the back of the queue')
     sub.add_argument('reqid')
@@ -1174,10 +1175,7 @@ def main(
         reqid = None
 
     if _should_ensure_next(cmd):
-        if reqid is not None:
-            jobs.ensure_next(reqid.workerid)
-        else:
-            jobs.ensure_next(cmd_kwargs["queueid"])
+        jobs.ensure_next()
 
     # Run the command.
     logger.info('')

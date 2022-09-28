@@ -156,6 +156,7 @@ class JobQueueSnapshot(JobQueueData):
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
 
+    @property
     def id(self) -> str:
         return self._id
 

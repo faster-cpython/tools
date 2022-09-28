@@ -2,6 +2,7 @@ from collections import namedtuple
 import datetime
 import decimal
 import glob
+import io
 import json
 import logging
 import os
@@ -873,7 +874,11 @@ def resolve_cpu_arch() -> str:
 
 
 def get_termwidth(*, notty: int = 1000, unknown: int = 80) -> int:
-    if os.isatty(sys.stdout.fileno()):
+    try:
+        fileno = sys.stdout.fileno()
+    except io.UnsupportedOperation:
+        return unknown or 80
+    if os.isatty(fileno):
         try:
             termsize = os.get_terminal_size()
         except OSError:
@@ -3637,7 +3642,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
                 latest = filename
             else:
                 _created = os.stat(filename).st_ctime
-                if _created > created:
+                if created is None or _created > created:
                     latest = filename
                     created = _created
         if not latest:

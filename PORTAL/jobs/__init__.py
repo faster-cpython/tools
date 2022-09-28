@@ -282,7 +282,7 @@ class Jobs:
         pid = job.wait_until_started(timeout)
         return job, pid
 
-    def ensure_next(self, queueid: str) -> None:
+    def ensure_next(self) -> None:
         logger.debug('Making sure a job is running, if possible')
         # XXX Return (queued job, already running job).
         job = self.get_current()
@@ -290,29 +290,30 @@ class Jobs:
             logger.debug('A job is already running (and will kick off the next one from the queue)')
             # XXX Check the pidfile.
             return
-        queue = self.queues.get_queue(queueid).snapshot
-        if queue.paused:
-            logger.debug('No job is running but the queue is paused')
-            return
-        if not queue:
-            logger.debug('No job is running and none are queued')
-            return
-        # Run in the background.
-        cfgfile = self._cfg.filename
-        if not cfgfile:
-            raise NotImplementedError
-        logger.debug('No job is running so we will run the next one from the queue')
-        _utils.run_bg(
-            [
-                sys.executable, '-u', '-m', 'jobs', '-v',
-                'internal-run-next',
-                queueid,
-                '--config', cfgfile,
-                #'--logfile', self._fs.queue.log,
-            ],
-            logfile=self._fs.queues.resolve_queue(queueid).log,
-            cwd=_common.SYS_PATH_ENTRY,
-        )
+        for queue in self.queues.iter_queues():
+            _queue = queue.snapshot
+            if _queue.paused:
+                logger.debug('No job is running but the queue is paused')
+                continue
+            if not _queue:
+                logger.debug('No job is running and none are queued')
+                continue
+            # Run in the background.
+            cfgfile = self._cfg.filename
+            if not cfgfile:
+                raise NotImplementedError
+            logger.debug('No job is running so we will run the next one from the queue')
+            _utils.run_bg(
+                [
+                    sys.executable, '-u', '-m', 'jobs', '-v',
+                    'internal-run-next',
+                    _queue.id,
+                    '--config', cfgfile,
+                    #'--logfile', self._fs.queue.log,
+                ],
+                logfile=self._fs.queues.resolve_queue(_queue.id).log,
+                cwd=_common.SYS_PATH_ENTRY,
+            )
 
     def cancel_current(
             self,

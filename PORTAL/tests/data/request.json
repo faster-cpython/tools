@@ -1,0 +1,33 @@
+{
+    "kind": "compile-bench",
+    "id": "req-compile-bench-1664291728-nobody-mac",
+    "datadir": "/home/benchmarking/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac",
+    "user": "nobody",
+    "date": "2022-09-27T15:15:28+00:00",
+    "ref": {
+        "remote": "origin",
+        "branch": "main",
+        "tag": null,
+        "commit": "dd53b79de0ea98af6a11481217a961daef4e9774",
+        "name": "main",
+        "requested": {
+            "remote": "origin",
+            "branch": "main",
+            "revision": "HEAD",
+            "orig": {
+                "remote": null,
+                "branch": null,
+                "revision": "main"
+            }
+        }
+    },
+    "pyperformance_ref": "dd53b79de0ea98af6a11481217a961daef4e9774",
+    "remote": "origin",
+    "revision": "main",
+    "branch": "main",
+    "benchmarks": [
+        "deepcopy"
+    ],
+    "optimize": true,
+    "debug": false
+}
