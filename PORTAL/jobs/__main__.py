@@ -1153,6 +1153,9 @@ def main(
 
     jobs = Jobs(cfg, devmode=devmode)
 
+    if _should_ensure_next(cmd):
+        jobs.ensure_next()
+
     # Resolve the request ID, if any.
     if 'reqid' in cmd_kwargs:
         reqid = cmd_kwargs['reqid'] or None
@@ -1173,9 +1176,6 @@ def main(
         cmd_kwargs['reqid'] = reqid
     else:
         reqid = None
-
-    if _should_ensure_next(cmd):
-        jobs.ensure_next()
 
     # Run the command.
     logger.info('')
