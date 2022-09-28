@@ -409,9 +409,16 @@ def cmd_run_next(jobs: Jobs, queueid: str) -> None:
         raise  # re-raise
 
 
-def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
+def cmd_queue_info(
+    jobs: Jobs,
+    *,
+    withlog: bool = True,
+    queueid: Optional[str] = None
+) -> None:
     for queue in jobs.queues.iter_queues():
         _queue = queue.snapshot
+        if queueid and queueid != _queue.id:
+            continue
         queued = _queue.jobs
         paused = _queue.paused
         pid, pid_running = _queue.locked
@@ -457,9 +464,11 @@ def cmd_queue_info(jobs: Jobs, *, withlog: bool = True) -> None:
                 print('  (log is empty)')
 
 
-def cmd_queue_list(jobs: Jobs) -> None:
+def cmd_queue_list(jobs: Jobs, *, queueid: Optional[str] = None) -> None:
     for queue in jobs.queues.iter_queues():
         _queue = queue.snapshot
+        if queueid and queueid != _queue.id:
+            continue
         print(f'Queue ({_queue.id})')
 
         if _queue.paused:
@@ -848,6 +857,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub.add_argument('--with-log', dest='withlog',
                      action='store_const', const=True,
                      help='also show last 10 lines of the job queue log file')
+    sub.add_argument('queuid', nargs='?', help="The queue to show")
 
     sub = add_cmd('pause', queue, help='Do not let queued jobs run')
     sub.add_argument('queueid')
@@ -856,6 +866,7 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub.add_argument('queueid')
 
     sub = add_cmd('list', queue, help='List the queued jobs')
+    sub.add_argument('queuid', nargs='?', help="The queue to list")
 
     sub = add_cmd('push', queue, help='Add a job to the back of the queue')
     sub.add_argument('reqid')
