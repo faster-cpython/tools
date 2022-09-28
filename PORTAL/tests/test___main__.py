@@ -126,22 +126,6 @@ Result files:
         captured.out.strip(),
     )
 
-    # reqid = "req-compile-bench-1664291728-nobody-mac"
-    # (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json").write_text(json.dumps(
-    #     {
-    #         "jobs": [reqid],
-    #         "paused": False
-    #     }
-    # ))
-
-    # reqid = "req-compile-bench-1664291789-nobody-linux"
-    # (tmp_path / "BENCH" / "QUEUES" / "linux" / "queue.json").write_text(json.dumps(
-    #     {
-    #         "jobs": [reqid],
-    #         "paused": False
-    #     }
-    # ))
-
 
 def test_list(tmp_path, capsys):
     args = helpers.setup_temp_env(tmp_path)
