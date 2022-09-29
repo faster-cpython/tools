@@ -166,10 +166,8 @@ def test_queue_info(tmp_path, capsys):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": False})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": False}))
 
     __main__._parse_and_main(
         [
@@ -229,10 +227,8 @@ def test_queue_info_single(tmp_path, capsys):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": False})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": False}))
 
     __main__._parse_and_main(
         [*args, "queue", "info", "mac"],
@@ -271,10 +267,8 @@ def test_queue_list(tmp_path, capsys):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": False})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": False}))
 
     __main__._parse_and_main(
         [
@@ -333,10 +327,8 @@ def test_queue_pause(tmp_path):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": False})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": False}))
 
     __main__._parse_and_main(
         [*args, "queue", "pause", "mac"],
@@ -351,10 +343,8 @@ def test_queue_unpause(tmp_path):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": True})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": True}))
 
     __main__._parse_and_main(
         [*args, "queue", "unpause", "mac"],
@@ -369,10 +359,8 @@ def test_queue_pop(tmp_path):
     args = helpers.setup_temp_env(tmp_path)
 
     reqid = "req-compile-bench-1664291728-nobody-mac"
-    queue_file = (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json")
-    queue_file.write_text(
-        json.dumps({"jobs": [reqid], "paused": False})
-    )
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid], "paused": False}))
     reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
     reqdir.mkdir()
     shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
