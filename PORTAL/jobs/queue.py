@@ -397,7 +397,7 @@ class JobQueues:
 
     def get_queue(self, queueid: str) -> JobQueue:
         assert queueid in self._cfg.workers, queueid
-        return JobQueue.from_fstree(self._fs.resolve_queue(queueid))
+        return JobQueue.from_fstree(self._fs.resolve_queue(queueid), queueid)
 
     def iter_queues(self) -> Iterator[JobQueue]:
         for queueid in self._cfg.workers.keys():
