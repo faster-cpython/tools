@@ -1,6 +1,7 @@
 import json
 import re
 import shutil
+import textwrap
 
 
 import pytest
@@ -84,45 +85,47 @@ def test_show_with_content(tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert re.match(
-        r"""
-Request req-compile-bench-1664291728-nobody-mac:
-  kind:                  compile-bench
-  user:                  nobody
-  status:                pending
-  is staged:             False
+        textwrap.dedent(
+            r"""
+            Request req-compile-bench-1664291728-nobody-mac:
+              kind:                  compile-bench
+              user:                  nobody
+              status:                pending
+              is staged:             False
 
-Details:
-  ref:                   main
-  pyperformance_ref:     dd53b79de0ea98af6a11481217a961daef4e9774
-  remote:                origin
-  revision:              main
-  branch:                main
-  benchmarks:            \['deepcopy'\]
-  optimize:              True
-  debug:                 False
-  ssh okay:              \?\?\?
+            Details:
+              ref:                   main
+              pyperformance_ref:     dd53b79de0ea98af6a11481217a961daef4e9774
+              remote:                origin
+              revision:              main
+              branch:                main
+              benchmarks:            \['deepcopy'\]
+              optimize:              True
+              debug:                 False
+              ssh okay:              \?\?\?
 
-History:
-  created:               2022-09-27 15:15:28
-  pending:               2022-09-27 15:15:29
+            History:
+              created:               2022-09-27 15:15:28
+              pending:               2022-09-27 15:15:29
 
-Request files:
-  data root:             \(/home/benchmarking/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac\)
-  metadata:              .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/request.json
-  job_script:            \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/run.sh\)
-  portal_script:         \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/send.sh\)
-  ssh_okay:              \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/ssh.ok\)
-  pyperformance_manifest: \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/benchmarks.manifest\)
-  pyperformance_config:  \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance.ini\)
+            Request files:
+              data root:             \(/home/benchmarking/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac\)
+              metadata:              .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/request.json
+              job_script:            \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/run.sh\)
+              portal_script:         \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/send.sh\)
+              ssh_okay:              \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/ssh.ok\)
+              pyperformance_manifest: \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/benchmarks.manifest\)
+              pyperformance_config:  \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance.ini\)
 
-Result files:
-  data root:             .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac
-  metadata:              .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/results.json
-  pidfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/send.pid\)
-  logfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/job.log\)
-  pyperformance_log:     \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance.log\)
-  pyperformance_results: \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance-results.json.gz\)
-""".strip(),
+            Result files:
+              data root:             .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac
+              metadata:              .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/results.json
+              pidfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/send.pid\)
+              logfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/job.log\)
+              pyperformance_log:     \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance.log\)
+              pyperformance_results: \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance-results.json.gz\)
+        """
+        ).strip(),
         captured.out.strip(),
     )
 
@@ -154,11 +157,13 @@ def test_list(tmp_path, capsys):
     # clear what we should test for here.
 
     assert _compare_lines(captured.out) == _compare_lines(
-        """
-request ID                       status      elapsed
------------------------------------------------ ------------ ------------
- req-compile-bench-1664291728-nobody-mac         pending             ---
-"""
+        textwrap.dedent(
+            """
+            request ID                       status      elapsed
+            ----------------------------------------------- ------------ ------------
+             req-compile-bench-1664291728-nobody-mac         pending             ---
+            """
+        )
     )
 
 
@@ -184,41 +189,43 @@ def test_queue_info(tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert re.match(
-        r"""
-Job Queue \(linux\):
-  size:     0
-  paused:   False
-  lock:     \(not locked\)
+        textwrap.dedent(
+            r"""
+            Job Queue \(linux\):
+              size:     0
+              paused:   False
+              lock:     \(not locked\)
 
-Files:
-  data:      .*?/BENCH/QUEUES/linux/queue.json
-  lock:      \(.*?/BENCH/QUEUES/linux/queue.lock\)
-  log:       \(.*?/BENCH/QUEUES/linux/queue.log\)
+            Files:
+              data:      .*?/BENCH/QUEUES/linux/queue.json
+              lock:      \(.*?/BENCH/QUEUES/linux/queue.lock\)
+              log:       \(.*?/BENCH/QUEUES/linux/queue.log\)
 
-Top 5:
-  \(queue is empty\)
+            Top 5:
+              \(queue is empty\)
 
-Log size:    0
-Last log entry:
-  \(log is empty\)
+            Log size:    0
+            Last log entry:
+              \(log is empty\)
 
-Job Queue \(mac\):
-  size:     1
-  paused:   False
-  lock:     \(not locked\)
+            Job Queue \(mac\):
+              size:     1
+              paused:   False
+              lock:     \(not locked\)
 
-Files:
-  data:      .*?/BENCH/QUEUES/mac/queue.json
-  lock:      \(.*?/BENCH/QUEUES/mac/queue.lock\)
-  log:       \(.*?/BENCH/QUEUES/mac/queue.log\)
+            Files:
+              data:      .*?/BENCH/QUEUES/mac/queue.json
+              lock:      \(.*?/BENCH/QUEUES/mac/queue.lock\)
+              log:       \(.*?/BENCH/QUEUES/mac/queue.log\)
 
-Top 5:
-  1 req-compile-bench-1664291728-nobody-mac
+            Top 5:
+              1 req-compile-bench-1664291728-nobody-mac
 
-Log size:    0
-Last log entry:
-  \(log is empty\)
-""".strip(),
+            Log size:    0
+            Last log entry:
+              \(log is empty\)
+            """
+        ).strip(),
         captured.out.strip(),
     )
 
@@ -241,24 +248,26 @@ def test_queue_info_single(tmp_path, capsys):
     captured = capsys.readouterr()
 
     assert re.match(
-        r"""
-Job Queue \(mac\):
-  size:     1
-  paused:   False
-  lock:     \(not locked\)
+        textwrap.dedent(
+            r"""
+            Job Queue \(mac\):
+              size:     1
+              paused:   False
+              lock:     \(not locked\)
 
-Files:
-  data:      .*?/BENCH/QUEUES/mac/queue.json
-  lock:      \(.*?/BENCH/QUEUES/mac/queue.lock\)
-  log:       \(.*?/BENCH/QUEUES/mac/queue.log\)
+            Files:
+              data:      .*?/BENCH/QUEUES/mac/queue.json
+              lock:      \(.*?/BENCH/QUEUES/mac/queue.lock\)
+              log:       \(.*?/BENCH/QUEUES/mac/queue.log\)
 
-Top 5:
-  1 req-compile-bench-1664291728-nobody-mac
+            Top 5:
+              1 req-compile-bench-1664291728-nobody-mac
 
-Log size:    0
-Last log entry:
-  \(log is empty\)
-""".strip(),
+            Log size:    0
+            Last log entry:
+              \(log is empty\)
+            """
+        ).strip(),
         captured.out.strip(),
     )
 
@@ -286,14 +295,16 @@ def test_queue_list(tmp_path, capsys):
 
     assert (
         captured.out.strip()
-        == """
-Queue (linux)
-no jobs queued
-Queue (mac)
-  1 req-compile-bench-1664291728-nobody-mac
+        == textwrap.dedent(
+            """
+            Queue (linux)
+            no jobs queued
+            Queue (mac)
+              1 req-compile-bench-1664291728-nobody-mac
 
-(total: 1)
-""".strip()
+            (total: 1)
+            """
+        ).strip()
     )
 
 
@@ -314,12 +325,14 @@ def test_queue_list_single(tmp_path, capsys):
 
     assert (
         captured.out.strip()
-        == """
-Queue (mac)
-  1 req-compile-bench-1664291728-nobody-mac
+        == textwrap.dedent(
+            """
+            Queue (mac)
+              1 req-compile-bench-1664291728-nobody-mac
 
-(total: 1)
-""".strip()
+            (total: 1)
+            """
+        ).strip()
     )
 
 

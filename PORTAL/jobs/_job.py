@@ -284,6 +284,8 @@ class Job:
             sshcmds.pull(s, t) for s, t in pullfiles
         )
 
+        queueid = reqid.workerid
+
         #push = ssh.push
         #pull = ssh.pull
         ssh = sshcmds.run_shell
@@ -355,7 +357,7 @@ class Job:
 
             # Trigger the next job.
             pushd {_common.SYS_PATH_ENTRY}
-            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} {reqid.workerid} &
+            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} {queueid} &
 
             exit $exitcode
         '''[1:-1])

@@ -135,7 +135,13 @@ class Jobs:
 
     @property
     def queues(self) -> queue_mod.JobQueues:
-        return queue_mod.JobQueues.from_config(self._cfg, self._fs.queues)
+        try:
+            return self._queues
+        except AttributeError:
+            self._queues = queue_mod.JobQueues.from_config(
+                self._cfg, self._fs.queues
+            )
+            return self._queues
 
     def iter_all(self) -> Iterator[_job.Job]:
         for name in os.listdir(str(self._fs.jobs.requests)):
@@ -264,7 +270,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for queued in self.queues.get_queue(reqid.workerid).snapshot:
+                for queued in self.queues[reqid.workerid].snapshot:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2
@@ -290,12 +296,12 @@ class Jobs:
             logger.debug('A job is already running (and will kick off the next one from the queue)')
             # XXX Check the pidfile.
             return
-        for queue in self.queues.iter_queues():
-            _queue = queue.snapshot
-            if _queue.paused:
+        for _queue in self.queues:
+            queue = _queue.snapshot
+            if queue.paused:
                 logger.debug('No job is running but the queue is paused')
                 continue
-            if not _queue:
+            if not queue:
                 logger.debug('No job is running and none are queued')
                 continue
             # Run in the background.
@@ -307,11 +313,11 @@ class Jobs:
                 [
                     sys.executable, '-u', '-m', 'jobs', '-v',
                     'internal-run-next',
-                    _queue.id,
+                    queue.id,
                     '--config', cfgfile,
                     #'--logfile', self._fs.queue.log,
                 ],
-                logfile=self._fs.queues.resolve_queue(_queue.id).log,
+                logfile=self._fs.queues.resolve_queue(queue.id).log,
                 cwd=_common.SYS_PATH_ENTRY,
             )
 
