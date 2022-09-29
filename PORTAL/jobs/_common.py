@@ -305,7 +305,7 @@ class JobsFS(_utils.FSTree):
 
     @classmethod
     def from_user(cls, user: str) -> "JobsFS":
-        return cls(f'/home/{user}/BENCH')
+        return cls(f'~{user}/BENCH')
 
     @classmethod
     def from_raw(
@@ -337,6 +337,7 @@ class JobsFS(_utils.FSTree):
         self.requests = _utils.FSTree(f'{root}/REQUESTS')
         self.work = _utils.FSTree(self.requests.root)
         self.results = _utils.FSTree(self.requests.root)
+        self.queues = _utils.FSTree(f'{root}/QUEUES')
 
     def __str__(self):
         return self.root

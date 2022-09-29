@@ -3,7 +3,8 @@ import os
 import os.path
 import sys
 from typing import (
-    Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Type, Union
+    Any, Callable, Iterator, Mapping, MutableMapping, Optional,
+    Sequence, Tuple, Type, Union
 )
 
 from . import _utils, _pyperformance, _common, _workers, _job, _current
@@ -24,7 +25,7 @@ class NoRunningJobError(JobsError):
 class JobsConfig(_utils.TopConfig):
     """The jobs-related configuration used on the portal host."""
 
-    FIELDS = ['local_user', 'worker', 'data_dir', 'results_repo_root']
+    FIELDS = ['local_user', 'workers', 'data_dir', 'results_repo_root']
     OPTIONAL = ['data_dir', 'results_repo_root']
 
     FILE = 'jobs.json'
@@ -32,35 +33,43 @@ class JobsConfig(_utils.TopConfig):
         f'{_utils.HOME}/BENCH',
     ]
 
-    def __init__(self,
-                 local_user: str,
-                 worker: Optional[Union[str, _workers.WorkerConfig]],
-                 data_dir: Optional[str] = None,
-                 results_repo_root: Optional[str] = None,
-                 **ignored
-                 ):
+    def __init__(
+        self,
+        local_user: str,
+        workers: Optional[
+            MutableMapping[str, Union[Mapping[str, Any], _workers.WorkerConfig]]
+        ],
+        data_dir: Optional[str] = None,
+        results_repo_root: Optional[str] = None,
+        **ignored
+    ):
         if not local_user:
             raise ValueError('missing local_user')
-        if not worker:
-            raise ValueError('missing worker')
-        elif not isinstance(worker, _workers.WorkerConfig):
-            worker_resolved = _workers.WorkerConfig.from_jsonable(worker)
-        else:
-            worker_resolved = worker
-        if data_dir:
-            data_dir = os.path.abspath(os.path.expanduser(data_dir))
-        else:
-            data_dir = f'/home/{local_user}/BENCH'  # This matches DATA_ROOT.
+        if not workers:
+            raise ValueError('missing workers')
+
+        for worker_name, worker in workers.items():
+            if not isinstance(worker, _workers.WorkerConfig):
+                workers[worker_name] = _workers.WorkerConfig.from_jsonable(worker)
+
+        if not data_dir:
+            data_dir = f'~{local_user}/BENCH'  # This matches DATA_ROOT.
+        data_dir = os.path.abspath(os.path.expanduser(data_dir))
+
         super().__init__(
             local_user=local_user,
-            worker=worker_resolved,
+            workers=workers,
             data_dir=data_dir or None,
             results_repo_root=results_repo_root
         )
 
     @property
-    def ssh(self) -> _utils.SSHConnectionConfig:
-        return self.worker.ssh
+    def queues(self):
+        try:
+            return self._queues
+        except AttributeError:
+            self._queues = {w: {} for w in self.workers}
+            return self._queues
 
 
 class PortalJobsFS(_common.JobsFS):
@@ -82,17 +91,19 @@ class PortalFS(_utils.FSTree):
 
         self.jobs = PortalJobsFS(self.root)
 
-        self.queue = queue_mod.JobQueueFS(self.jobs.requests)
-
     @property
     def currentjob(self) -> str:
         return self.jobs.requests.current
+
+    @property
+    def queues(self) -> queue_mod.JobQueuesFS:
+        return queue_mod.JobQueuesFS(self.jobs.queues)
 
 
 class Jobs:
 
     FS: Type[PortalFS] = PortalFS
-    _queue: queue_mod.JobQueue
+    _queues: queue_mod.JobQueues
 
     def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
@@ -123,12 +134,14 @@ class Jobs:
         return self._fs.jobs.copy()
 
     @property
-    def queue(self):
+    def queues(self) -> queue_mod.JobQueues:
         try:
-            return self._queue
+            return self._queues
         except AttributeError:
-            self._queue = queue_mod.JobQueue.from_fstree(self._fs.queue)
-            return self._queue
+            self._queues = queue_mod.JobQueues.from_config(
+                self._cfg, self._fs.queues
+            )
+            return self._queues
 
     def iter_all(self) -> Iterator[_job.Job]:
         for name in os.listdir(str(self._fs.jobs.requests)):
@@ -209,7 +222,12 @@ class Jobs:
         if kind_kwargs is None:
             kind_kwargs = {}
         job = self._get(reqid)
-        job._create(kind_kwargs, pushfsattrs, pullfsattrs, self._fs.queue.log)
+        job._create(
+            kind_kwargs,
+            pushfsattrs,
+            pullfsattrs,
+            self._fs.queues.resolve_queue(reqid.workerid).log
+        )
         return job
 
     def activate(self, reqid: RequestID) -> _job.Job:
@@ -252,7 +270,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for queued in self.queue.snapshot:
+                for queued in self.queues[reqid.workerid].snapshot:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2
@@ -278,28 +296,30 @@ class Jobs:
             logger.debug('A job is already running (and will kick off the next one from the queue)')
             # XXX Check the pidfile.
             return
-        queue = self.queue.snapshot
-        if queue.paused:
-            logger.debug('No job is running but the queue is paused')
-            return
-        if not queue:
-            logger.debug('No job is running and none are queued')
-            return
-        # Run in the background.
-        cfgfile = self._cfg.filename
-        if not cfgfile:
-            raise NotImplementedError
-        logger.debug('No job is running so we will run the next one from the queue')
-        _utils.run_bg(
-            [
-                sys.executable, '-u', '-m', 'jobs', '-v',
-                'internal-run-next',
-                '--config', cfgfile,
-                #'--logfile', self._fs.queue.log,
-            ],
-            logfile=self._fs.queue.log,
-            cwd=_common.SYS_PATH_ENTRY,
-        )
+        for _queue in self.queues:
+            queue = _queue.snapshot
+            if queue.paused:
+                logger.debug('No job is running but the queue is paused')
+                continue
+            if not queue:
+                logger.debug('No job is running and none are queued')
+                continue
+            # Run in the background.
+            cfgfile = self._cfg.filename
+            if not cfgfile:
+                raise NotImplementedError
+            logger.debug('No job is running so we will run the next one from the queue')
+            _utils.run_bg(
+                [
+                    sys.executable, '-u', '-m', 'jobs', '-v',
+                    'internal-run-next',
+                    queue.id,
+                    '--config', cfgfile,
+                    #'--logfile', self._fs.queue.log,
+                ],
+                logfile=self._fs.queues.resolve_queue(queue.id).log,
+                cwd=_common.SYS_PATH_ENTRY,
+            )
 
     def cancel_current(
             self,

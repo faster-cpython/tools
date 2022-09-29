@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 ToRequestIDType = Union[str, "RequestID"]
 
 
-class RequestID(namedtuple('RequestID', 'kind timestamp user')):
+class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
 
     KIND = types.SimpleNamespace(
         BENCHMARKS='compile-bench',
@@ -40,24 +40,27 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
     @classmethod
     def parse(cls, idstr: str):
         kinds = '|'.join(cls._KIND_BY_VALUE)
-        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)$', idstr)
+        m = re.match(rf'^req-(?:({kinds})-)?(\d{{10}})-(\w+)(?:-(\w+))?$', idstr)
         if not m:
             return None
-        kind, timestamp, user = m.groups()
-        return cls(kind, int(timestamp), user)
+        kind, timestamp, user, workerid = m.groups()
+        if not workerid:
+            workerid = "linux"
+        return cls(kind, int(timestamp), user, workerid)
 
     @classmethod
     def generate(
-            cls,
-            cfg: int,
-            user: Optional[str] = None,
-            kind: str = KIND.BENCHMARKS
+        cls,
+        cfg: int,
+        user: Optional[str] = None,
+        kind: str = KIND.BENCHMARKS,
+        workerid: str = 'linux'
     ) -> "RequestID":
         user = _utils.resolve_user(cfg, user)
         timestamp = int(_utils.utcnow())
-        return cls(kind, timestamp, user)
+        return cls(kind, timestamp, user, workerid)
 
-    def __new__(cls, kind, timestamp, user):
+    def __new__(cls, kind, timestamp, user, workerid):
         if not kind:
             kind = cls.KIND.BENCHMARKS
         else:
@@ -84,16 +87,20 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user')):
         else:
             _utils.check_name(user)
 
+        assert workerid
+        _utils.check_name(workerid)
+
         self = super().__new__(
             cls,
             kind=kind,
             timestamp=timestamp,
             user=user,
+            workerid=workerid
         )
         return self
 
     def __str__(self):
-        return f'req-{self.kind}-{self.timestamp}-{self.user}'
+        return f'req-{self.kind}-{self.timestamp}-{self.user}-{self.workerid}'
 
     @property
     def date(self) -> Optional[datetime.datetime]:

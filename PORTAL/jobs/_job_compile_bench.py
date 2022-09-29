@@ -368,9 +368,12 @@ def build_compile_script(
     maybe_branch = branch or ''
     ref = _utils.check_shell_str(req.pyperformance_ref)
 
-    cpython_repo = _utils.quote_shell_str(bfiles.repos.cpython)
-    pyperformance_repo = _utils.quote_shell_str(bfiles.repos.pyperformance)
-    pyston_benchmarks_repo = _utils.quote_shell_str(bfiles.repos.pyston_benchmarks)
+    cpython_repo = bfiles.repos.cpython
+    pyperformance_repo = bfiles.repos.pyperformance
+    pyston_benchmarks_repo = bfiles.repos.pyston_benchmarks
+    _utils.check_shell_str(cpython_repo)
+    _utils.check_shell_str(pyperformance_repo)
+    _utils.check_shell_str(pyston_benchmarks_repo)
 
     _bfiles = bfiles.resolve_request(req.id)
     _utils.check_shell_str(_bfiles.work.pidfile)

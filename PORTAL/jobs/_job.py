@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 class JobError(_common.JobsError):
     MSG = 'job {reqid} has a problem'
 
-    def __init__(self, reqid: RequestID, msg: Optional[str] = None):
-        msg = (msg or self.MSG).format(reqid=str(reqid))
+    def __init__(self, reqid: RequestID, msg: Optional[str] = None, **fmtkwargs):
+        msg = (msg or self.MSG).format(reqid=str(reqid), **fmtkwargs)
         super().__init__(msg)
         self.reqid = reqid
 
@@ -227,8 +227,8 @@ class Job:
             if cfg_user is None:
                 raise ValueError("Couldn't find local_user")
             user = cfg_user
-            _utils.check_shell_str(self._cfg.ssh.user)
-            _utils.check_shell_str(self._cfg.ssh.host)
+            _utils.check_shell_str(self._worker.ssh.user)
+            _utils.check_shell_str(self._worker.ssh.host)
             sshcmds = self._worker.ssh.shell_commands
 
         queue_log = _utils.quote_shell_str(queue_log)
@@ -261,7 +261,7 @@ class Job:
             pvalue = _utils.quote_shell_str(pvalue)
             bvalue = bfiles.look_up(area, name)
             _utils.check_shell_str(bvalue)
-            pushfiles.append((bvalue, pvalue))
+            pushfiles.append((pvalue, bvalue))
         pushfiles_str = '\n                '.join(
             sshcmds.push(s, t) for s, t in pushfiles
         )
@@ -283,6 +283,8 @@ class Job:
         pullfiles_str = '\n                '.join(
             sshcmds.pull(s, t) for s, t in pullfiles
         )
+
+        queueid = reqid.workerid
 
         #push = ssh.push
         #pull = ssh.pull
@@ -355,13 +357,13 @@ class Job:
 
             # Trigger the next job.
             pushd {_common.SYS_PATH_ENTRY}
-            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} &
+            {sys.executable} -u -m jobs internal-run-next -v --config {cfgfile} --logfile {queue_log} {queueid} &
 
             exit $exitcode
         '''[1:-1])
 
     def _get_ssh_agent(self) -> _utils.SSHAgentInfo:
-        agent = self._cfg.worker.ssh.agent
+        agent = getattr(self._cfg.workers[self.worker.id].ssh, "agent", None)
         if not agent or not agent.check():
             agent = _utils.SSHAgentInfo.find_latest()
             if not agent:

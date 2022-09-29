@@ -1,5 +1,6 @@
 import json
 import logging
+import os.path
 import sys
 import types
 from typing import (
@@ -36,38 +37,49 @@ else:
 
 
 class JobQueueError(Exception):
-    MSG = 'some problem with the job queue'
+    MSG = 'some problem with job queue {id!r}'
 
-    def __init__(self, msg: Optional[str] = None):
-        super().__init__(msg or self.MSG)
+    def __init__(self, queueid: str, msg: Optional[str] = None):
+        msg = (msg or self.MSG).format(id=id)
+        super().__init__(msg)
+        self.queueid = queueid
 
 
 class JobQueuePausedError(JobQueueError):
-    MSG = 'job queue paused'
+    MSG = 'job queue{id} paused'
 
 
 class JobQueueNotPausedError(JobQueueError):
-    MSG = 'job queue not paused'
+    MSG = 'job queue{id} not paused'
 
 
 class JobQueueEmptyError(JobQueueError):
-    MSG = 'job queue is empty'
+    MSG = 'job queue{id} is empty'
 
 
 class QueuedJobError(_job.JobError, JobQueueError):
-    MSG = 'some problem with job {reqid}'
+    MSG = 'some problem with job {reqid} (queue {id})'
+
+    def __init__(
+        self,
+        queueid: str,
+        reqid: RequestID,
+        msg: Optional[str] = None
+    ):
+        _job.JobError.__init__(self, reqid, msg, id=queueid)
+        self.queueid = queueid
 
 
 class JobNotQueuedError(QueuedJobError):
-    MSG = 'job {reqid} is not in the queue'
+    MSG = 'job {reqid} is not in queue {id}'
 
 
 class JobAlreadyQueuedError(QueuedJobError):
-    MSG = 'job {reqid} is already in the queue'
+    MSG = 'job {reqid} is already in queue {id}'
 
 
 class JobQueueFS(_utils.FSTree):
-    """The file structure of the job queue data."""
+    """The file structure of the job queue data for a single worker."""
 
     def __init__(
             self,
@@ -83,6 +95,18 @@ class JobQueueFS(_utils.FSTree):
 
     def __fspath__(self):
         return self.data
+
+
+class JobQueuesFS(_utils.FSTree):
+    """The file structure of all of the job queues."""
+    def resolve_queue(self, queueid: str) -> JobQueueFS:
+        return JobQueueFS(os.path.join(self.root, queueid))
+
+    def __str__(self) -> str:
+        return self.root
+
+    def __fspath__(self) -> str:
+        return self.root
 
 
 class JobQueueData(types.SimpleNamespace):
@@ -109,6 +133,7 @@ class JobQueueData(types.SimpleNamespace):
 class JobQueueSnapshot(JobQueueData):
     def __init__(
             self,
+            id: str,
             jobs: Sequence[RequestID],
             paused: bool,
             locked: LockInfoType,
@@ -117,6 +142,7 @@ class JobQueueSnapshot(JobQueueData):
             logfile: str
     ):
         super().__init__(tuple(jobs), paused)
+        self._id = id
         self.locked = locked
         self.datafile = datafile
         self.lockfile = lockfile
@@ -129,6 +155,10 @@ class JobQueueSnapshot(JobQueueData):
             return
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
+
+    @property
+    def id(self) -> str:
+        return self._id
 
 
 class JobQueue:
@@ -143,7 +173,8 @@ class JobQueue:
     @classmethod
     def from_fstree(
             cls,
-            fs: Union[str, JobQueueFS, _common.JobsFS]
+            fs: Union[str, JobQueueFS, _common.JobsFS],
+            id: Optional[str] = None,
     ) -> "JobQueue":
         queuefs: _utils.FSTree
         if isinstance(fs, str):
@@ -155,17 +186,20 @@ class JobQueue:
         else:
             raise TypeError(f'expected JobQueueFS, got {fs!r}')
         self = cls(
+            id=id or os.path.basename(queuefs.root),
             datafile=queuefs.data,
             lockfile=queuefs.lock,
             logfile=queuefs.log,
         )
         return self
 
-    def __init__(self, datafile: str, lockfile: str, logfile: str):
+    def __init__(self, id: str, datafile: str, lockfile: str, logfile: str):
+        _utils.validate_str(id, 'id')
         _utils.validate_str(datafile, 'datafile')
         _utils.validate_str(lockfile, 'lockfile')
         _utils.validate_str(logfile, 'logfile')
 
+        self._id = id
         self._datafile = datafile
         self._lock = _utils.LockFile(lockfile)
         self._logfile = logfile
@@ -203,7 +237,7 @@ class JobQueue:
         else:
             jobs = [RequestID.from_raw(v) for v in data['jobs']]
             if any(not j for j in jobs):
-                logger.warning('job queue at %s has bad entries', self._datafile)
+                logger.warning('job queue at %s has bad entries %s', self._datafile, data['jobs'])
                 fixed = True
             data['jobs'] = [r for r in jobs if r]
         # Save and return the data.
@@ -234,6 +268,10 @@ class JobQueue:
             _utils.write_json(data, outfile)
 
     @property
+    def id(self):
+        return self._id
+
+    @property
     def snapshot(self) -> JobQueueSnapshot:
         data = self._load()
         locked: LockInfoType
@@ -246,6 +284,7 @@ class JobQueue:
         else:
             locked = (pid, bool(pid))
         return JobQueueSnapshot(
+            id=self._id,
             datafile=self._datafile,
             lockfile=self._lock.filename,
             logfile=self._logfile,
@@ -263,7 +302,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if data.paused:
-                raise JobQueuePausedError()
+                raise JobQueuePausedError(self._id)
             data.paused = True
             self._save(data)
 
@@ -271,7 +310,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if not data.paused:
-                raise JobQueueNotPausedError()
+                raise JobQueueNotPausedError(self._id)
             data.paused = False
             self._save(data)
 
@@ -279,7 +318,7 @@ class JobQueue:
         with self._lock:
             data = self._load()
             if reqid in data.jobs:
-                raise JobAlreadyQueuedError(reqid)
+                raise JobAlreadyQueuedError(self._id, reqid)
 
             data.jobs.append(reqid)
             self._save(data)
@@ -290,9 +329,9 @@ class JobQueue:
             data = self._load()
             if data.paused:
                 if not forceifpaused:
-                    raise JobQueuePausedError()
+                    raise JobQueuePausedError(self._id)
             if not data.jobs:
-                raise JobQueueEmptyError()
+                raise JobQueueEmptyError(self._id)
 
             reqid = data.jobs.pop(0)
             self._save(data)
@@ -307,11 +346,11 @@ class JobQueue:
             data.jobs.insert(0, reqid)
             self._save(data)
 
-    def move(self, reqid: RequestID, position: int, relative: str) -> int:
+    def move(self, reqid: RequestID, position: int, relative: Optional[str]) -> int:
         with self._lock:
             data = self._load()
             if reqid not in data.jobs:
-                raise JobNotQueuedError(reqid)
+                raise JobNotQueuedError(self._id, reqid)
 
             old = data.jobs.index(reqid)
             if relative == '+':
@@ -333,7 +372,7 @@ class JobQueue:
             data = self._load()
 
             if reqid not in data.jobs:
-                raise JobNotQueuedError(reqid)
+                raise JobNotQueuedError(self._id, reqid)
 
             data.jobs.remove(reqid)
             self._save(data)
@@ -345,3 +384,24 @@ class JobQueue:
             return
         with logfile:
             yield from _utils.LogSection.read_logfile(logfile)
+
+
+class JobQueues:
+    @classmethod
+    def from_config(cls, cfg: "JobsConfig", fs: JobQueuesFS):
+        return cls(cfg, fs)
+
+    def __init__(self, cfg: "JobsConfig", fs: JobQueuesFS):
+        self._cfg = cfg
+        self._fs = fs
+
+    def __len__(self):
+        return len(self._cfg.workers)
+
+    def __iter__(self) -> Iterator[JobQueue]:
+        for queueid in self._cfg.workers.keys():
+            yield JobQueue.from_fstree(self._fs.resolve_queue(queueid), queueid)
+
+    def __getitem__(self, queueid: str) -> JobQueue:
+        assert queueid in self._cfg.workers, queueid
+        return JobQueue.from_fstree(self._fs.resolve_queue(queueid), queueid)

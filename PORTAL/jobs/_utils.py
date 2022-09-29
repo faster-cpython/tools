@@ -2,6 +2,7 @@ from collections import namedtuple
 import datetime
 import decimal
 import glob
+import io
 import json
 import logging
 import os
@@ -873,7 +874,11 @@ def resolve_cpu_arch() -> str:
 
 
 def get_termwidth(*, notty: int = 1000, unknown: int = 80) -> int:
-    if os.isatty(sys.stdout.fileno()):
+    try:
+        fileno = sys.stdout.fileno()
+    except io.UnsupportedOperation:
+        return unknown or 80
+    if os.isatty(fileno):
         try:
             termsize = os.get_terminal_size()
         except OSError:
@@ -1085,8 +1090,6 @@ class FSTree(types.SimpleNamespace):
     def __init__(self, root):
         if not root or root == '.':
             root = CWD
-        else:
-            root = os.path.abspath(os.path.expanduser(root))
         super().__init__(root=root)
 
     def __str__(self):
@@ -3639,7 +3642,7 @@ class SSHAgentInfo(namedtuple('SSHAgentInfo', 'auth_sock pid')):
                 latest = filename
             else:
                 _created = os.stat(filename).st_ctime
-                if _created > created:
+                if created is None or _created > created:
                     latest = filename
                     created = _created
         if not latest:
@@ -3760,7 +3763,7 @@ class SSHCommands:
 
     def run_shell(self, cmd, *, agent=None):
         conn = f'{self.user}@{self.host}'
-        return [self._ssh, *self._ssh_opts, conn, *shlex.split(cmd)]
+        return [self._ssh, *self._ssh_opts, conn, cmd]
 
     def push(self, source, target, *, agent=None):
         conn = f'{self.user}@{self.host}'
@@ -3783,7 +3786,7 @@ class SSHShellCommands(SSHCommands):
         return ' '.join(shlex.quote(a) for a in super().run(cmd, *args))
 
     def run_shell(self, cmd, *, agent=None):
-        return ' '.join(super().run_shell(cmd))
+        return ' '.join(super().run_shell(shlex.quote(cmd)))
 
     def push(self, source, target, *, agent=None):
         return ' '.join(super().push(source, target))

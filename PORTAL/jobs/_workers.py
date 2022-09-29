@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Type, TYPE_CHECKING
+from typing import Any, Mapping, Type, TYPE_CHECKING
 
 from . import _utils, _common
 
@@ -85,21 +85,36 @@ class JobWorker:
     def ssh(self) -> _utils.SSHClient:
         return self._worker.ssh
 
+    @property
+    def worker(self) -> "Worker":
+        return self._worker
+
+    @property
+    def id(self) -> str:
+        return self._worker.id
+
 
 class Worker:
     """A single configured worker."""
 
     @classmethod
     def from_config(
-            cls,
-            cfg: WorkerConfig,
-            JobsFS: Type[WorkerJobsFS] = WorkerJobsFS
+        cls,
+        workerid: str,
+        cfg: WorkerConfig,
+        JobsFS: Type[WorkerJobsFS] = WorkerJobsFS
     ) -> "Worker":
-        fs = JobsFS.from_user(cfg.user)
+        fs: WorkerJobsFS = JobsFS.from_user(cfg.user)  # type: ignore
         ssh = _utils.SSHClient.from_config(cfg.ssh)
-        return cls(fs, ssh)
+        return cls(workerid, fs, ssh)
 
-    def __init__(self, fs, ssh):
+    def __init__(
+        self,
+        workerid: str,
+        fs: WorkerJobsFS,
+        ssh: _utils.SSHClient
+    ):
+        self._id = workerid
         self._fs = fs
         self._ssh = ssh
 
@@ -110,6 +125,10 @@ class Worker:
 
     def __eq__(self, other):
         raise NotImplementedError
+
+    @property
+    def id(self) -> str:
+        return self._id
 
     @property
     def fs(self) -> WorkerJobsFS:
@@ -124,7 +143,7 @@ class Worker:
             reqid: "requests.ToRequestIDType"
     ) -> JobWorker:
         fs = self._fs.resolve_request(reqid)
-        return JobWorker(self, fs)
+        return JobWorker(self, fs)  # type: ignore
 
 
 class Workers:
@@ -136,22 +155,30 @@ class Workers:
             cfg: "JobsConfig",
             JobsFS: Type[WorkerJobsFS] = WorkerJobsFS
     ) -> "Workers":
-        worker = Worker.from_config(cfg.worker, JobsFS)
-        return cls(worker)
+        workers = {}
+        for workerid, worker in cfg.workers.items():
+            workers[workerid] = Worker.from_config(workerid, worker, JobsFS)
+        return cls(workers)
 
-    def __init__(self, worker):
-        self._worker = worker
+    def __init__(self, workers: Mapping[str, Worker]):
+        self._workers = workers
 
     def __repr__(self):
         args = (f'{n}={getattr(self, "_"+n)!r}'
-                for n in 'worker'.split())
+                for n in 'workers'.split())
         return f'{type(self).__name__}({"".join(args)})'
 
     def __eq__(self, other):
         raise NotImplementedError
 
     def resolve_job(
-            self,
-            reqid: "requests.ToRequestIDType"
+        self,
+        reqid: "requests.ToRequestIDType"
     ) -> JobWorker:
-        return self._worker.resolve_job(reqid)
+        from . import requests
+
+        reqid_resolved = requests.RequestID.from_raw(reqid)
+        workerid = reqid_resolved.workerid
+        if workerid not in self._workers:
+            raise KeyError(f"Unknown worker {workerid}")
+        return self._workers[workerid].resolve_job(reqid_resolved)
