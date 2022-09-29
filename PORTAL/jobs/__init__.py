@@ -103,7 +103,7 @@ class PortalFS(_utils.FSTree):
 class Jobs:
 
     FS: Type[PortalFS] = PortalFS
-    _queue: queue_mod.JobQueue
+    _queues: queue_mod.JobQueues
 
     def __init__(self, cfg: JobsConfig, *, devmode: bool = False):
         self._cfg = cfg
