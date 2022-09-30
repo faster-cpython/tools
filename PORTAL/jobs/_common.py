@@ -152,7 +152,7 @@ class JobRequestFS(_utils.FSTree):
 class JobResultFS(_utils.FSTree):
     def __init__(self, root: str):
         super().__init__(root)
-        self.resultroot = os.path.dirname(root)
+        self.resultsroot = os.path.dirname(root)
         self.metadata = f'{self.root}/results.json'
 
 
