@@ -469,7 +469,7 @@ class Job:
             raise JobAlreadyFinishedError(self.reqid)
         elif status not in Result.ACTIVE:
             raise JobNeverStartedError(self.reqid)
-        # Go until it has a PID or it finiishes.
+        # Go until it has a PID or it finishes.
         pid = self.get_pid()
         while pid is None:
             if checkssh and os.path.exists(self._fs.ssh_okay):
