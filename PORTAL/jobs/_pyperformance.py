@@ -2089,7 +2089,7 @@ class PyperfResultsInfo(
 
     @property
     def sortkey(self) -> Any:
-        return (*self.uploadid.sortkey, self.date)
+        return (self.uploadid.version, self.date)
 
     def match(
             self,
