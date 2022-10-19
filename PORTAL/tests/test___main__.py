@@ -387,6 +387,123 @@ def test_queue_pop(tmp_path):
     assert content["jobs"] == []
 
 
+def test_queue_push(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid = "req-compile-bench-1664291728-nobody-mac"
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [], "paused": False}))
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results-created.json", reqdir / "results.json")
+
+    __main__._parse_and_main(
+        [*args, "queue", "push", reqid],
+        __file__,
+    )
+
+    content = json.loads(queue_file.read_text())
+    assert content["jobs"] == [reqid]
+
+    assert (
+        "Adding job req-compile-bench-1664291728-nobody-mac to the queue" in caplog.text
+    )
+
+
+def test_queue_push_already_created(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid = "req-compile-bench-1664291728-nobody-mac"
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [], "paused": False}))
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
+
+    with pytest.raises(SystemExit) as exc:
+        __main__._parse_and_main(
+            [*args, "queue", "push", reqid],
+            __file__,
+        )
+
+    assert exc.value.code == 1
+
+    content = json.loads(queue_file.read_text())
+    assert content["jobs"] == []
+
+    assert (
+        "request req-compile-bench-1664291728-nobody-mac has already been used"
+        in caplog.text
+    )
+
+
+def test_queue_move(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid1 = "req-compile-bench-1664291728-nobody-mac"
+    reqid2 = "req-compile-bench-1664291729-nobody-mac"
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid1, reqid2], "paused": False}))
+
+    for reqid in (reqid1, reqid2):
+        reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+        reqdir.mkdir()
+        shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
+
+    # TODO: There may be an off-by-one error in the code -- moving to position
+    # "2" doesn't change anything
+
+    __main__._parse_and_main(
+        [*args, "queue", "move", reqid1, "3"],
+        __file__,
+    )
+
+    content = json.loads(queue_file.read_text())
+    assert content["jobs"] == [reqid2, reqid1]
+
+    assert (
+        "Moving job req-compile-bench-1664291728-nobody-mac to position 3 in the queue..."
+        in caplog.text
+    )
+
+
+def test_queue_remove(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid1 = "req-compile-bench-1664291728-nobody-mac"
+    reqid2 = "req-compile-bench-1664291729-nobody-mac"
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [reqid1, reqid2], "paused": False}))
+
+    for reqid in (reqid1, reqid2):
+        reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+        reqdir.mkdir()
+        shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
+
+    __main__._parse_and_main(
+        [*args, "queue", "remove", reqid1],
+        __file__,
+    )
+
+    content = json.loads(queue_file.read_text())
+    assert content["jobs"] == [reqid2]
+
+    assert (
+        "Removing job req-compile-bench-1664291728-nobody-mac from the queue..."
+        in caplog.text
+    )
+
+
+def test_config_show(tmp_path, capsys):
+    args = helpers.setup_temp_env(tmp_path)
+
+    __main__._parse_and_main([*args, "config"], __file__)
+
+    captured = capsys.readouterr()
+
+    assert json.loads((tmp_path / "jobs.json").read_text()) == json.loads(captured.out)
+
+
 def test_run_bench(tmp_path, monkeypatch):
     # Just a basic smoke test
 
@@ -428,3 +545,56 @@ def test_run_bench(tmp_path, monkeypatch):
         "run.sh",
         "send.sh",
     ] == files
+
+
+def test_cancel(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid = "req-compile-bench-1664291728-nobody-mac"
+    (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json").write_text(
+        json.dumps({"jobs": [reqid], "paused": False})
+    )
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
+
+    __main__._parse_and_main(
+        [*args, "cancel", reqid],
+        __file__,
+    )
+
+    assert (
+        "Removing job req-compile-bench-1664291728-nobody-mac from the queue..."
+        in caplog.text
+    )
+
+
+def test_cancel_reqid_missing(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid = "req-compile-bench-1664291728-nobody-mac"
+    (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json").write_text(
+        json.dumps({"jobs": [reqid], "paused": False})
+    )
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
+
+    with pytest.raises(SystemExit) as exc:
+        __main__._parse_and_main(
+            [*args, "cancel", "req-compile-bench-99999999990-nobody-mac"],
+            __file__,
+        )
+
+    assert exc.value.code == 1
+
+    assert (
+        "expected a valid reqid, got 'req-compile-bench-99999999990-nobody-mac'"
+        in caplog.text
+    )
+
+
+# TODO: cmd_wait (this is tricky one to test)
+
+
+# TODO: cmd_upload (partially covered by test_run_bench)
