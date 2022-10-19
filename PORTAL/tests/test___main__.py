@@ -437,6 +437,29 @@ def test_queue_push_already_created(tmp_path, caplog):
     )
 
 
+def test_queue_push_default_worker(tmp_path, caplog):
+    args = helpers.setup_temp_env(tmp_path)
+
+    # If the workerid isn't provided in the reqid, we want to assert that it is
+    # managed on the default "linux" queue.
+    reqid = "req-compile-bench-1664291728-nobody"
+    queue_file = tmp_path / "BENCH" / "QUEUES" / "linux" / "queue.json"
+    queue_file.write_text(json.dumps({"jobs": [], "paused": False}))
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results-created.json", reqdir / "results.json")
+
+    __main__._parse_and_main(
+        [*args, "queue", "push", reqid],
+        __file__,
+    )
+
+    content = json.loads(queue_file.read_text())
+    assert content["jobs"] == [reqid]
+
+    assert "Adding job req-compile-bench-1664291728-nobody to the queue" in caplog.text
+
+
 def test_queue_move(tmp_path, caplog):
     args = helpers.setup_temp_env(tmp_path)
 

@@ -22,6 +22,8 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
     )
     _KIND_BY_VALUE = {v: v for _, v in vars(KIND).items()}
 
+    _workerid_defaulted: bool
+
     @classmethod
     def from_raw(cls, raw: Any):
         if isinstance(raw, cls):
@@ -44,8 +46,6 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
         if not m:
             return None
         kind, timestamp, user, workerid = m.groups()
-        if not workerid:
-            workerid = "linux"
         return cls(kind, int(timestamp), user, workerid)
 
     @classmethod
@@ -60,7 +60,13 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
         timestamp = int(_utils.utcnow())
         return cls(kind, timestamp, user, workerid)
 
-    def __new__(cls, kind, timestamp, user, workerid):
+    def __new__(
+        cls,
+        kind: Optional[str],
+        timestamp: Optional[int],
+        user: Optional[str],
+        workerid: Optional[str]
+    ):
         if not kind:
             kind = cls.KIND.BENCHMARKS
         else:
@@ -87,7 +93,14 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
         else:
             _utils.check_name(user)
 
-        assert workerid
+        # If the workerid wasn't provided, it defaults to "linux", but
+        # we don't want to include it in the __str__ because it wouldn't
+        # match the original name
+        if not workerid:
+            workerid_defaulted = True
+            workerid = "linux"
+        else:
+            workerid_defaulted = False
         _utils.check_name(workerid)
 
         self = super().__new__(
@@ -97,10 +110,17 @@ class RequestID(namedtuple('RequestID', 'kind timestamp user workerid')):
             user=user,
             workerid=workerid
         )
+
+        self._workerid_defaulted = workerid_defaulted
+
         return self
 
     def __str__(self):
-        return f'req-{self.kind}-{self.timestamp}-{self.user}-{self.workerid}'
+        if self._workerid_defaulted:
+            suffix = ''
+        else:
+            suffix = f'-{self.workerid}'
+        return f'req-{self.kind}-{self.timestamp}-{self.user}{suffix}'
 
     @property
     def date(self) -> Optional[datetime.datetime]:
