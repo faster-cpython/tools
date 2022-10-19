@@ -73,18 +73,24 @@ def test_show_with_content(tmp_path, capsys):
     shutil.copy(helpers.DATA_ROOT / "request.json", reqdir / "request.json")
     shutil.copy(helpers.DATA_ROOT / "results.json", reqdir / "results.json")
 
+    (reqdir / "job.log").write_text(
+        textwrap.dedent(
+            """
+            LINE 1 OF LOG
+            LINE 2 OF LOG
+            LINE 3 OF LOG
+            """
+        )
+    )
+
     __main__._parse_and_main(
-        [
-            *args,
-            "show",
-            reqid,
-        ],
+        [*args, "show", reqid, "--lines", "2"],
         __file__,
     )
 
     captured = capsys.readouterr()
 
-    assert re.match(
+    assert re.fullmatch(
         textwrap.dedent(
             r"""
             Request req-compile-bench-1664291728-nobody-mac:
@@ -121,9 +127,11 @@ def test_show_with_content(tmp_path, capsys):
               data root:             .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac
               metadata:              .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/results.json
               pidfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/send.pid\)
-              logfile:               \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/job.log\)
+              logfile:               .*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/job.log
               pyperformance_log:     \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance.log\)
               pyperformance_results: \(.*?/BENCH/REQUESTS/req-compile-bench-1664291728-nobody-mac/pyperformance-results.json.gz\)
+            LINE 2 OF LOG
+            LINE 3 OF LOG
         """
         ).strip(),
         captured.out.strip(),

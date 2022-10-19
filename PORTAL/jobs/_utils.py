@@ -1058,7 +1058,11 @@ def tail_file(filename, nlines, *, follow=None):
         if follow is not True:
             pid = follow
             tail_args.extend(['--pid', f'{pid}'])
-    subprocess.run([shutil.which('tail'), *tail_args, filename])
+    process = subprocess.run(
+        [shutil.which('tail'), *tail_args, filename],
+        capture_output=True
+    )
+    print(process.stdout.decode())
 
 
 def render_file(filename):
