@@ -253,6 +253,9 @@ class Jobs:
                 raise NoRunningJobError
             job = self._get(reqid_source)
             reqid = job.reqid
+
+        queued_tasks = list(self.queues[reqid.workerid].snapshot)
+
         if timeout is True:
             # Calculate the timeout.
             if current:
@@ -270,7 +273,7 @@ class Jobs:
                 if timeout is True:
                     timeout = 0
                 # Add the expected time for everything in the queue before the job.
-                for queued in self.queues[reqid.workerid].snapshot:
+                for queued in queued_tasks:
                     if queued == reqid:
                         # Play it safe by doubling the timeout.
                         timeout *= 2
@@ -284,6 +287,13 @@ class Jobs:
                 else:
                     # Either it hasn't been queued or it already finished.
                     timeout = 0
+
+        # Give the user an idea of the expected wait
+        if len(queued_tasks) > 1:
+            logger.info("There are {len(queued_tasks) - 1} tasks ahead of this one")
+            if timeout:
+                logger.info("Expected wait is {timeout} seconds")
+
         # Wait!
         pid = job.wait_until_started(timeout)
         return job, pid
