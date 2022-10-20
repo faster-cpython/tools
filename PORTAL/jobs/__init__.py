@@ -290,9 +290,9 @@ class Jobs:
 
         # Give the user an idea of the expected wait
         if len(queued_tasks) > 1:
-            logger.info("There are {len(queued_tasks) - 1} tasks ahead of this one")
+            logger.info(f"There are {len(queued_tasks) - 1} tasks ahead of this one")
             if timeout:
-                logger.info("Expected wait is {timeout} seconds")
+                logger.info(f"Expected wait is {timeout} seconds")
 
         # Wait!
         pid = job.wait_until_started(timeout)
