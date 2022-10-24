@@ -600,6 +600,42 @@ def test_cancel(tmp_path, caplog):
     )
 
 
+def test_cancel_no_reqid_specified(tmp_path, caplog, monkeypatch):
+    args = helpers.setup_temp_env(tmp_path)
+
+    reqid = "req-compile-bench-1664291728-nobody-mac"
+    (tmp_path / "BENCH" / "QUEUES" / "mac" / "queue.json").write_text(
+        json.dumps({"jobs": [reqid], "paused": False})
+    )
+    reqdir = tmp_path / "BENCH" / "REQUESTS" / reqid
+    reqdir.mkdir()
+    shutil.copy(helpers.DATA_ROOT / "results-activated.json", reqdir / "results.json")
+
+    (reqdir / "send.pid").write_text("1234")
+
+    from jobs import _current
+
+    def get_staged_request(jobsfs, symlink=None):
+        if not symlink:
+            symlink = _current.symlink_from_jobsfs(jobsfs)
+        return _current._read_staged(symlink, jobsfs)
+
+    monkeypatch.setattr(_current, "get_staged_request", get_staged_request)
+
+    current = tmp_path / "BENCH" / "REQUESTS" / "CURRENT"
+    current.symlink_to(reqdir)
+
+    __main__._parse_and_main(
+        [*args, "cancel"],
+        __file__,
+    )
+
+    assert (
+        "job req-compile-bench-1664291728-nobody-mac no longer"
+        in caplog.text
+    )
+
+
 def test_cancel_reqid_missing(tmp_path, caplog):
     args = helpers.setup_temp_env(tmp_path)
 

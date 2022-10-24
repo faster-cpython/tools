@@ -265,7 +265,6 @@ def cmd_cancel(
         logger.info(line)
 
     if current:
-        assert reqid is not None
         jobs.ensure_next()
 
 
