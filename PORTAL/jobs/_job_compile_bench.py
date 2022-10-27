@@ -499,6 +499,9 @@ def build_compile_script(
             touch {_bfiles.request}/pyperformance-dummy-results.json.gz
             )
         else
+            # Remove pyperformance's .venvs directory to force an upgrade of its
+            # dependencies
+            rm -rf {pyperformance_repo}/.venvs
             ( set -x
             MAKEFLAGS='-j{numjobs}' \\
                 {python} {pyperformance_repo}/dev.py compile \\
