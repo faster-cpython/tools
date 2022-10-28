@@ -74,9 +74,9 @@ alias bench-view='bench-cwd view -O -u $HOME/.vimrc'
 
 {
 portal_config="$LOCAL_BENCH_DIR/jobs.json"
-BENCH_USER="$(bench jq -r '.send_user' $portal_config)"
-BENCH_HOST="$(bench jq -r '.send_host' $portal_config)"
-BENCH_PORT="$(bench jq -r '.send_port' $portal_config)"
+BENCH_USER="$(bench jq -r '.worker.user' $portal_config)"
+BENCH_HOST="$(bench jq -r '.worker.ssh_host' $portal_config)"
+BENCH_PORT="$(bench jq -r '.worker.ssh_port' $portal_config)"
 portal_config=
 BENCH_CONN="$BENCH_USER@$BENCH_HOST"
 } 2>/dev/null
