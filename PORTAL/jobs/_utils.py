@@ -1058,11 +1058,16 @@ def tail_file(filename, nlines, *, follow=None):
         if follow is not True:
             pid = follow
             tail_args.extend(['--pid', f'{pid}'])
-    process = subprocess.run(
-        [shutil.which('tail'), *tail_args, filename],
-        capture_output=True
-    )
-    print(process.stdout.decode())
+    if "pytest" in sys.modules:
+        process = subprocess.run(
+            [shutil.which('tail'), *tail_args, filename],
+            capture_output=True
+        )
+        print(process.stdout.decode())
+    else:
+        process = subprocess.run(
+            [shutil.which('tail'), *tail_args, filename],
+        )
 
 
 def render_file(filename):
