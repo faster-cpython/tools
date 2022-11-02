@@ -2160,6 +2160,23 @@ class PyperfResultsInfo(
             return None
         return resfile.read()
 
+    def write_compare_to_markdown(self, baseline: "PyperfResultsInfo") -> str:
+        cwd = self._resultsroot
+        proc = _utils.run_fg(
+            sys.executable,
+            '-m', 'pyperf', 'compare_to', '--group-by-speed',
+            '--table', '--table-format', 'md',
+            baseline.filename,
+            self.filename,
+            cwd=cwd,
+        )
+        if proc.returncode:
+            raise RuntimeError(proc.stdout)
+        md_filename = self.filename[:-5] + '.md'
+        with open(md_filename, 'w') as fd:
+            fd.write(proc.stdout)
+        return md_filename
+
     def as_rendered_row(self, columns: Iterable[str]) -> List[str]:
         row = []
         for column in columns:
@@ -2307,6 +2324,26 @@ class PyperfResultsIndex:
     ) -> PyperfResultsInfo:
         info = PyperfResultsInfo.from_results(results, compared)
         return self.add(info)
+
+    def get_baseline_by_version(
+        self,
+        requested_suite: str,
+        requested_baseline: str
+    ) -> PyperfResultsInfo:
+        """
+        Get a PyperfResultsInfo for the given suite and baseline version.
+        """
+        baseline = _utils.CPythonVersion.parse(requested_baseline)
+        for i, info in enumerate(self._entries):
+            suite = info.uploadid.suite
+            if suite not in PyperfUploadID.SUITES:
+                raise NotImplementedError((suite, info))
+            if (
+                suite == requested_suite and
+                info.uploadid.version.full == baseline.full
+            ):
+                return info
+        return None
 
     def ensure_means(
             self,
@@ -3133,6 +3170,10 @@ class PyperfResultsRepo(PyperfResultsStorage):
         logger.info('committing to the repo...')
         for info in added:
             repo.add(info.filename)
+            if self._baseline:
+                baseline = index.get_baseline_by_version(info.uploadid.suite, self._baseline)
+                assert baseline is not None
+                repo.add(info.write_compare_to_markdown(baseline))
         repo.add(self._resultsdir.indexfile)
         for readme in readmes:
             repo.add(readme)
@@ -3196,10 +3237,12 @@ class PyperfResultsRepo(PyperfResultsStorage):
             date, release, commit, host, mean = row
             relpath = os.path.relpath(info.filename, output_dir)
             relpath = relpath.replace(r'\/', '/')
+            table_relpath = relpath[:-5] + ".md"
             date = f'[{date}]({relpath})'
             if not mean:
                 mean = PyperfComparisonValue.BASELINE
             assert '3.10.4' not in release or mean == '(ref)', repr(mean)
+            mean = f'[{mean}]({table_relpath})'
             row = [date, release, commit, host, mean]
             by_suite[suite].append(row)
 
