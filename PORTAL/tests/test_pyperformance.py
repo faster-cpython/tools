@@ -93,3 +93,35 @@ def test_paths_in_readme(tmp_path):
         for url in find_url_to_results.finditer(content):
             url = url.groups()[0]
             assert url.startswith("cpython-")
+
+
+def test_not_hidden(tmp_path):
+    git_commit = "4cd693d"  # main on 2022-09-09
+    datadir = "benchmark-results"
+    repo_root = tmp_path / "ideas"
+    base_filename = NEW_FILENAME.stem
+
+    github_target = _utils.GitHubTarget.from_url(IDEAS_GIT_URL)
+    github_target.ensure_local(str(repo_root))
+
+    results_repo = _pyperformance.PyperfResultsRepo.from_remote(
+        IDEAS_GIT_URL, str(repo_root), datadir=datadir
+    )
+
+    input_file = DATA_ROOT / f"{base_filename}.json"
+
+    results_file = _pyperformance.PyperfResultsFile(str(input_file)).read()
+
+    results_repo.add(results_file, branch=git_commit, push=False)
+
+    find_url_to_results = re.compile(
+        r"\]\((.*cpython-.*-(?:(?:pyperformance)|(?:pyston))\.json)\)"
+    )
+
+    # The top-level README.md file should have links that include
+    # `benchmark-results`
+    with open(repo_root / "README.md", "r") as fd:
+        content = fd.read()
+
+    assert "<!--\npyperformance:" not in content
+    assert "<!--\npyston:" not in content
