@@ -2329,7 +2329,7 @@ class PyperfResultsIndex:
         self,
         requested_suite: str,
         requested_baseline: str
-    ) -> PyperfResultsInfo:
+    ) -> Optional[PyperfResultsInfo]:
         """
         Get a PyperfResultsInfo for the given suite and baseline version.
         """
