@@ -38,10 +38,12 @@ def test_compare(tmp_path, capsys):
 +-------------------------+-----------------------------------------------------------------+---------------------------------------------------------------+
 
 Benchmark hidden because not significant (1): pickle
-Ignored benchmarks (6) of cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperformance.json: genshi_text, genshi_xml, gevent_hub, pylint, sqlalchemy_declarative, sqlalchemy_imperative
+Ignored benchmarks (2) of cpython-3.10.4-9d38120e33-fc_linux-b2cf916db80e-pyperformance.json: genshi_text, genshi_xml
     """
 
     captured = capsys.readouterr()
+
+    print(captured.out)
 
     assert expected_start.strip() in captured.out
     assert captured.out.strip().endswith(expected_end.strip())
