@@ -43,6 +43,9 @@ NUM_JUMP_REL_EXT = "__num_jump_rel_extended__"
 NUM_JUMP_ABS_BACKWARDS = "__num_jump_abs_backwards__"
 NUM_JUMP_ABS_BACKWARDS_EXT = "__num_jump_abs_extended_backwards__"
 NUM_SHORT_ABS_JUMPS = "__num_short_abs_jumps__"
+REGISTERS = "__total_registers__"
+NLARGE_REGISTERS = "__num_large_registers__"
+NSMALL_REGISTERS = "__num_small_registers__"
 
 SHOW_ITEMS = [
     (NERRORS, "errors"),
@@ -51,6 +54,9 @@ SHOW_ITEMS = [
     (NLINES, "lines"),
     (NOPCODES, "opcodes"),
     (NPAIRS, "opcode pairs"),
+    (REGISTERS, "total registers for all code objects"),
+    (NLARGE_REGISTERS, "#code objects with > 255 registers"),
+    (NSMALL_REGISTERS, "#code objects with <= 255 registers"),
     (NITEMS, "constants"),
     (CACHE_SIZE, "cache_size"),
     (CACHE_WASTED, "cache wasted"),
@@ -237,6 +243,24 @@ class ConstantsReporter(Reporter):
             key = f"!{const!r}"
             counter[key] += 1
 
+class RegistersReporter(Reporter):
+
+    def reporting_guts(self, counter, co, bias):
+        regs = (co.co_argcount +
+                len(co.co_cellvars) +
+                len(co.co_consts) +
+                len(co.co_freevars) +
+                len(co.co_names) +
+                co.co_nlocals +
+                len(co.co_varnames) +
+                co.co_stacksize)
+
+        counter[REGISTERS] += regs
+        if regs > 255:
+            counter[NLARGE_REGISTERS] += 1
+        else:
+            counter[NSMALL_REGISTERS] += 1
+
 
 STORE_FAST = opcode.opmap["STORE_FAST"]
 LOAD_CONST = opcode.opmap["LOAD_CONST"]
@@ -318,6 +342,8 @@ argparser.add_argument("--pairs", type=int, metavar="N",
                       help="show N most common opcode pairs")
 argparser.add_argument("--constants", type=int, metavar="N",
                        help="Show N most common constants")
+argparser.add_argument("--registers", action="store_true",
+                       help="show stats about registers estimate")
 argparser.add_argument("--names", type=int, metavar="N",
                        help="Show N most common names")
 argparser.add_argument("--jumps", action="store_true",
@@ -356,6 +382,8 @@ def main():
         reporter = StoreNoneReporter()
     elif args.constants:
         reporter = ConstantsReporter()
+    elif args.registers:
+        reporter = RegistersReporter()
     elif args.names:
         reporter = NamesReporter()
     elif args.jumps:
