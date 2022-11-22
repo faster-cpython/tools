@@ -206,7 +206,7 @@ def cmd_attach(
         jobs: Jobs,
         reqid: Optional[RequestID] = None,
         *,
-        lines: Iterable[str] = None
+        lines: Optional[Iterable[str]] = None
 ) -> None:
     try:
         try:
@@ -572,7 +572,7 @@ def cmd_queue_move(
         jobs: Jobs,
         reqid: RequestID,
         position: int,
-        relative: str = None
+        relative: Optional[str] = None
 ) -> None:
     position = int(position)
     if position <= 0:
