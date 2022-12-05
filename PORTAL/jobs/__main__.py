@@ -1022,6 +1022,7 @@ def parse_args(
         nargs='*',
         metavar='SELECTION',
         default="-10",
+        type=int,
         help='a specifier for a subset (e.g. -10 for the last 10). Default: -10'
     )
 

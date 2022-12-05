@@ -4533,12 +4533,11 @@ def get_slice(raw):
             stop = raw
         return slice(start, stop)
     elif isinstance(raw, str):
-        if raw.isdigit():
-            return get_slice(int(raw))
-        elif raw.startswith('-') and raw[1:].isdigit():
-            return get_slice(int(raw))
-        else:
+        try:
+            number = int(raw)
+        except ValueError:
             raise NotImplementedError(repr(raw))
+        return get_slice(number)
     else:
         raise TypeError(f'expected str or int, got {raw!r}')
 
