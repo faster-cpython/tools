@@ -71,6 +71,7 @@ alias bench-git='bench-cwd git'
 alias bench-vi='bench-cwd vi -O -u $HOME/.vimrc'
 #alias bench-vi='bench-cwd vi -O -u $HOME/.vimrc -i $HOME/.viminfo'
 alias bench-view='bench-cwd view -O -u $HOME/.vimrc'
+alias benchmark='bench BENCH/jobs.py'
 
 {
 portal_config="$LOCAL_BENCH_DIR/jobs.json"
@@ -100,7 +101,9 @@ echo "BENCH_CONN:       $BENCH_CONN"
 echo
 echo " other info:"
 echo
-echo "run benchmarks:  bench BENCH/jobs.py ..."
+echo "run benchmarks: benchmark ..."
+echo
+benchmark --help
 echo
 echo '==================================='
 echo '===   done (for benchmarking)   ==='

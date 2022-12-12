@@ -2,7 +2,9 @@ import argparse
 import logging
 import os
 import os.path
+import subprocess
 import sys
+import textwrap
 import traceback
 from typing import (
     Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional,
@@ -729,8 +731,8 @@ def _add_request_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
                                help='do PGO and LTO (default)')
     compile_bench.add_argument('--no-optimize', dest='optimize', action='store_false')
     compile_bench.add_argument('--debug', action='store_true')
-    compile_bench.add_argument('--benchmarks')
-    compile_bench.add_argument('--remote', help='(default: origin)')
+    compile_bench.add_argument('--benchmarks', help='list of benchmarks to run (default: all)')
+    compile_bench.add_argument('--remote', help='(default: python)')
     compile_bench.add_argument('--branch', help='(default: main or None)')
     compile_bench.add_argument('revision',
                                help='CPython tag/commit/branch to benchmark (default: latest)')
@@ -845,7 +847,6 @@ def _add_queue_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     sub = add_cmd('queue', help='Manage the job queue')
     queue = sub.add_subparsers(
         dest='queue_cmd',
-        metavar='CMD',
         title='subcommands',
         #required=False,
         #default='list',
@@ -942,9 +943,20 @@ def _add_bench_host_cli(add_cmd: Callable, add_hidden: bool = True) -> Callable:
     return handle_args
 
 
+EPILOG = textwrap.dedent("""
+    Full documentation is available at
+    https://github.com/microsoft/faster-cpython/wiki/Benchmarking-Tooling
+""")
+
+
+REQID_HELP = textwrap.dedent("""
+    Request ID of the form 'req-compile-bench-{ID}-{USER}-{MACHINE}'
+""")
+
+
 def parse_args(
         argv: Sequence[str] = sys.argv[1:],
-        prog: str = sys.argv[0]
+        prog: str = 'benchmark'
 ) -> Tuple[str, Dict[str, Any], str, str, int, str, bool]:
 
     ##########
@@ -966,7 +978,7 @@ def parse_args(
     common.add_argument('-q', '--quiet', action='count', default=0)
     if add_hidden:
         common.add_argument('--config', dest='cfgfile', metavar='FILE',
-                            help='(default: ~benchmarking/BENCH/jobs.json))')
+                            help='(default: ~benchmarking/BENCH/jobs.json)')
         common.add_argument('--logfile', metavar='FILE')
         args, argv = common.parse_known_args(argv)
         cfgfile = args.cfgfile
@@ -983,10 +995,11 @@ def parse_args(
     parser = argparse.ArgumentParser(
         prog=prog,
         parents=[common],
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subs = parser.add_subparsers(
         dest='cmd',
-        metavar='CMD',
         title='subcommands',
     )
 
@@ -994,18 +1007,30 @@ def parse_args(
     # Add the subcommands for managing jobs.
 
     def add_cmd(name, subs=subs, *, parents=(), **kwargs):
-        return subs.add_parser(name, parents=[common, *parents], **kwargs)
+        return subs.add_parser(
+            name,
+            parents=[common, *parents],
+            epilog=EPILOG,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            **kwargs
+        )
 
-    sub = add_cmd('list', help='Print a table of all known jobs')
+    sub = add_cmd('list', help='Print a table of known jobs')
     sub.add_argument('--columns', help='a CSV of column names to show')
-    sub.add_argument('selections', nargs='*', metavar='SELECTION',
-                     help='a specifier for a subset (e.g. -10 for the last 10)')
+    sub.add_argument(
+        'selections',
+        nargs='*',
+        metavar='SELECTION',
+        default="-10",
+        type=int,
+        help='a specifier for a subset (e.g. -10 for the last 10). Default: -10'
+    )
 
     sub = add_cmd('show', help='Print a summary of the given (or current) job')
     sub.add_argument('-n', '--lines', type=int, default=0, metavar='N',
                      help='show the last N lines of the job\'s output (default: 0)')
     sub.add_argument('reqid', nargs='?',
-                     help='(default: the currently running job, if any)')
+                     help=f'{REQID_HELP} (default: the currently running job, if any)')
 
     handle_request_args = _add_request_cli(add_cmd, add_hidden)
 
@@ -1025,23 +1050,23 @@ def parse_args(
         #                 help='Run a new copy of the given job request')
         #sub.add_argument('--force', action='store_true',
         #                 help='Run the job even if another is already running')
-        sub.add_argument('reqid')
+        sub.add_argument('reqid', help=REQID_HELP)
 
     sub = add_cmd('attach', help='Tail a job\'s log file')
     sub.add_argument('-n', '--lines', type=int, default=0, metavar='N',
                      help='show the last N lines of the job\'s output (default: 0)')
     sub.add_argument('reqid', nargs='?',
-                     help='(default: the currently running job, if any)')
+                     help=f'{REQID_HELP} (default: the currently running job, if any)')
 
     sub = add_cmd('cancel', help='Stop the current job (or prevent a pending one)')
     sub.add_argument('reqid', nargs='?',
-                     help='(default: the currently running job, if any)')
+                     help=f'{REQID_HELP} (default: the currently running job, if any)')
 
     if add_hidden:
         sub = add_cmd('wait', help='wait until the given (or current) job finishes')
         # XXX Add a --timeout arg?
         sub.add_argument('reqid', nargs='?',
-                         help='(default: the currently running job, if any)')
+                         help=f'{REQID_HELP} (default: the currently running job, if any)')
 
     sub = add_cmd('upload', help='Upload benchmark results to the public data store')
     if add_hidden:
@@ -1050,14 +1075,18 @@ def parse_args(
         sub.add_argument('--clean', dest='clean', action='store_const', const=True)
         sub.add_argument('--no-push', dest='push', action='store_false')
         sub.add_argument('--push', dest='push', action='store_const', const=True)
-    sub.add_argument('reqid')
+    sub.add_argument('reqid', help=REQID_HELP)
 
     sub = add_cmd('compare', help='Compare two or more results')
     #sub.add_argument('--fmt', choices=PyperfTable.FORMATS)
     sub.add_argument('--mean-only', dest='meanonly', action='store_true')
-    sub.add_argument('--pyston', action='store_true')
-    sub.add_argument('res1')
-    sub.add_argument('others', nargs='+')
+    sub.add_argument(
+        '--pyston',
+        action='store_true',
+        help='Compare the pyston benchmarks, otherwise only compare the pyperformance benchmarks'
+    )
+    sub.add_argument('res1', help=REQID_HELP)
+    sub.add_argument('others', nargs='+', help='Request ID(s) to compare against')
 
     # XXX Also add export and import?
 
@@ -1103,6 +1132,12 @@ def parse_args(
     cmd = ns.pop('cmd')
 
     user = ns.pop('user', None)
+
+    if cmd not in COMMANDS:
+        # We only want to display the non-devmode options, so we need to fire up
+        # a subprocess and pass in `--help`.
+        subprocess.run([sys.executable, '-m', 'jobs', '--help'])
+        sys.exit(1)
 
     return cmd, ns, cfgfile, user, verbosity, logfile, devmode
 
@@ -1208,7 +1243,7 @@ def main(
 
 def _parse_and_main(
     argv: Sequence[str] = sys.argv[1:],
-    prog: str = sys.argv[0]
+    prog: str = 'benchmark'
 ):
     cmd, cmd_kwargs, cfgfile, user, verbosity, logfile, devmode = parse_args(argv, prog)
     configure_root_logger(verbosity, logfile)
