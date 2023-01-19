@@ -26,6 +26,7 @@ NITEMS = "__nitems__"  # Number of constants/names
 NFILES = "__nfiles__"  # Number of files
 NLINES = "__nlines__"  # Number of lines
 NCODEOBJS = "__ncodeobjs__"  # Number of code objects
+NCODEOBJS_NOCONST = "__ncodeobjs_noconst__"  # Number of code objects that don't access consts
 NERRORS = "__nerrors__"  # Number of files with errors
 CACHE_SIZE = "__cache_size__" # quickening cache size
 CACHE_WASTED = "__cache_wasted__" # Number of wasted cache entries
@@ -48,6 +49,7 @@ SHOW_ITEMS = [
     (NERRORS, "errors"),
     (NFILES, "files"),
     (NCODEOBJS, "code objects"),
+    (NCODEOBJS_NOCONST, "code objects that do not access any consts"),
     (NLINES, "lines"),
     (NOPCODES, "opcodes"),
     (NPAIRS, "opcode pairs"),
@@ -237,6 +239,14 @@ class ConstantsReporter(Reporter):
             key = f"!{const!r}"
             counter[key] += 1
 
+        uses_consts = False
+        co_code = co.co_code
+        for i in range(0, len(co_code), 2):
+            op = co_code[i]
+            if op in opcode.hasconst:
+                uses_consts = True
+        if not uses_consts:
+            counter[NCODEOBJS_NOCONST] += 1
 
 STORE_FAST = opcode.opmap["STORE_FAST"]
 LOAD_CONST = opcode.opmap["LOAD_CONST"]
