@@ -231,10 +231,6 @@ class Reporter:
         return counter
 
 
-STORE_FAST = opcode.opmap["STORE_FAST"]
-LOAD_CONST = opcode.opmap["LOAD_CONST"]
-KW_NAMES = opcode.opmap["KW_NAMES"]
-
 class ConstantsReporter(Reporter):
 
     def reporting_guts(self, counter, co, bias):
@@ -247,11 +243,13 @@ class ConstantsReporter(Reporter):
         co_code = co.co_code
         for i in range(0, len(co_code), 2):
             op = co_code[i]
-            if op in (LOAD_CONST, KW_NAMES):
+            if op in opcode.hasconst:
                 uses_consts = True
         if not uses_consts:
             counter[NCODEOBJS_NOCONST] += 1
 
+STORE_FAST = opcode.opmap["STORE_FAST"]
+LOAD_CONST = opcode.opmap["LOAD_CONST"]
 
 class StoreNoneReporter(Reporter):
 
