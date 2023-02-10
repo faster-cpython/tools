@@ -1142,4 +1142,9 @@ opcode_metadata = {
         'pushed': lambda oparg, jump: 0,
         'instr_fmt': 'IX',
     },
-    }
+    'END_FOR': {
+        'popped': lambda oparg, jump: 1 + 1,
+        'pushed': lambda oparg, jump: 0 + 0,
+        'instr_fmt': 'IB',
+    },
+}

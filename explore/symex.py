@@ -69,14 +69,9 @@ def update_stack(input: Stack, b: dis.Instruction) -> tuple[Stack|None, Stack|No
             continue
         stack = list(input)
         baseopname: str = dis.deoptmap.get(b.opname, b.opname)
-        metadata: dict|None = opcode_metadata.opcode_metadata.get(baseopname)
-        if metadata is None:
-            popped = pushed = 0
-            if baseopname == "END_FOR":
-                popped = 2
-        else:
-            popped = metadata["popped"](b.arg, jump)
-            pushed = metadata["pushed"](b.arg, jump)
+        metadata: dict|None = opcode_metadata.opcode_metadata[baseopname]
+        popped = metadata["popped"](b.arg, jump)
+        pushed = metadata["pushed"](b.arg, jump)
         # print(stack, b.opname, popped, pushed)
         assert popped >= 0 and pushed >= 0, (popped, pushed)
         if len(stack) < popped:
