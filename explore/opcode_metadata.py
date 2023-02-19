@@ -239,6 +239,13 @@ opcode_metadata = {
         'pushed': lambda oparg, jump: 1,
         'instr_fmt': 'IB',
     },
+    'CALL_INTRINSIC_2': {
+        'input_effects': [('value2', '', '', ''), ('value1', '', '', '')],
+        'output_effects': [('res', '', '', '')],
+        'popped': lambda oparg, jump: 2,
+        'pushed': lambda oparg, jump: 1,
+        'instr_fmt': 'IB',
+    },
     'RAISE_VARARGS': {
         'input_effects': [('args', 'oparg', 'PyObject **', '')],
         'output_effects': [],
@@ -290,10 +297,17 @@ opcode_metadata = {
     },
     'SEND': {
         'input_effects': [('receiver', '', '', ''), ('v', '', '', '')],
-        'output_effects': [('receiver', '', '', '!jump'), ('retval', '', '', '')],
+        'output_effects': [('receiver', '', '', ''), ('retval', '', '', '')],
         'popped': lambda oparg, jump: 2,
-        'pushed': lambda oparg, jump: 1 + (bool(not jump)),
-        'instr_fmt': 'IB',
+        'pushed': lambda oparg, jump: 2,
+        'instr_fmt': 'IBC',
+    },
+    'SEND_GEN': {
+        'input_effects': [('receiver', '', '', ''), ('v', '', '', '')],
+        'output_effects': [('receiver', '', '', '')],
+        'popped': lambda oparg, jump: 2,
+        'pushed': lambda oparg, jump: 1,
+        'instr_fmt': 'IBC',
     },
     'YIELD_VALUE': {
         'input_effects': [('retval', '', '', '')],
@@ -316,13 +330,6 @@ opcode_metadata = {
         'pushed': lambda oparg, jump: oparg,
         'instr_fmt': 'IB',
     },
-    'PREP_RERAISE_STAR': {
-        'input_effects': [('orig', '', '', ''), ('excs', '', '', '')],
-        'output_effects': [('val', '', '', '')],
-        'popped': lambda oparg, jump: 2,
-        'pushed': lambda oparg, jump: 1,
-        'instr_fmt': 'IX',
-    },
     'END_ASYNC_FOR': {
         'input_effects': [('awaitable', '', '', ''), ('exc', '', '', '')],
         'output_effects': [],
@@ -332,9 +339,9 @@ opcode_metadata = {
     },
     'CLEANUP_THROW': {
         'input_effects': [('sub_iter', '', '', ''), ('last_sent_val', '', '', ''), ('exc_value', '', '', '')],
-        'output_effects': [('value', '', '', '')],
+        'output_effects': [('none', '', '', ''), ('value', '', '', '')],
         'popped': lambda oparg, jump: 3,
-        'pushed': lambda oparg, jump: 1,
+        'pushed': lambda oparg, jump: 2,
         'instr_fmt': 'IX',
     },
     'LOAD_ASSERTION_ERROR': {
