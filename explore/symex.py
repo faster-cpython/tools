@@ -3,6 +3,7 @@
 """Symbolic execution, hero style. :-)"""
 
 import dis
+import os
 import types
 from typing import Any, Callable, Iterable
 
@@ -19,14 +20,10 @@ def nope(arg):
 def test(a, b):
     try:
         for i in range(3):
-            nope(a*i + b/(2-i))
+            nope(a * i + b / (2 - i))
     except Exception as err:
         nope(err)
 
-
-test(2, 4)
-
-dis.dis(test, adaptive=True)
 
 """
  17           0 RESUME                   0
@@ -118,7 +115,7 @@ class Instruction:
         if self.baseopcode in dis.hasjrel:
             if self.baseopname == "JUMP_BACKWARD":
                 oparg = -oparg
-            self.jump_target = self.end_offset + 2*oparg
+            self.jump_target = self.end_offset + 2 * oparg
         self.is_jump_target = False  # Filled in by parse_bytecode()
 
     def __repr__(self):
@@ -157,7 +154,8 @@ def parse_bytecode(co: bytes) -> list[Instruction]:
 
 Stack = tuple[str, ...]
 
-def update_stack(input: Stack, b: Instruction) -> tuple[Stack|None, Stack|None]:
+
+def update_stack(input: Stack, b: Instruction) -> tuple[Stack | None, Stack | None]:
     """Return a pair of optional Stacks.
 
     If the instruction never jumps, return (Stack, None).
@@ -176,13 +174,13 @@ def update_stack(input: Stack, b: Instruction) -> tuple[Stack|None, Stack|None]:
             jumps = [0, 1]
         else:
             jumps = [None, 1]
-    stacks: list[Stack|None] = []
+    stacks: list[Stack | None] = []
     for jump in jumps:
         if jump is None:
             stacks.append(None)
             continue
         stack = list(input)
-        metadata: dict|None = opcode_metadata[b.baseopname]
+        metadata: dict | None = opcode_metadata[b.baseopname]
         popped: int = metadata["popped"](b.oparg, jump)
         pushed: int = metadata["pushed"](b.oparg, jump)
         # print(stack, b.opname, popped, pushed)
@@ -190,7 +188,7 @@ def update_stack(input: Stack, b: Instruction) -> tuple[Stack|None, Stack|None]:
         if len(stack) < popped:
             breakpoint()
             assert False, "stack underflow"
-        stack = stack[:len(stack) - popped]
+        stack = stack[: len(stack) - popped]
         stack = stack + ["object"] * pushed
         stacks.append(tuple(stack))
     assert len(stacks) == 2
@@ -207,7 +205,7 @@ def successors(b: Instruction) -> None | tuple[bool, int]:
     if b.baseopname == "JUMP_BACKWARD":
         arg = -arg
         fallthrough = False
-    return fallthrough, b.end_offset + 2*arg
+    return fallthrough, b.end_offset + 2 * arg
 
 
 def run(code: types.CodeType):
@@ -268,12 +266,30 @@ def run(code: types.CodeType):
                     breakpoint()
             stack = stack_if_no_jump
 
+    max_stack_size = 4  # len(str(None))
+    for stack in stacks.values():
+        if stack:
+            max_stack_size = max(max_stack_size, len(str(stack)))
+    limit = min(max_stack_size, os.get_terminal_size().columns - 40)
     for b in instrs:
         stack = stacks.get(b)
         if stack is not None:
             stack = list(stack)
         prefix = ">>" if b.is_jump_target else "  "
-        print(prefix, str(stack).ljust(70), prefix, b.opname, b.oparg if b.oparg is not None else "")
+        soparg = f" {b.oparg:{20 - len(b.opname)}d}" if b.oparg is not None else ""
+        sstack = str(stack)
+        if len(sstack) <= limit:
+            print(
+                f"{prefix} {sstack:<{limit}s}",
+                f"{prefix} {b.start_offset:3d} {b.opname} {soparg}",
+            )
+        else:
+            print(f"{prefix} {sstack}")
+            pad = " " * (len(prefix) + limit)
+            print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
 
 
-run(test.__code__)
+if __name__ == "__main__":
+    test(2, 4)
+    dis.dis(test, adaptive=True)
+    run(test.__code__)
