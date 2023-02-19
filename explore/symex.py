@@ -3,6 +3,7 @@
 """Symbolic execution, hero style. :-)"""
 
 import dis
+import types
 from typing import Any, Callable, Iterable
 
 opcode_metadata: dict[str, dict[str, Any]]
@@ -14,8 +15,11 @@ def nope(arg):
 
 
 def test(a, b):
-    for i in range(3):
-        nope(a*i + b)
+    try:
+        for i in range(3):
+            nope(a*i + b/(2-i))
+    except Exception as err:
+        nope(err)
 
 
 test(2, 4)
@@ -23,27 +27,65 @@ test(2, 4)
 dis.dis(test, adaptive=True)
 
 """
-  6           0 RESUME                   0
+ 17           0 RESUME                   0
 
-  7           2 LOAD_GLOBAL              1 (NULL + range)
-             14 LOAD_CONST               1 (10)
-             16 CALL                     1
-             26 GET_ITER
-        >>   28 FOR_ITER_RANGE          21 (to 74)
-             32 STORE_FAST               2 (i)
+ 18           2 NOP
 
-  8          34 LOAD_GLOBAL_BUILTIN      3 (NULL + nope)
-             46 LOAD_FAST__LOAD_FAST     0 (a)
-             48 LOAD_FAST                2 (i)
-             50 BINARY_OP_MULTIPLY_INT     5 (*)
-             54 LOAD_FAST                1 (b)
-             56 BINARY_OP_ADD_INT        0 (+)
-             60 CALL_BUILTIN_FAST_WITH_KEYWORDS     1
-             70 POP_TOP
-             72 JUMP_BACKWARD           23 (to 28)
+ 19           4 LOAD_GLOBAL              1 (NULL + range)
+             16 LOAD_CONST               1 (3)
+             18 CALL                     1
+             28 GET_ITER
+        >>   30 FOR_ITER_RANGE          27 (to 88)
+             34 STORE_FAST               2 (i)
 
-  7     >>   74 END_FOR
-             76 RETURN_CONST             0 (None)
+ 20          36 LOAD_GLOBAL_MODULE       3 (NULL + nope)
+             48 LOAD_FAST__LOAD_FAST     0 (a)
+             50 LOAD_FAST                2 (i)
+             52 BINARY_OP_MULTIPLY_INT     5 (*)
+             56 LOAD_FAST__LOAD_CONST     1 (b)
+             58 LOAD_CONST__LOAD_FAST     2 (2)
+             60 LOAD_FAST                2 (i)
+             62 BINARY_OP_SUBTRACT_INT    10 (-)
+             66 BINARY_OP               11 (/)
+             70 BINARY_OP                0 (+)
+             74 CALL_PY_EXACT_ARGS       1
+             84 POP_TOP
+             86 JUMP_BACKWARD           29 (to 30)
+
+ 19     >>   88 END_FOR
+             90 LOAD_CONST               0 (None)
+             92 RETURN_VALUE
+        >>   94 PUSH_EXC_INFO
+
+ 21          96 LOAD_GLOBAL              4 (Exception)
+            108 CHECK_EXC_MATCH
+            110 POP_JUMP_IF_FALSE       24 (to 160)
+            112 STORE_FAST               3 (err)
+
+ 22         114 LOAD_GLOBAL              3 (NULL + nope)
+            126 LOAD_FAST                3 (err)
+            128 CALL                     1
+            138 POP_TOP
+            140 POP_EXCEPT
+            142 LOAD_CONST               0 (None)
+            144 STORE_FAST               3 (err)
+            146 DELETE_FAST              3 (err)
+            148 LOAD_CONST               0 (None)
+            150 RETURN_VALUE
+        >>  152 LOAD_CONST               0 (None)
+            154 STORE_FAST               3 (err)
+            156 DELETE_FAST              3 (err)
+            158 RERAISE                  1
+
+ 21     >>  160 RERAISE                  0
+        >>  162 COPY                     3
+            164 POP_EXCEPT
+            166 RERAISE                  1
+ExceptionTable:
+  4 to 88 -> 94 [0]
+  94 to 112 -> 162 [1] lasti
+  114 to 138 -> 152 [1] lasti
+  152 to 160 -> 162 [1] lasti
 """
 
 
@@ -68,6 +110,9 @@ class Instruction:
         self.start_offset = start_offset
         self.cache_offset = cache_offset
         self.end_offset = cache_offset + 2 * dis._inline_cache_entries[opcode]
+
+    def __repr__(self):
+        return f"Instruction{self.__dict__}"
 
 
 def parse_bytecode(co: bytes) -> Iterable[Instruction]:
@@ -97,7 +142,10 @@ def update_stack(input: Stack, b: Instruction) -> tuple[Stack|None, Stack|None]:
     If the instruction never jumps, return (Stack, None).
     If it always jumps, return (None, Stack).
     If it may or may not jump, return (StackIfNotJumping, StackIfJumping).
+    If it is a return or raise, return (None, None).
     """
+    if b.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
+        return (None, None)
     succ = successors(b)
     if succ == None:
         jumps = [0, None]
@@ -141,16 +189,30 @@ def successors(b: Instruction) -> None | tuple[bool, int]:
     return fallthrough, b.end_offset + 2*arg
 
 
-def run(func: Callable[..., object]):
-    instrs: list[Instruction] = list(parse_bytecode(func.__code__.co_code))
+def run(code: types.CodeType):
+    instrs: list[Instruction] = list(parse_bytecode(code.co_code))
     assert instrs != []
     stacks: dict[Instruction, Stack | None] = {b: None for b in instrs}
     stacks[instrs[0]] = ()
     todo = True
+    etab = dis._parse_exception_table(code)
+    for start, end, target, depth, lasti in etab:
+        # print(f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}")
+        for b in instrs:
+            if b.start_offset == target:
+                stack = ["object"] * depth
+                if lasti:
+                    stack.append("Lasti")
+                stack.append("BaseException")
+                stacks[b] = tuple(stack)
+                break
+        else:
+            assert False, f"ETAB target {target} not found"
     while todo:
         todo = False
         stack = None
         for b in instrs:
+            # print(b.start_offset, b.opname)
             if stack is not None:
                 if stacks[b] is None:
                     stacks[b] = stack
@@ -158,6 +220,7 @@ def run(func: Callable[..., object]):
                 else:
                     if stacks[b] != stack:
                         print(f"MISMATCH at {b.start_offset}: {stacks[b]} != {stack}")
+                        breakpoint()
             else:
                 stack = stacks[b]
                 if stack is None:
@@ -177,18 +240,18 @@ def run(func: Callable[..., object]):
                         else:
                             if stacks[bb] != stack:
                                 print(f"MISMATCH AT {offset}: {stacks[bb]} != {stack}")
+                                breakpoint()
                         break
                 else:
                     print(f"CANNOT FIND {offset} for {stack}")
+                    breakpoint()
             stack = stack_if_no_jump
-        # if stack is not None:
-        #     print(f"End: {stack}")
 
     for b in instrs:
         stack = stacks.get(b)
         if stack is not None:
             stack = list(stack)
-        print(str(stack).ljust(50), b.opname, b.oparg if b.oparg is not None else "")
+        print(str(stack).ljust(70), b.opname, b.oparg if b.oparg is not None else "")
 
 
-run(test)
+run(test.__code__)
