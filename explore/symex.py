@@ -298,6 +298,9 @@ def run(code: types.CodeType):
             print(f"{prefix} {sstack}")
             pad = " " * (len(prefix) + limit)
             print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
+        succ = successors(b)
+        if b.opname.startswith("RETURN_") or (succ and not succ[0]):
+            print("-"*40)
 
 
 if __name__ == "__main__":
