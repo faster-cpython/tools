@@ -218,6 +218,7 @@ def successors(b: Instruction) -> None | tuple[bool, int]:
 
 
 def run(code: types.CodeType):
+    # TODO: Break into pieces (maybe make it a class?)
     instrs: list[Instruction] = parse_bytecode(code.co_code)
     assert instrs != []
     stacks: dict[Instruction, Stack | None] = {b: None for b in instrs}
@@ -228,10 +229,11 @@ def run(code: types.CodeType):
         # print(f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}")
         for b in instrs:
             if b.start_offset == target:
+                b.is_jump_target = True
                 stack = ["object"] * depth
                 if lasti:
                     stack.append("Lasti")
-                stack.append("BaseException")
+                stack.append("Exception")
                 stacks[b] = tuple(stack)
                 break
         else:
@@ -304,5 +306,5 @@ if __name__ == "__main__":
         module = importlib.import_module(sys.argv[1])
         func = getattr(module, sys.argv[2])
         code = func.__code__
-        dis.dis(code)
+    dis.dis(code)
     run(code)
