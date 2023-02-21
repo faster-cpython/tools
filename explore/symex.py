@@ -211,8 +211,8 @@ def successors(b: Instruction) -> list[int | None]:
         return [None]
     arg = b.oparg
     assert arg is not None
-    if b.baseopname == "JUMP_BACKWARD":
-        # The only unconditional jump
+    if b.baseopname in ("JUMP_BACKWARD", "JUMP_FORWARD"):
+        # Unconditional jump
         return [b.end_offset - 2 * arg]
     # Conditional jump
     return [None, b.end_offset + 2 * arg]
@@ -258,6 +258,7 @@ def run(code: types.CodeType):
         todo = False
         for b in instrs:
             stack = stacks[b]
+            # print(b.start_offset, b.opname, stack)
             if stack is None:
                 continue
             updates = update_stack(stack, b)
