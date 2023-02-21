@@ -164,30 +164,21 @@ def parse_bytecode(co: bytes) -> list[Instruction]:
 Stack = tuple[str, ...]
 
 
-def update_stack(input: Stack, b: Instruction) -> tuple[Stack | None, Stack | None]:
-    """Return a pair of optional Stacks.
+def update_stack(input: Stack, b: Instruction) -> list[tuple[int, Stack]]:
+    """Return a list of (int, Stack) pairs corresponding to successors(b).
 
-    If the instruction never jumps, return (Stack, None).
-    If it always jumps, return (None, Stack).
-    If it may or may not jump, return (StackIfNotJumping, StackIfJumping).
-    If it is a return or raise, return (None, None).
+    If the instruction never jumps, return [(b.end_offset, new_stack)].
+    If it always jumps, return [(b.jump_target, new_stack)].
+    If it may or may not jump, return [(b.end_offset, new_stack1), (b.jump_target, new_stack2)].
+    If it always exits, return [].
     """
     if b.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
-        return (None, None)
-    succ = successors(b)
-    if succ == None:
-        jumps = [0, None]
-    else:
-        fallthrough, _ = succ
-        if fallthrough:
-            jumps = [0, 1]
-        else:
-            jumps = [None, 1]
-    stacks: list[Stack | None] = []
-    for jump in jumps:
-        if jump is None:
-            stacks.append(None)
-            continue
+        return []
+    result: list[tuple[int, Stack]] = []
+    for offset in successors(b):
+        jump = (offset is not None)
+        if not jump:
+            offset = b.end_offset
         stack = list(input)
         metadata: dict | None = opcode_metadata[b.baseopname]
         popped: int = metadata["popped"](b.oparg, jump)
@@ -199,89 +190,100 @@ def update_stack(input: Stack, b: Instruction) -> tuple[Stack | None, Stack | No
             assert False, "stack underflow"
         stack = stack[: len(stack) - popped]
         stack = stack + ["object"] * pushed
-        stacks.append(tuple(stack))
-    assert len(stacks) == 2
-    return tuple(stacks)
+        result.append((offset, tuple(stack)))
+    return result
 
 
-def successors(b: Instruction) -> None | tuple[bool, int]:
+def successors(b: Instruction) -> list[int | None]:
+    """Return a list of successor offsets.
+
+    An offset is either None (fall through to the next instruction) or
+    an int (jump to the instruction at that offset, in absolute bytes).
+
+    A "normal" instruction, e.g. LOAD_FAST, returns [None].
+    An unconditional jump, e.g. JUMP_BACKWARD, returns [offset].
+    A conditional jump, e.g. POP_JUMP_IF_TRUE, returns [None, offset].
+    An instruction that only exits, e.g. RETURN_VALUE, returns [].
+    """
     assert not dis.hasjabs
     if b.baseopcode not in dis.hasjrel:
-        return None
-    fallthrough = True
+        # TODO: Other instructions that have a jump option
+        return [None]
     arg = b.oparg
     assert arg is not None
     if b.baseopname == "JUMP_BACKWARD":
-        arg = -arg
-        fallthrough = False
-    return fallthrough, b.end_offset + 2 * arg
+        # The only unconditional jump
+        return [b.end_offset - 2 * arg]
+    # Conditional jump
+    return [None, b.end_offset + 2 * arg]
 
 
 def run(code: types.CodeType):
     # TODO: Break into pieces (maybe make it a class?)
+
+    # Parse bytecode into Instructions.
     instrs: list[Instruction] = parse_bytecode(code.co_code)
     assert instrs != []
+
+    def instr_from_offset(offset: int) -> Instruction:
+        """Map an offset to the Instruction at that offset."""
+        # TODO: Use bisect
+        for b in instrs:
+            if b.start_offset == offset:
+                return b
+        breakpoint()
+        assert False, f"Invalid offset {offset}"
+
+    # Map from Instructions to the stack at the start of the Instruction.
     stacks: dict[Instruction, Stack | None] = {b: None for b in instrs}
+
+    # Initialize stacks with known contents:
+    # - The stack at the start of the function is empty.
+    # - The stack at the start of each exception handler is known.
     stacks[instrs[0]] = ()
-    todo = True
     etab = dis._parse_exception_table(code)
     for start, end, target, depth, lasti in etab:
         # print(f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}")
-        for b in instrs:
-            if b.start_offset == target:
-                b.is_jump_target = True
-                stack = ["object"] * depth
-                if lasti:
-                    stack.append("Lasti")
-                stack.append("Exception")
-                stacks[b] = tuple(stack)
-                break
-        else:
-            assert False, f"ETAB target {target} not found"
+        b = instr_from_offset(target)
+        b.is_jump_target = True
+        stack = ["object"] * depth
+        if lasti:
+            stack.append("Lasti")
+        stack.append("Exception")
+        stacks[b] = tuple(stack)
+
+    # Repeatedly propagate stack contents until a fixed point is reached.
+    todo = True
     while todo:
         todo = False
-        stack = None
         for b in instrs:
-            # print(b.start_offset, b.opname, b.oparg, stack)
-            if stack is not None:
-                if stacks[b] is None:
-                    stacks[b] = stack
+            stack = stacks[b]
+            if stack is None:
+                continue
+            updates = update_stack(stack, b)
+            for offset, new_stack in updates:
+                bb = instr_from_offset(offset)
+                # print("  TO:", bb.opname, "AT", bb.offset)
+                if stacks[bb] is None:
+                    stacks[bb] = new_stack
                     todo = True
                 else:
-                    if stacks[b] != stack:
-                        print(f"MISMATCH at {b.start_offset}: {stacks[b]} != {stack}")
+                    if stacks[bb] != new_stack:
+                        print(f"MISMATCH AT {offset}: {stacks[bb]} != {new_stack}")
                         breakpoint()
-            else:
-                stack = stacks[b]
-                if stack is None:
-                    continue
-            stack_if_no_jump, stack_if_jump = update_stack(stack, b)
-            jumps = successors(b)
-            if jumps is not None:
-                fallthrough, offset = jumps
-                # print(b.opname, "JUMP DATA:", fallthrough, offset)
-                stack = stack_if_jump
-                for bb in instrs:
-                    if bb.start_offset == offset:
-                        # print("  TO:", bb.opname, "AT", bb.offset)
-                        if stacks[bb] is None:
-                            stacks[bb] = stack
-                            todo = True
-                        else:
-                            if stacks[bb] != stack:
-                                print(f"MISMATCH AT {offset}: {stacks[bb]} != {stack}")
-                                breakpoint()
-                        break
-                else:
-                    print(f"CANNOT FIND {offset} for {stack}")
-                    breakpoint()
-            stack = stack_if_no_jump
+                        assert False, "mismatch"
 
+    # Format what we found nicely.
     max_stack_size = 4  # len(str(None))
     for stack in stacks.values():
         if stack:
             max_stack_size = max(max_stack_size, len(str(stack)))
-    limit = min(max_stack_size, os.get_terminal_size().columns - 40)
+
+    try:
+        limit = min(max_stack_size, os.get_terminal_size().columns - 40)
+    except OSError:
+        limit = 80
+
     for b in instrs:
         stack = stacks.get(b)
         if stack is not None:
@@ -298,11 +300,10 @@ def run(code: types.CodeType):
             print(f"{prefix} {sstack}")
             pad = " " * (len(prefix) + limit)
             print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
-        succ = successors(b)
         if (
             b.opname.startswith("RETURN_")
             or "RAISE" in b.opname
-            or (succ and not succ[0])
+            or (None not in successors(b))
         ):
             print("-" * 40)
 
