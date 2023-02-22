@@ -71,8 +71,8 @@ def find_all_code(paths: list[str], verbose: int = 1) -> Iterator[types.CodeType
 
 
 def main():
-    for code in find_all_code(sys.argv[1:], verbose=True):
-        print("    -->", len(code.co_code), "bytes", code.co_name, "at", code.co_firstlineno)
+    for code in find_all_code(sys.argv[1:]):
+        print(f"    {code.co_name}:{code.co_firstlineno}: {len(code.co_code)} bytes")
 
 
 if __name__ == "__main__":

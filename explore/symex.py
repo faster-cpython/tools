@@ -3,13 +3,12 @@
 """Symbolic execution, hero style. :-)"""
 
 import dis
-import importlib
 import os
 import sys
 import types
-from typing import Any, Callable, Iterable
+from typing import Any
 
-assert not dis.hasjabs
+import forallcode
 
 import opcode_metadata as opcode_metadata_module
 
@@ -121,6 +120,7 @@ class Instruction:
         self.cache_offset = cache_offset
         self.end_offset = cache_offset + 2 * dis._inline_cache_entries[opcode]
         self.jump_target = None
+        assert not dis.hasjabs
         if self.baseopcode in dis.hasjrel:
             if self.baseopname == "JUMP_BACKWARD":
                 oparg = -oparg
@@ -309,11 +309,17 @@ def run(code: types.CodeType):
             print("-" * 40)
 
 
+def main():
+    if sys.argv[1:]:
+        for code in forallcode.find_all_code(sys.argv[1:], 1):
+            print()
+            print(code)
+            dis.dis(code, adaptive=True, depth=0, show_caches=False)
+            run(code)
+    else:
+        dis(test)
+        run(test.__code__)
+
+
 if __name__ == "__main__":
-    code = test.__code__
-    if len(sys.argv[1:]) >= 2:
-        module = importlib.import_module(sys.argv[1])
-        func = getattr(module, sys.argv[2])
-        code = func.__code__
-    dis.dis(code)
-    run(code)
+    main()
