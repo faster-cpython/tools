@@ -4,7 +4,7 @@
 
 import dis
 import os
-import sys
+import re
 import types
 from typing import Any
 
@@ -189,14 +189,16 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
         metadata: dict | None = opcode_metadata[b.baseopname]
         popped: int = metadata["popped"](b.oparg, jump)
         pushed: int = metadata["pushed"](b.oparg, jump)
-        if verbose >= 1:
-            print(" ", stack, b.start_offset, b.opname, b.oparg, "pop=", popped, "push=", pushed)
+        if verbose >= 2:
+            print(f"  {popped=} {pushed=}")
         assert popped >= 0 and pushed >= 0, (popped, pushed)
         if len(stack) < popped:
             breakpoint()
             assert False, "stack underflow"
         stack = stack[: len(stack) - popped]
         stack = stack + ["object"] * pushed
+        if verbose >= 2:
+            print(f"  {offset=} {stack=}")
         result.append((offset, tuple(stack)))
     return result
 
@@ -218,10 +220,13 @@ def successors(b: Instruction) -> list[int | None]:
         return [None]
     arg = b.oparg
     assert arg is not None
-    if b.baseopname in ("JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT", "JUMP_FORWARD"):
-        # Unconditional jump
+    if b.baseopname in ("JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT"):
+        # Unconditional jump backwards
         return [b.end_offset - 2 * arg]
-    # Conditional jump
+    if b.baseopname == "JUMP_FORWARD":
+        # Unconditional jump forwards
+        return [b.end_offset + 2 * arg]
+    # Conditional jump forwards
     return [None, b.end_offset + 2 * arg]
 
 
@@ -267,19 +272,19 @@ def run(code: types.CodeType, verbose: int = 0):
     # Repeatedly propagate stack contents until a fixed point is reached.
     todo = True
     while todo:
-        if verbose > 0:
+        if verbose >= 1:
             print("=" * 50)
         todo = False
         for b in instrs:
             stack = stacks[b]
-            if verbose > 0:
+            if verbose >= 1:
                 print(b.start_offset, b.opname, b.oparg, stack)
             if stack is None:
                 continue
             updates = update_stack(stack, b, verbose)
             for offset, new_stack in updates:
                 bb = instr_from_offset(offset)
-                if verbose > 0:
+                if verbose >= 1:
                     print("    TO:", bb.opname, "AT", bb.start_offset, "STACK", new_stack)
                 if stacks[bb] is None:
                     stacks[bb] = new_stack
@@ -302,6 +307,7 @@ def run(code: types.CodeType, verbose: int = 0):
         limit = 80
 
     if verbose >= 0:
+        print(code)
         for b in instrs:
             stack = stacks.get(b)
             if stack is not None:
@@ -333,12 +339,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", action="count", help="More debug output")
     parser.add_argument("-q", "--quiet", action="count", help="Less debug output")
+    parser.add_argument("-m", "--match", help="Only process functions matching this regex", action="append")
+    parser.add_argument("-x", "--exclude", help="Skip functions matching this regex", action="append")
     parser.add_argument("path", nargs="*", help="One or more files, tarballs or directories")
     args = parser.parse_args()
 
     verbose = (args.verbose or 0) - (args.quiet or 0)
     if args.path:
         for code in forallcode.find_all_code(args.path, verbose):
+            if args.match and not re.search("|".join(args.match), f"{code.co_filename}:{code.co_name}"):
+                continue
+            if args.exclude and re.search("|".join(args.exclude), f"{code.co_filename}:{code.co_name}"):
+                continue
             if verbose >= 1:
                 print()
                 print(code)
