@@ -18,10 +18,16 @@ def recurse_code(code: types.CodeType, verbose: int) -> Iterator[types.CodeType]
 def recurse_file(filename: str, verbose: int) -> Iterator[types.CodeType]:
     if verbose >= 1:
         print(f"Processing file {filename}")
-    with open(filename, "r") as f:
-        code = compile(f.read(), filename, "exec")
-        yield from recurse_code(code, verbose)
-
+    try:
+        with open(filename, "r") as f:
+            code = compile(f.read(), filename, "exec")
+            yield from recurse_code(code, verbose)
+    except OSError as e:
+        if verbose >= 0:
+            print(f"{filename}: {e!r}")
+    except SyntaxError as e:
+        if verbose >= 0:
+            print(f"{filename}: {e!r}")
 
 def recurse_dir(dirname: str, verbose: int) -> Iterator[types.CodeType]:
     if verbose >= 1:
