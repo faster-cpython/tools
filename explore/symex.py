@@ -346,7 +346,7 @@ def main():
 
     verbose = (args.verbose or 0) - (args.quiet or 0)
     if args.path:
-        for code in forallcode.find_all_code(args.path, verbose):
+        for code in forallcode.find_all_code(args.path, verbose + 1):
             if args.match and not re.search("|".join(args.match), f"{code.co_filename}:{code.co_name}"):
                 continue
             if args.exclude and re.search("|".join(args.exclude), f"{code.co_filename}:{code.co_name}"):
@@ -356,7 +356,7 @@ def main():
                 print(code)
                 if verbose >= 2:
                     dis.dis(code, adaptive=True, depth=0, show_caches=False)
-            run(code, verbose=verbose)
+            run(code, verbose - 1)
     else:
         if verbose >= 2:
             dis.dis(test)
