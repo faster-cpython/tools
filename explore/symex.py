@@ -170,7 +170,7 @@ def parse_bytecode(co: bytes) -> list[Instruction]:
 Stack = tuple[str, ...]
 
 
-def update_stack(input: Stack, b: Instruction) -> list[tuple[int, Stack]]:
+def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, Stack]]:
     """Return a list of (int, Stack) pairs corresponding to successors(b).
 
     If the instruction never jumps, return [(b.end_offset, new_stack)].
@@ -189,7 +189,8 @@ def update_stack(input: Stack, b: Instruction) -> list[tuple[int, Stack]]:
         metadata: dict | None = opcode_metadata[b.baseopname]
         popped: int = metadata["popped"](b.oparg, jump)
         pushed: int = metadata["pushed"](b.oparg, jump)
-        # print(" ", stack, b.start_offset, b.opname, b.oparg, "pop=", popped, "push=", pushed)
+        if verbose >= 1:
+            print(" ", stack, b.start_offset, b.opname, b.oparg, "pop=", popped, "push=", pushed)
         assert popped >= 0 and pushed >= 0, (popped, pushed)
         if len(stack) < popped:
             breakpoint()
@@ -224,7 +225,7 @@ def successors(b: Instruction) -> list[int | None]:
     return [None, b.end_offset + 2 * arg]
 
 
-def run(code: types.CodeType):
+def run(code: types.CodeType, verbose: int = 0):
     # TODO: Break into pieces (maybe make it a class?)
 
     # Parse bytecode into Instructions.
@@ -253,7 +254,8 @@ def run(code: types.CodeType):
         stacks[instrs[0]] = ()
     etab = dis._parse_exception_table(code)
     for start, end, target, depth, lasti in etab:
-        # print(f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}")
+        if verbose >= 1:
+            print(f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}")
         b = instr_from_offset(target)
         b.is_jump_target = True
         stack = ["object"] * depth
@@ -265,17 +267,20 @@ def run(code: types.CodeType):
     # Repeatedly propagate stack contents until a fixed point is reached.
     todo = True
     while todo:
-        # print("=" * 50)
+        if verbose > 0:
+            print("=" * 50)
         todo = False
         for b in instrs:
             stack = stacks[b]
-            # print(b.start_offset, b.opname, b.oparg, stack)
+            if verbose > 0:
+                print(b.start_offset, b.opname, b.oparg, stack)
             if stack is None:
                 continue
-            updates = update_stack(stack, b)
+            updates = update_stack(stack, b, verbose)
             for offset, new_stack in updates:
                 bb = instr_from_offset(offset)
-                # print("    TO:", bb.opname, "AT", bb.start_offset, "STACK", new_stack)
+                if verbose > 0:
+                    print("    TO:", bb.opname, "AT", bb.start_offset, "STACK", new_stack)
                 if stacks[bb] is None:
                     stacks[bb] = new_stack
                     todo = True
@@ -296,42 +301,54 @@ def run(code: types.CodeType):
     except OSError:
         limit = 80
 
-    for b in instrs:
-        stack = stacks.get(b)
-        if stack is not None:
-            stack = list(stack)
-        prefix = ">>" if b.is_jump_target else "  "
-        soparg = (
-            f" {b.oparg:{max(1, 20 - len(b.opname))}d}" if b.oparg is not None else ""
-        )
-        sstack = str(stack)
-        if len(sstack) <= limit:
-            print(
-                f"{prefix} {sstack:<{limit}s}",
-                f"{prefix} {b.start_offset:3d} {b.opname} {soparg}",
+    if verbose >= 0:
+        for b in instrs:
+            stack = stacks.get(b)
+            if stack is not None:
+                stack = list(stack)
+            prefix = ">>" if b.is_jump_target else "  "
+            soparg = (
+                f" {b.oparg:{max(1, 20 - len(b.opname))}d}" if b.oparg is not None else ""
             )
-        else:
-            print(f"{prefix} {sstack}")
-            pad = " " * (len(prefix) + limit)
-            print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
-        if (
-            b.opname.startswith("RETURN_")
-            or "RAISE" in b.opname
-            or (None not in successors(b))
-        ):
-            print("-" * 40)
+            sstack = str(stack)
+            if len(sstack) <= limit:
+                print(
+                    f"{prefix} {sstack:<{limit}s}",
+                    f"{prefix} {b.start_offset:3d} {b.opname} {soparg}",
+                )
+            else:
+                print(f"{prefix} {sstack}")
+                pad = " " * (len(prefix) + limit)
+                print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
+            if (
+                b.opname.startswith("RETURN_")
+                or "RAISE" in b.opname
+                or (None not in successors(b))
+            ):
+                print("-" * 40)
 
 
 def main():
-    if sys.argv[1:]:
-        for code in forallcode.find_all_code(sys.argv[1:], 1):
-            print()
-            print(code)
-            dis.dis(code, adaptive=True, depth=0, show_caches=False)
-            run(code)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-v", "--verbose", action="count", help="More debug output")
+    parser.add_argument("-q", "--quiet", action="count", help="Less debug output")
+    parser.add_argument("path", nargs="*", help="One or more files, tarballs or directories")
+    args = parser.parse_args()
+
+    verbose = (args.verbose or 0) - (args.quiet or 0)
+    if args.path:
+        for code in forallcode.find_all_code(args.path, verbose):
+            if verbose >= 1:
+                print()
+                print(code)
+                if verbose >= 2:
+                    dis.dis(code, adaptive=True, depth=0, show_caches=False)
+            run(code, verbose=verbose)
     else:
-        dis(test)
-        run(test.__code__)
+        if verbose >= 2:
+            dis.dis(test)
+        run(test.__code__, verbose=verbose)
 
 
 if __name__ == "__main__":
