@@ -191,6 +191,22 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
         if len(stack) < popped:
             breakpoint()
             assert False, "stack underflow"
+        input_effects = list(metadata.get("input_effects") or ())
+        output_effects = list(metadata.get("output_effects") or ())
+        while (
+            popped > 0
+            and pushed > 0
+            and input_effects
+            and output_effects
+            and input_effects[0] == output_effects[0]
+            and input_effects[0][1:] == ("", "", "")
+        ):
+            if verbose >= 2:
+                print("REDUCING EFFECT", input_effects[0], "for", b.opname)
+            pushed -= 1
+            popped -= 1
+            input_effects.pop(0)
+            output_effects.pop(0)
         stack = stack[: max(0, len(stack) - popped)]
         stack = stack + ["object"] * pushed
         if verbose >= 2:
@@ -269,7 +285,7 @@ def run(code: types.CodeType, verbose: int = 0):
         b.is_jump_target = True
         stack = ["object"] * depth
         if lasti:
-            stack.append("Lasti")
+            stack.append("object")  # TODO: "Lasti"
         stack.append("Exception")
         stacks[b] = tuple(stack)
         debug[b] = "ETAB"
@@ -339,6 +355,8 @@ def run(code: types.CodeType, verbose: int = 0):
 
         # Format what we found nicely.
         for b in instrs:
+            if b in rev_etab:
+                print("HANDLER:", rev_etab[b])
             stack = stacks.get(b)
             if stack is not None:
                 stack = list(stack)
@@ -352,12 +370,12 @@ def run(code: types.CodeType, verbose: int = 0):
             if len(sstack) <= limit:
                 print(
                     f"{prefix} {sstack:<{limit}s}",
-                    f"{prefix} {b.start_offset:3d} {b.opname} {soparg}",
+                    f"{prefix} {b.start_offset:3d} {b.opname}{soparg}",
                 )
             else:
                 print(f"{prefix} {sstack}")
                 pad = " " * (len(prefix) + limit)
-                print(f" {pad} {prefix} {b.start_offset:3d} {b.opname} {soparg}")
+                print(f" {pad} {prefix} {b.start_offset:3d} {b.opname}{soparg}")
             if None not in successors(b):
                 print("-" * 40)
 
@@ -401,7 +419,7 @@ def main():
             run(code, verbose - 1)
     else:
         if verbose >= 2:
-            dis.dis(test)
+            dis.dis(test, adaptive=True, depth=0, show_caches=False)
         run(test.__code__, verbose=verbose)
 
 
