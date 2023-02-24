@@ -27,7 +27,10 @@ def recurse_file(filename: str, verbose: int) -> Iterator[types.CodeType]:
             print(f"{filename}: {e!r}")
     except SyntaxError as e:
         if verbose >= 0:
-            print(f"{filename}: {e!r}")
+            print(f"{filename}: {e!r:.100s}")
+    except UnicodeDecodeError as e:
+        if verbose >= 0:
+            print(f"{filename}: Decoding error")
 
 def recurse_dir(dirname: str, verbose: int) -> Iterator[types.CodeType]:
     if verbose >= 1:
