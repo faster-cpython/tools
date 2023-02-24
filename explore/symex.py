@@ -304,7 +304,8 @@ def run(code: types.CodeType, verbose: int = 0):
                 if stacks[bb] is None:
                     stacks[bb] = new_stack
                     debug[bb] = b
-                    todo = True
+                    if offset < b.end_offset:
+                        todo = True
                 else:
                     if stacks[bb] != new_stack:
                         print(f"MISMATCH AT {offset}: {stacks[bb]} != {new_stack}")
@@ -312,19 +313,31 @@ def run(code: types.CodeType, verbose: int = 0):
                         breakpoint()
                         assert False, "mismatch"
 
-    # Format what we found nicely.
-    max_stack_size = 4  # len(str(None))
-    for stack in stacks.values():
-        if stack:
-            max_stack_size = max(max_stack_size, len(str(stack)))
+        # I have not found any cases that need more than one iteration.
+        assert not todo, f"We need another iteration after all: {code}"
 
-    try:
-        limit = min(max_stack_size, os.get_terminal_size().columns - 40)
-    except OSError:
-        limit = 80
+    # Check for unreachable code.
+    if verbose >= -1:
+        unreached = [b for b, stack in stacks.items() if stack is None]
+        if unreached:
+            print(code)
+            for b in unreached:
+                print(f"UNREACHED: {b.start_offset} {b.opname} {b.oparg}")
 
     if verbose >= 0:
         print(code)
+
+        max_stack_size = 4  # len(str(None))
+        for stack in stacks.values():
+            if stack:
+                max_stack_size = max(max_stack_size, len(str(stack)))
+
+        try:
+            limit = min(max_stack_size, os.get_terminal_size().columns - 40)
+        except OSError:
+            limit = 80
+
+        # Format what we found nicely.
         for b in instrs:
             stack = stacks.get(b)
             if stack is not None:
@@ -371,7 +384,7 @@ def main():
 
     verbose = (args.verbose or 0) - (args.quiet or 0)
     if args.path:
-        for code in forallcode.find_all_code(args.path, verbose + 1):
+        for code in forallcode.find_all_code(args.path, min(verbose + 1, 1)):
             if args.match and not re.search(
                 "|".join(args.match), f"{code.co_filename}:{code.co_name}"
             ):
