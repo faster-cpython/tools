@@ -191,6 +191,7 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
         if len(stack) < popped:
             breakpoint()
             assert False, "stack underflow"
+            popped = len(stack)
         input_effects = list(metadata.get("input_effects") or ())
         output_effects = list(metadata.get("output_effects") or ())
         while (
@@ -207,8 +208,8 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
             popped -= 1
             input_effects.pop(0)
             output_effects.pop(0)
-        stack = stack[: max(0, len(stack) - popped)]
-        stack = stack + ["object"] * pushed
+        del stack[len(stack) - popped :]
+        stack += ["object"] * pushed
         if verbose >= 2:
             print(f"  {offset=} {stack=}")
         result.append((offset, tuple(stack)))
