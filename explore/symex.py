@@ -103,6 +103,9 @@ ExceptionTable:
 """
 
 
+Stack = tuple[str, ...]
+
+
 class Instruction:
     # TODO: __slots__?
     opcode: int
@@ -163,6 +166,55 @@ class Instruction:
         # Conditional jump forwards
         return [None, self.end_offset + 2 * arg]
 
+    def update_stack(self, input: Stack, verbose: int) -> list[tuple[int, Stack]]:
+        """Return a list of (int, Stack) pairs corresponding to self.successors().
+
+        If the instruction never jumps, return [(self.end_offset, new_stack)].
+        If it always jumps, return [(self.jump_target, new_stack)].
+        If it may or may not jump, return [(self.end_offset, new_stack1), (self.jump_target, new_stack2)].
+        If it always exits, return [].
+        """
+        if self.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
+            return []
+        result: list[tuple[int, Stack]] = []
+        for offset in self.successors():
+            jump = offset is not None
+            if not jump:
+                offset = self.end_offset
+            stack = list(input)
+            metadata: dict | None = opcode_metadata[self.baseopname]
+            popped: int = metadata["popped"](self.oparg, jump)
+            pushed: int = metadata["pushed"](self.oparg, jump)
+            if verbose >= 2:
+                print(f"  {popped=} {pushed=}")
+            assert popped >= 0 and pushed >= 0, (popped, pushed)
+            if len(stack) < popped:
+                breakpoint()
+                assert False, "stack underflow"
+                popped = len(stack)
+            input_effects = list(metadata.get("input_effects") or ())
+            output_effects = list(metadata.get("output_effects") or ())
+            while (
+                popped > 0
+                and pushed > 0
+                and input_effects
+                and output_effects
+                and input_effects[0] == output_effects[0]
+                and input_effects[0][1:] == ("", "", "")
+            ):
+                if verbose >= 2:
+                    print("REDUCING EFFECT", input_effects[0], "for", self.opname)
+                pushed -= 1
+                popped -= 1
+                input_effects.pop(0)
+                output_effects.pop(0)
+            del stack[len(stack) - popped :]
+            stack += ["object"] * pushed
+            if verbose >= 2:
+                print(f"  {offset=} {stack=}")
+            result.append((offset, tuple(stack)))
+        return result
+
 
 def parse_bytecode(co: bytes) -> list[Instruction]:
     result: list[Instruction] = []
@@ -191,59 +243,6 @@ def parse_bytecode(co: bytes) -> list[Instruction]:
             else:
                 assert False, f"Invalid jump target {instr.jump_target}"
 
-    return result
-
-
-Stack = tuple[str, ...]
-
-
-def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, Stack]]:
-    """Return a list of (int, Stack) pairs corresponding to b.successors().
-
-    If the instruction never jumps, return [(b.end_offset, new_stack)].
-    If it always jumps, return [(b.jump_target, new_stack)].
-    If it may or may not jump, return [(b.end_offset, new_stack1), (b.jump_target, new_stack2)].
-    If it always exits, return [].
-    """
-    if b.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
-        return []
-    result: list[tuple[int, Stack]] = []
-    for offset in b.successors():
-        jump = offset is not None
-        if not jump:
-            offset = b.end_offset
-        stack = list(input)
-        metadata: dict | None = opcode_metadata[b.baseopname]
-        popped: int = metadata["popped"](b.oparg, jump)
-        pushed: int = metadata["pushed"](b.oparg, jump)
-        if verbose >= 2:
-            print(f"  {popped=} {pushed=}")
-        assert popped >= 0 and pushed >= 0, (popped, pushed)
-        if len(stack) < popped:
-            breakpoint()
-            assert False, "stack underflow"
-            popped = len(stack)
-        input_effects = list(metadata.get("input_effects") or ())
-        output_effects = list(metadata.get("output_effects") or ())
-        while (
-            popped > 0
-            and pushed > 0
-            and input_effects
-            and output_effects
-            and input_effects[0] == output_effects[0]
-            and input_effects[0][1:] == ("", "", "")
-        ):
-            if verbose >= 2:
-                print("REDUCING EFFECT", input_effects[0], "for", b.opname)
-            pushed -= 1
-            popped -= 1
-            input_effects.pop(0)
-            output_effects.pop(0)
-        del stack[len(stack) - popped :]
-        stack += ["object"] * pushed
-        if verbose >= 2:
-            print(f"  {offset=} {stack=}")
-        result.append((offset, tuple(stack)))
     return result
 
 
@@ -306,7 +305,7 @@ def run(code: types.CodeType, verbose: int = 0):
                 print(b.start_offset, b.opname, b.oparg, stack)
             if stack is None:
                 continue
-            updates = update_stack(stack, b, verbose)
+            updates = b.update_stack(stack, verbose)
             for offset, new_stack in updates:
                 bb = instrs_by_offset[offset]
                 if verbose >= 1:
