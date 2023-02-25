@@ -249,14 +249,8 @@ def run(code: types.CodeType, verbose: int = 0):
     instrs: list[Instruction] = parse_bytecode(code.co_code)
     assert instrs != []
 
-    def instr_from_offset(offset: int) -> Instruction:
-        """Map an offset to the Instruction at that offset."""
-        # TODO: Use bisect
-        for b in instrs:
-            if b.start_offset == offset:
-                return b
-        breakpoint()
-        assert False, f"Invalid offset {offset}"
+    # Table to look up Instruction by offset.
+    instrs_by_offset: dict[int, Instruction] = {b.start_offset: b for b in instrs}
 
     # Map from Instructions to the stack at the start of the Instruction.
     stacks: dict[Instruction, Stack | None] = {b: None for b in instrs}
@@ -281,7 +275,7 @@ def run(code: types.CodeType, verbose: int = 0):
             print(
                 f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}"
             )
-        b = instr_from_offset(target)
+        b = instrs_by_offset[target]
         b.is_jump_target = True
         stack = ["object"] * depth
         if lasti:
@@ -309,7 +303,7 @@ def run(code: types.CodeType, verbose: int = 0):
                 continue
             updates = update_stack(stack, b, verbose)
             for offset, new_stack in updates:
-                bb = instr_from_offset(offset)
+                bb = instrs_by_offset[offset]
                 if verbose >= 1:
                     if offset == b.end_offset:
                         print(f"    Fall through {new_stack}")
