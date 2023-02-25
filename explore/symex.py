@@ -246,103 +246,117 @@ def parse_bytecode(co: bytes) -> list[Instruction]:
     return result
 
 
-def run(code: types.CodeType, verbose: int = 0):
-    # TODO: Break into pieces (maybe make it a class?)
+class Execution:
+    code: types.CodeType
+    verbose: int
+    instrs: list[Instruction]
+    instrs_by_offset: dict[int, Instruction]
+    stacks: dict[Instruction, Stack | None]
+    debug: dict[Instruction, Instruction | str]
+    etab: list[tuple[int, int, int, int, int]]
+    rev_etab: dict[Instruction, tuple[int, int, int, int, int]]
 
-    # Parse bytecode into Instructions.
-    instrs: list[Instruction] = parse_bytecode(code.co_code)
-    assert instrs != []
+    def __init__(self, code: types.CodeType, verbose: int = 0):
+        self.code = code
+        self.verbose = verbose
+        self.instrs = parse_bytecode(code.co_code)
+        self.instrs_by_offset = {b.start_offset: b for b in self.instrs}
+        self.stacks = {}
+        self.debug = {}
+        self.etab = []
+        self.rev_etab = {}
 
-    # Table to look up Instruction by offset.
-    instrs_by_offset: dict[int, Instruction] = {b.start_offset: b for b in instrs}
+    def init_stacks(self):
+        self.stacks = {b: None for b in self.instrs}
+        # Initialize stacks with known contents:
+        # - The stack at the start of a regular function is empty.
+        # - The stack at the start of a generator(-ish) function is ("object",).
+        # - The stack at the start of each exception handler is known.
+        first = self.instrs[0]
+        self.debug[first] = "FIRST"
+        if self.code.co_flags & (CO_COROUTINE | CO_GENERATOR | CO_ASYNC_GENERATOR):
+            self.stacks[first] = ("object",)
+        else:
+            self.stacks[first] = ()
 
-    # Map from Instructions to the stack at the start of the Instruction.
-    stacks: dict[Instruction, Stack | None] = {b: None for b in instrs}
+    def setup_handlers(self):
+        self.rev_etab = {}
+        self.etab = dis._parse_exception_table(self.code)
+        for start, end, target, depth, lasti in self.etab:
+            if self.verbose >= 1:
+                print(
+                    f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}"
+                )
+            b = self.instrs_by_offset[target]
+            b.is_jump_target = True
+            stack = ["object"] * depth
+            if lasti:
+                stack.append("object")  # TODO: "Lasti"
+            stack.append("Exception")
+            self.stacks[b] = tuple(stack)
+            self.debug[b] = "ETAB"
+            self.rev_etab[b] = start, end, target, depth, lasti
 
-    # Map from keys in stacks to the Instruction or place that set that key.
-    debug: dict[Instruction, Instruction | str] = {}
+    def run(self):
+        self.init_stacks()
+        self.setup_handlers()
 
-    # Initialize stacks with known contents:
-    # - The stack at the start of a regular function is empty.
-    # - The stack at the start of a generator(-ish) function is ("object",).
-    # - The stack at the start of each exception handler is known.
-    first = instrs[0]
-    debug[first] = "FIRST"
-    if code.co_flags & (CO_COROUTINE | CO_GENERATOR | CO_ASYNC_GENERATOR):
-        stacks[first] = ("object",)
-    else:
-        stacks[first] = ()
-    rev_etab = {}
-    etab = dis._parse_exception_table(code)
-    for start, end, target, depth, lasti in etab:
-        if verbose >= 1:
-            print(
-                f"ETAB: [{start:3d} {end:3d}) -> {target:3d} {depth} {'lasti' if lasti else ''}"
-            )
-        b = instrs_by_offset[target]
-        b.is_jump_target = True
-        stack = ["object"] * depth
-        if lasti:
-            stack.append("object")  # TODO: "Lasti"
-        stack.append("Exception")
-        stacks[b] = tuple(stack)
-        debug[b] = "ETAB"
-        rev_etab[b] = start, end, target, depth, lasti
+        # Repeatedly propagate stack contents until a fixed point is reached.
+        while True:
+            if not self.propagate_stacks():
+                break
+            # I have not found any cases that need more than one iteration.
+            assert False, f"We need another iteration after all: {code}"
 
-    # Repeatedly propagate stack contents until a fixed point is reached.
-    todo = True
-    while todo:
-        if verbose >= 1:
+    def propagate_stacks(self) -> bool:
+        if self.verbose >= 1:
             print("=" * 50)
         todo = False
-        for b in instrs:
-            stack = stacks[b]
-            if verbose >= 1:
+        for b in self.instrs:
+            stack = self.stacks[b]
+            if self.verbose >= 1:
                 if b.is_jump_target:
                     print(">>")
-                if b in rev_etab:
-                    print("HANDLER:", rev_etab[b])
+                if b in self.rev_etab:
+                    print("HANDLER:", self.rev_etab[b])
                 print(b.start_offset, b.opname, b.oparg, stack)
             if stack is None:
                 continue
-            updates = b.update_stack(stack, verbose)
+            updates = b.update_stack(stack, self.verbose)
             for offset, new_stack in updates:
-                bb = instrs_by_offset[offset]
-                if verbose >= 1:
+                bb = self.instrs_by_offset[offset]
+                if self.verbose >= 1:
                     if offset == b.end_offset:
                         print(f"    Fall through {new_stack}")
                     else:
                         print(
                             f"    Jump to {bb.opname} at {bb.start_offset} {new_stack}"
                         )
-                if stacks[bb] is None:
-                    stacks[bb] = new_stack
-                    debug[bb] = b
+                if self.stacks[bb] is None:
+                    self.stacks[bb] = new_stack
+                    self.debug[bb] = b
                     if offset < b.end_offset:
                         todo = True
                 else:
-                    if stacks[bb] != new_stack:
-                        print(f"MISMATCH AT {offset}: {stacks[bb]} != {new_stack}")
-                        print(f"FROM {debug.get(bb)}")
+                    if self.stacks[bb] != new_stack:
+                        print(f"MISMATCH AT {offset}: {self.stacks[bb]} != {new_stack}")
+                        print(f"FROM {self.debug.get(bb)}")
                         breakpoint()
                         assert False, "mismatch"
-
-        # I have not found any cases that need more than one iteration.
-        assert not todo, f"We need another iteration after all: {code}"
-
-    # Check for unreachable code.
-    if verbose >= -1:
-        unreached = [b for b, stack in stacks.items() if stack is None]
-        if unreached:
-            print(code)
-            for b in unreached:
+        return todo
+    
+    def report_unreachable_instructions(self):
+        unreachable = [b for b, stack in self.stacks.items() if stack is None]
+        if unreachable:
+            print("Unreachable instructions in", self.code)
+            for b in unreachable:
                 print(f"UNREACHED: {b.start_offset} {b.opname} {b.oparg}")
 
-    if verbose >= 0:
-        print(code)
+    def report_end_state(self):
+        print("End report for", self.code)
 
         max_stack_size = 4  # len(str(None))
-        for stack in stacks.values():
+        for stack in self.stacks.values():
             if stack:
                 max_stack_size = max(max_stack_size, len(str(stack)))
 
@@ -352,10 +366,10 @@ def run(code: types.CodeType, verbose: int = 0):
             limit = 80
 
         # Format what we found nicely.
-        for b in instrs:
-            if b in rev_etab:
-                print("HANDLER:", rev_etab[b])
-            stack = stacks.get(b)
+        for b in self.instrs:
+            if b in self.rev_etab:
+                print("HANDLER:", self.rev_etab[b])
+            stack = self.stacks.get(b)
             if stack is not None:
                 stack = list(stack)
             prefix = ">>" if b.is_jump_target else "  "
@@ -376,6 +390,15 @@ def run(code: types.CodeType, verbose: int = 0):
                 print(f" {pad} {prefix} {b.start_offset:3d} {b.opname}{soparg}")
             if None not in b.successors():
                 print("-" * 40)
+
+
+def run(code: types.CodeType, verbose: int):
+    exe = Execution(code, verbose - 1)
+    exe.run()
+    if verbose >= 0:
+        exe.report_unreachable_instructions()
+    if verbose >= 2:
+        exe.report_end_state()
 
 
 def main():
@@ -410,15 +433,14 @@ def main():
             ):
                 continue
             if verbose >= 1:
-                print()
-                print(code)
+                print("Processing", code)
                 if verbose >= 2:
                     dis.dis(code, adaptive=True, depth=0, show_caches=False)
-            run(code, verbose - 1)
+            run(code, verbose)
     else:
         if verbose >= 2:
             dis.dis(test, adaptive=True, depth=0, show_caches=False)
-        run(test.__code__, verbose=verbose)
+        run(test.__code__, verbose)
 
 
 if __name__ == "__main__":
