@@ -1,6 +1,11 @@
 #!/usr/bin/env python3.12
 
-"""Symbolic execution, hero style. :-)"""
+"""Symbolic execution, hero style. :-)
+
+Inspired by make_stacks() in Python/frameobject.c.
+"""
+
+from __future__ import annotations
 
 import dis
 import os
@@ -132,6 +137,32 @@ class Instruction:
     def __repr__(self):
         return f"Instruction{self.__dict__}"
 
+    def successors(self: Instruction) -> list[int | None]:
+        """Return a list of successor offsets.
+
+        An offset is either None (fall through to the next instruction) or
+        an int (jump to the instruction at that offset, in absolute bytes).
+
+        A "normal" instruction, e.g. LOAD_FAST, returns [None].
+        An unconditional jump, e.g. JUMP_BACKWARD, returns [offset].
+        A conditional jump, e.g. POP_JUMP_IF_TRUE, returns [None, offset].
+        An instruction that only exits, e.g. RETURN_VALUE, returns [].
+        """
+        assert not dis.hasjabs
+        if self.baseopcode not in dis.hasjrel:
+            # TODO: Other instructions that have a jump option
+            return [None]
+        arg = self.oparg
+        assert arg is not None
+        if self.baseopname in ("JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT"):
+            # Unconditional jump backwards
+            return [self.end_offset - 2 * arg]
+        if self.baseopname == "JUMP_FORWARD":
+            # Unconditional jump forwards
+            return [self.end_offset + 2 * arg]
+        # Conditional jump forwards
+        return [None, self.end_offset + 2 * arg]
+
 
 def parse_bytecode(co: bytes) -> list[Instruction]:
     result: list[Instruction] = []
@@ -167,7 +198,7 @@ Stack = tuple[str, ...]
 
 
 def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, Stack]]:
-    """Return a list of (int, Stack) pairs corresponding to successors(b).
+    """Return a list of (int, Stack) pairs corresponding to b.successors().
 
     If the instruction never jumps, return [(b.end_offset, new_stack)].
     If it always jumps, return [(b.jump_target, new_stack)].
@@ -177,7 +208,7 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
     if b.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
         return []
     result: list[tuple[int, Stack]] = []
-    for offset in successors(b):
+    for offset in b.successors():
         jump = offset is not None
         if not jump:
             offset = b.end_offset
@@ -214,33 +245,6 @@ def update_stack(input: Stack, b: Instruction, verbose: int) -> list[tuple[int, 
             print(f"  {offset=} {stack=}")
         result.append((offset, tuple(stack)))
     return result
-
-
-def successors(b: Instruction) -> list[int | None]:
-    """Return a list of successor offsets.
-
-    An offset is either None (fall through to the next instruction) or
-    an int (jump to the instruction at that offset, in absolute bytes).
-
-    A "normal" instruction, e.g. LOAD_FAST, returns [None].
-    An unconditional jump, e.g. JUMP_BACKWARD, returns [offset].
-    A conditional jump, e.g. POP_JUMP_IF_TRUE, returns [None, offset].
-    An instruction that only exits, e.g. RETURN_VALUE, returns [].
-    """
-    assert not dis.hasjabs
-    if b.baseopcode not in dis.hasjrel:
-        # TODO: Other instructions that have a jump option
-        return [None]
-    arg = b.oparg
-    assert arg is not None
-    if b.baseopname in ("JUMP_BACKWARD", "JUMP_BACKWARD_NO_INTERRUPT"):
-        # Unconditional jump backwards
-        return [b.end_offset - 2 * arg]
-    if b.baseopname == "JUMP_FORWARD":
-        # Unconditional jump forwards
-        return [b.end_offset + 2 * arg]
-    # Conditional jump forwards
-    return [None, b.end_offset + 2 * arg]
 
 
 def run(code: types.CodeType, verbose: int = 0):
@@ -371,7 +375,7 @@ def run(code: types.CodeType, verbose: int = 0):
                 print(f"{prefix} {sstack}")
                 pad = " " * (len(prefix) + limit)
                 print(f" {pad} {prefix} {b.start_offset:3d} {b.opname}{soparg}")
-            if None not in successors(b):
+            if None not in b.successors():
                 print("-" * 40)
 
 
