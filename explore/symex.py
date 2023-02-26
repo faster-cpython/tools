@@ -65,6 +65,16 @@ class Instruction:
     def __repr__(self):
         return f"Instruction{self.__dict__}"
 
+    def __str__(self):
+        prefix = ">>" if self.is_jump_target else "  "
+        if self.oparg is None:
+            soparg = ""
+        else:
+            soparg = f" {self.oparg:{max(1, 20 - len(self.opname))}d}"
+            if self.jump_target:
+                soparg += f" (to {self.jump_target})"
+        return f"{prefix} {self.start_offset:3d} {self.opname}{soparg}"
+
     def successors(self: Instruction) -> list[int | None]:
         """Return a list of successor offsets.
 
@@ -240,11 +250,9 @@ class Execution:
         for b in self.instrs:
             stack = self.stacks[b]
             if self.verbose >= 1:
-                if b.is_jump_target:
-                    print(">>")
                 if b in self.rev_etab:
                     print("HANDLER:", self.rev_etab[b])
-                print(b.start_offset, b.opname, b.oparg, stack)
+                print(b, stack)
             if stack is None:
                 continue
             updates = b.update_stack(stack, self.verbose)
@@ -269,7 +277,7 @@ class Execution:
                         breakpoint()
                         assert False, "mismatch"
         return todo
-    
+
     def report_unreachable_instructions(self):
         unreachable = [b for b, stack in self.stacks.items() if stack is None]
         if unreachable:
@@ -297,22 +305,12 @@ class Execution:
             stack = self.stacks.get(b)
             if stack is not None:
                 stack = list(stack)
-            prefix = ">>" if b.is_jump_target else "  "
-            soparg = (
-                f" {b.oparg:{max(1, 20 - len(b.opname))}d}"
-                if b.oparg is not None
-                else ""
-            )
             sstack = str(stack)
             if len(sstack) <= limit:
-                print(
-                    f"{prefix} {sstack:<{limit}s}",
-                    f"{prefix} {b.start_offset:3d} {b.opname}{soparg}",
-                )
+                print(f"{sstack:<{limit}s} {b}")
             else:
-                print(f"{prefix} {sstack}")
-                pad = " " * (len(prefix) + limit)
-                print(f" {pad} {prefix} {b.start_offset:3d} {b.opname}{soparg}")
+                print(f"{sstack}")
+                print(f" {' '*limit}{b}")
             if None not in b.successors():
                 print("-" * 40)
 
@@ -366,6 +364,7 @@ def main():
         if verbose >= 0:
             print("Processing sample.test")
         from sample import test
+
         if verbose >= 2:
             dis.dis(test, adaptive=True, depth=0, show_caches=False)
         run(test.__code__, verbose)
