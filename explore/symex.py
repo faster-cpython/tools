@@ -286,7 +286,7 @@ class Execution:
                 print(f"UNREACHED: {b.start_offset} {b.opname} {b.oparg}")
 
     def report_end_state(self):
-        print("End report for", self.code)
+        print("Execution report for", self.code)
 
         max_stack_size = 4  # len(str(None))
         for stack in self.stacks.values():
@@ -320,7 +320,7 @@ def run(code: types.CodeType, verbose: int):
     exe.run()
     if verbose >= 0:
         exe.report_unreachable_instructions()
-    if verbose >= 2:
+    if verbose >= 1:
         exe.report_end_state()
 
 
@@ -345,15 +345,14 @@ def main():
     args = parser.parse_args()
 
     verbose = (args.verbose or 0) - (args.quiet or 0)
+    match = "|".join(args.match) if args.match else None
+    exclude = "|".join(args.exclude) if args.exclude else None
     if args.path:
         for code in forallcode.find_all_code(args.path, min(verbose + 1, 1)):
-            if args.match and not re.search(
-                "|".join(args.match), f"{code.co_filename}:{code.co_name}"
-            ):
+            tags = f"{code.co_filename}:{code.co_name}"
+            if match and not re.search(match, tags):
                 continue
-            if args.exclude and re.search(
-                "|".join(args.exclude), f"{code.co_filename}:{code.co_name}"
-            ):
+            if exclude and re.search(exclude, tags):
                 continue
             if verbose >= 1:
                 print("Processing", code)
