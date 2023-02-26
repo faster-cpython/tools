@@ -76,6 +76,8 @@ class Instruction:
         A conditional jump, e.g. POP_JUMP_IF_TRUE, returns [None, offset].
         An instruction that only exits, e.g. RETURN_VALUE, returns [].
         """
+        if self.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
+            return []
         assert not dis.hasjabs
         if self.baseopcode not in dis.hasjrel:
             # TODO: Other instructions that have a jump option
@@ -99,8 +101,6 @@ class Instruction:
         If it may or may not jump, return [(self.end_offset, new_stack1), (self.jump_target, new_stack2)].
         If it always exits, return [].
         """
-        if self.opname in ("RETURN_VALUE", "RETURN_CONST", "RERAISE", "RAISE_VARARGS"):
-            return []
         result: list[tuple[int, Stack]] = []
         for offset in self.successors():
             jump = offset is not None
