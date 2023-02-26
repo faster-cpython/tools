@@ -2,7 +2,7 @@
 
 """Symbolic execution, hero style. :-)
 
-Inspired by make_stacks() in Python/frameobject.c.
+Inspired by mark_stacks() in Python/frameobject.c.
 """
 
 from __future__ import annotations
@@ -26,81 +26,6 @@ opcode_metadata["COMPARE_AND_BRANCH"]["pushed"] = lambda oparg, jump: 1
 CO_COROUTINE = 0x0080
 CO_GENERATOR = 0x0020
 CO_ASYNC_GENERATOR = 0x0200
-
-
-def nope(arg):
-    pass
-
-
-def test(a, b):
-    try:
-        for i in range(3):
-            nope(a * i + b / (2 - i))
-    except Exception as err:
-        nope(err)
-
-
-"""
- 17           0 RESUME                   0
-
- 18           2 NOP
-
- 19           4 LOAD_GLOBAL              1 (NULL + range)
-             16 LOAD_CONST               1 (3)
-             18 CALL                     1
-             28 GET_ITER
-        >>   30 FOR_ITER_RANGE          27 (to 88)
-             34 STORE_FAST               2 (i)
-
- 20          36 LOAD_GLOBAL_MODULE       3 (NULL + nope)
-             48 LOAD_FAST__LOAD_FAST     0 (a)
-             50 LOAD_FAST                2 (i)
-             52 BINARY_OP_MULTIPLY_INT     5 (*)
-             56 LOAD_FAST__LOAD_CONST     1 (b)
-             58 LOAD_CONST__LOAD_FAST     2 (2)
-             60 LOAD_FAST                2 (i)
-             62 BINARY_OP_SUBTRACT_INT    10 (-)
-             66 BINARY_OP               11 (/)
-             70 BINARY_OP                0 (+)
-             74 CALL_PY_EXACT_ARGS       1
-             84 POP_TOP
-             86 JUMP_BACKWARD           29 (to 30)
-
- 19     >>   88 END_FOR
-             90 LOAD_CONST               0 (None)
-             92 RETURN_VALUE
-        >>   94 PUSH_EXC_INFO
-
- 21          96 LOAD_GLOBAL              4 (Exception)
-            108 CHECK_EXC_MATCH
-            110 POP_JUMP_IF_FALSE       24 (to 160)
-            112 STORE_FAST               3 (err)
-
- 22         114 LOAD_GLOBAL              3 (NULL + nope)
-            126 LOAD_FAST                3 (err)
-            128 CALL                     1
-            138 POP_TOP
-            140 POP_EXCEPT
-            142 LOAD_CONST               0 (None)
-            144 STORE_FAST               3 (err)
-            146 DELETE_FAST              3 (err)
-            148 LOAD_CONST               0 (None)
-            150 RETURN_VALUE
-        >>  152 LOAD_CONST               0 (None)
-            154 STORE_FAST               3 (err)
-            156 DELETE_FAST              3 (err)
-            158 RERAISE                  1
-
- 21     >>  160 RERAISE                  0
-        >>  162 COPY                     3
-            164 POP_EXCEPT
-            166 RERAISE                  1
-ExceptionTable:
-  4 to 88 -> 94 [0]
-  94 to 112 -> 162 [1] lasti
-  114 to 138 -> 152 [1] lasti
-  152 to 160 -> 162 [1] lasti
-"""
 
 
 Stack = tuple[str, ...]
@@ -438,6 +363,9 @@ def main():
                     dis.dis(code, adaptive=True, depth=0, show_caches=False)
             run(code, verbose)
     else:
+        if verbose >= 0:
+            print("Processing sample.test")
+        from sample import test
         if verbose >= 2:
             dis.dis(test, adaptive=True, depth=0, show_caches=False)
         run(test.__code__, verbose)
