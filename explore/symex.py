@@ -27,6 +27,11 @@ CO_COROUTINE = 0x0080
 CO_GENERATOR = 0x0020
 CO_ASYNC_GENERATOR = 0x0200
 
+# Symbolic values on the stack
+OBJECT = "Obj"
+LASTI = "LastI"
+EXCEPTION = "Exc"
+
 
 Stack = tuple[str, ...]
 
@@ -114,10 +119,10 @@ class Instruction:
         result: list[tuple[int, Stack]] = []
         for offset in self.successors():
             jump = offset is not None
-            if not jump:
+            if offset is None:
                 offset = self.end_offset
             stack = list(input)
-            metadata: dict | None = opcode_metadata[self.baseopname]
+            metadata = opcode_metadata[self.baseopname]
             popped: int = metadata["popped"](self.oparg, jump)
             pushed: int = metadata["pushed"](self.oparg, jump)
             if verbose >= 2:
@@ -144,7 +149,7 @@ class Instruction:
                 input_effects.pop(0)
                 output_effects.pop(0)
             del stack[len(stack) - popped :]
-            stack += ["object"] * pushed
+            stack += [OBJECT] * pushed
             if verbose >= 2:
                 print(f"  {offset=} {stack=}")
             result.append((offset, tuple(stack)))
@@ -205,12 +210,12 @@ class Execution:
         self.stacks = {b: None for b in self.instrs}
         # Initialize stacks with known contents:
         # - The stack at the start of a regular function is empty.
-        # - The stack at the start of a generator(-ish) function is ("object",).
+        # - The stack at the start of a generator(-ish) function is (OBJECT,).
         # - The stack at the start of each exception handler is known.
         first = self.instrs[0]
         self.debug[first] = "FIRST"
         if self.code.co_flags & (CO_COROUTINE | CO_GENERATOR | CO_ASYNC_GENERATOR):
-            self.stacks[first] = ("object",)
+            self.stacks[first] = (OBJECT,)
         else:
             self.stacks[first] = ()
 
@@ -224,12 +229,6 @@ class Execution:
                 )
             b = self.instrs_by_offset[target]
             b.is_jump_target = True
-            stack = ["object"] * depth
-            if lasti:
-                stack.append("object")  # TODO: "Lasti"
-            stack.append("Exception")
-            self.stacks[b] = tuple(stack)
-            self.debug[b] = "ETAB"
             self.rev_etab[b] = start, end, target, depth, lasti
 
     def run(self):
@@ -249,6 +248,17 @@ class Execution:
         todo = False
         for b in self.instrs:
             stack = self.stacks[b]
+            if stack is None and b in self.rev_etab:
+                start, end, target, depth, lasti = self.rev_etab[b]
+                bb = self.instrs_by_offset.get(start)
+                if bb is not None:
+                    stack = self.stacks[bb]
+                    if stack is not None:
+                        stack = stack[:depth]
+                        if lasti:
+                            stack += (LASTI,)
+                        stack += ("Exception",)
+                        self.stacks[b] = stack
             if self.verbose >= 1:
                 if b in self.rev_etab:
                     print("HANDLER:", self.rev_etab[b])
@@ -262,9 +272,7 @@ class Execution:
                     if offset == b.end_offset:
                         print(f"    Fall through {new_stack}")
                     else:
-                        print(
-                            f"    Jump to {bb.opname} at {bb.start_offset} {new_stack}"
-                        )
+                        print(f"    Jump to {bb} {new_stack}")
                 if self.stacks[bb] is None:
                     self.stacks[bb] = new_stack
                     self.debug[bb] = b
@@ -276,6 +284,9 @@ class Execution:
                         print(f"FROM {self.debug.get(bb)}")
                         breakpoint()
                         assert False, "mismatch"
+            if self.verbose >= 1:
+                if not any(offset is not None for offset, _ in updates):
+                    print("-" * 40)
         return todo
 
     def report_unreachable_instructions(self):
